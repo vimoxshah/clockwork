@@ -59,7 +59,7 @@ export async function main(argv: string[] = process.argv): Promise<number> {
   const scheduler = new Scheduler({
     db,
     clock,
-    enqueueRun: (spec) => runManager.pump(),
+    enqueueRun: (_spec) => runManager.pump(),
     notify: (kind, taskName, detail) => {
       void notifier.send(`Clockwork: ${taskName}`, detail);
       journal.record(kind === 'missed' ? 'preflight_failure' : 'preflight_failure', `${kind}: ${detail}`);

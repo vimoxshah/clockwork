@@ -309,7 +309,7 @@ export class RunManager {
   }
 
   // ---------- finalization ----------
-  finalize(runId: string, outcome: Partial<import('@clockwork/shared').RunOutcome> & { state: string }): void {
+  async finalize(runId: string, outcome: Partial<import('@clockwork/shared').RunOutcome> & { state: string }): Promise<void> {
     const r = this.getRun(runId);
     if (!r || ['completed','failed','cancelled','budget_exceeded','timed_out'].includes(r.state)) return;
     const now = this.deps.clock.now();
@@ -401,6 +401,21 @@ export class RunManager {
 
     this.releaseMutex(spec);
     this.pendingApprovals.delete(runId);
+
+    // S-40/S-41: consecutive auth failures auto-pause the task after 2
+    const failureReason = ('failureReason' in outcome ? outcome.failureReason : undefined) ?? null;
+    if (failureReason === 'auth') {
+      const { recordAuthFailureAndMaybePause } = await import('./policies.js');
+      const res = recordAuthFailureAndMaybePause(this.deps.db, spec.taskId);
+      if (res.paused) {
+        this.deps.notify('auto_paused', `Clockwork paused "${spec.taskName}"`, 'Two consecutive auth failures. Re-login in Claude Code, then re-enable the task.');
+        this.deps.safetyJournal.record('preflight_failure', `auto-paused task ${spec.taskId} after ${res.consecutive} auth failures`, runId);
+      }
+    } else if (outcome.state === 'completed') {
+      const { clearFailureStreak } = await import('./policies.js');
+      clearFailureStreak(this.deps.db, spec.taskId);
+    }
+
     this.deps.broadcast({ type: 'report.ready', runId, at: now });
     this.deps.notify(
       outcome.state === 'completed' ? 'report_ready' : 'run_failed',

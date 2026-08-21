@@ -23,7 +23,7 @@ import { TaskRepo, ProfileRepo, RunRepo, indexTask } from './repo.js';
 import type { RunManager } from './run-manager.js';
 import type { Scheduler } from './scheduler.js';
 import { nextOccurrenceAfter } from './recurrence.js';
-import { preflightRepo, isGitRepo } from '@clockwork/runner';
+import { isGitRepo } from '@clockwork/runner';
 
 export interface ApiDeps {
   db: DB;

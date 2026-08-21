@@ -3,6 +3,8 @@
  * the UI closed, so it cannot ride Tauri's notification API. macOS: osascript.
  * Quiet hours suppress notifications but never affect runs or inbox (S-65).
  */
+import { spawn } from 'node:child_process';
+
 export interface NotifierDeps {
   quietHours?: { startHour: number; endHour: number } | null; // local time, may wrap midnight
   enabled?: boolean;
@@ -17,8 +19,6 @@ export class Notifier {
       deps.exec ??
       ((script) =>
         new Promise((resolve) => {
-          const { spawn } = require('node:child_process') as typeof import('node:child_process');
-          void spawn;
           const child = spawnProcess(script);
           child.on('close', () => resolve());
           child.on('error', () => resolve());
@@ -52,7 +52,6 @@ function buildOsascript(title: string, body: string): string {
 
 function spawnProcess(script: string): import('node:child_process').ChildProcess {
   const osascript = process.platform === 'darwin' ? 'osascript' : null;
-  const { spawn } = require('node:child_process') as typeof import('node:child_process');
   if (!osascript) {
     // non-macOS dev fallback: no-op process that exits immediately
     return spawn('/usr/bin/true');

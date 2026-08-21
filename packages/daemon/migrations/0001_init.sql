@@ -84,6 +84,7 @@ CREATE TABLE runs (
   started_at   INTEGER, ended_at INTEGER,
   scheduled_for INTEGER,
   outcome_reason TEXT,
+  worktree_pruned INTEGER NOT NULL DEFAULT 0,
   report_json  TEXT
 );
 CREATE INDEX idx_runs_state ON runs(state);
@@ -107,6 +108,13 @@ CREATE TABLE capacity_samples (
 CREATE TABLE events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   at INTEGER NOT NULL, run_id TEXT, kind TEXT NOT NULL, data_json TEXT
+);
+
+CREATE TABLE task_failure_streaks (
+  task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  count INTEGER NOT NULL,
+  last_at INTEGER NOT NULL
 );
 
 CREATE VIRTUAL TABLE search_idx USING fts5(

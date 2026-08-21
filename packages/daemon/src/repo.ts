@@ -4,7 +4,7 @@
  * these functions assume validated input.
  */
 import type { DB } from './db.js';
-import { newId, slugify, branchFor } from '@clockwork/shared';
+import { newId } from '@clockwork/shared';
 import type { TaskCreate, TaskPatch } from '@clockwork/shared';
 
 export interface TaskRow {

@@ -3,7 +3,7 @@
  * launchd LaunchAgent: login-session scoped — starts at login, restarts on
  * crash. No logout survival claims (FR-20).
  */
-import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
+import { writeFileSync, mkdirSync, existsSync, readFileSync, unlinkSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { homedir } from 'node:os';
@@ -56,7 +56,7 @@ export function uninstall(): void {
     execFileSync('/bin/launchctl', ['bootout', `gui/${uid()}`, PLIST_PATH], { stdio: 'ignore' });
   } catch {}
   try {
-    if (existsSync(PLIST_PATH)) unlinkSyncShim(PLIST_PATH);
+    if (existsSync(PLIST_PATH)) unlinkSync(PLIST_PATH);
   } catch {}
   console.log('uninstalled');
 }
@@ -139,10 +139,6 @@ function resolve_(p: string): string {
   return path.resolve(p);
 }
 
-function unlinkSyncShim(p: string): void {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  require('node:fs').unlinkSync(p);
-}
 
 function pidAlive(pid: number): boolean {
   try {
