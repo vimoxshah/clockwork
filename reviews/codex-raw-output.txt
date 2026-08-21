@@ -1,0 +1,2111 @@
+Reading additional input from stdin...
+OpenAI Codex v0.144.1
+--------
+workdir: /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+model: gpt-5.6-sol
+provider: headroom
+approval: never
+sandbox: read-only
+reasoning effort: high
+reasoning summaries: none
+session id: 019f6b88-2999-7591-8a49-e14276adc3bf
+--------
+user
+You are a hostile staff-level product+engineering reviewer. This directory contains the complete plan for 'Clockwork' — a local-first desktop app that schedules Claude agent tasks on a calendar (daemon + Claude Agent SDK runner + calendar UI + results inbox + HITL approvals). Read EVERY file: README.md, vision/*.md, plan/*.md, decisions/DECISIONS.md.
+
+Your job: tear it apart. Do NOT summarize the plan back. Do NOT praise. Find what is wrong, missing, naive, internally inconsistent, or fatal. Specifically attack:
+1. Product thesis & market: is the wedge real? retention logic? pricing math? competitive blind spots (including Anthropic's own roadmap, agentcalendar, OpenAI equivalents)?
+2. Technical architecture: the 3-process split, SQLite FSM, scheduler tick loop, worktree strategy, HITL resume-from-new-process assumption, budget enforcement via SDK telemetry — what breaks in practice?
+3. SDK assumptions register (plan/06 §5): which assumptions are shaky or wrong as of mid-2026?
+4. Scenario matrix gaps: name concrete scenarios NOT covered in plan/04-scenarios.md that will bite.
+5. Estimates: which tasks in plan/05 are underestimated and why? Is ~86 engineer-days credible for this scope?
+6. Security model: holes in the deny-list floor, localhost API, secrets handling, prompt-injection stance.
+7. Anything else fatal or embarrassing.
+
+Output format: numbered findings, each with SEVERITY (CRITICAL / HIGH / MEDIUM / LOW), the file+section it applies to, the specific flaw, and a concrete recommended fix. Minimum 15 findings. End with a verdict: SHIP / REVISE / RETHINK plus the top 3 changes that most improve the plan's survival odds.
+warning: Skill descriptions were shortened to fit the 2% skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest.
+hook: SessionStart
+hook: SessionStart
+hook: SessionStart
+hook: SessionStart Completed
+hook: SessionStart Completed
+hook: SessionStart Completed
+hook: UserPromptSubmit
+hook: UserPromptSubmit
+hook: UserPromptSubmit Completed
+hook: UserPromptSubmit Completed
+codex
+I’ll audit this as an adversarial design review. I’ll first inventory and read every required file, then cross-check the volatile SDK and competitor assumptions against current public evidence; I’m using the agent-reach skill for that live research portion.
+hook: PreToolUse
+hook: PreToolUse Completed
+exec
+/bin/zsh -lc 'rtk read /Users/vimoxshah/.agents/skills/agent-reach/SKILL.md' in /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+ succeeded in 0ms:
+---
+name: agent-reach
+description: >
+  MUST USE when user wants to research/search/look up/find anything on the
+  internet — e.g. "research this topic", "do a deep dive on X", "search the
+  web for X", "see what people say about X", "look this up".
+
+  Also MUST USE when user mentions any platform or shares any URL/link:
+  Twitter/X, Reddit, YouTube, GitHub, Bilibili, XiaoHongShu,
+  Xiaoyuzhou Podcast, LinkedIn/jobs/recruiting, V2EX, Xueqiu (stocks), RSS.
+
+  13 platforms, multi-backend routing (OpenCLI / per-platform CLIs / APIs).
+  Zero config for 6 channels. Run `agent-reach doctor --json` to see which
+  backend serves each platform right now.
+
+  NOT for: writing reports/analysis/translation (this skill only FETCHES
+  internet content); posting/commenting/liking (write operations); platforms
+  that already have a dedicated skill installed (prefer that skill).
+metadata:
+  openclaw:
+    homepage: https://github.com/Panniantong/Agent-Reach
+---
+
+# Agent Reach — internet capability router
+
+13 platforms, multiple backends each. **When this skill exists, use it for
+these platforms — do not invent your own approach.**
+
+## Standing rules (apply for the whole session)
+
+1. **Health-check before acting**: for multi-backend platforms (XiaoHongShu /
+   Reddit / Bilibili / Twitter), run `agent-reach doctor --json` first and
+   pick the command group matching each platform's `active_backend`.
+2. **Announce what you use**: say "using agent-reach, platform X via backend Y"
+   before starting.
+3. **On failure, follow the retry chains in references/** — never guess
+   commands.
+4. **For broad research tasks**: combine platforms (Exa for web search +
+   Twitter/Reddit for discussions + XiaoHongShu/Bilibili for Chinese
+   perspectives), collect in parallel, then synthesize.
+5. **Watch versions for the user**: after finishing a substantial
+   multi-platform task, run `agent-reach check-update` (fast, one API call).
+   If a new version exists, append one line to your wrap-up: "Agent Reach
+   vX.Y.Z is available — paste this to me to update: 帮我更新 Agent Reach：
+   https://raw.githubusercontent.com/Panniantong/agent-reach/main/docs/update.md".
+   Never interrupt the current task to update; never nag about the same version twice.
+
+## Routing table
+
+| User intent | Category | Details |
+|---------|------|---------|
+| Web / code search | search | [references/search.md](references/search.md) |
+| XiaoHongShu / Twitter / Bilibili / V2EX / Reddit | social | [references/social.md](references/social.md) |
+| Jobs / LinkedIn | career | [references/career.md](references/career.md) |
+| GitHub / code | dev | [references/dev.md](references/dev.md) |
+| Web pages / articles / RSS | web | [references/web.md](references/web.md) |
+| YouTube / Bilibili / podcast transcripts | video | [references/video.md](references/video.md) |
+
+## Zero-config quick commands
+
+```bash
+# Exa web search
+mcporter call 'exa.web_search_exa(query: "query", numResults: 5)'
+
+# Read any web page
+curl -s "https://r.jina.ai/URL"
+
+# GitHub search
+gh search repos "query" --sort stars --limit 10
+
+# YouTube subtitles (NOTE: never use yt-dlp for Bilibili — see video.md)
+yt-dlp --write-sub --skip-download -o "/tmp/%(id)s" "URL"
+
+# V2EX hot topics
+curl -s "https://www.v2ex.com/api/topics/hot.json" -H "User-Agent: agent-reach/1.0"
+
+# Bilibili search (bili-cli, no login needed)
+bili search "query" --type video -n 5
+```
+
+## Login-backed platforms (pick by doctor's active_backend)
+
+```bash
+# Twitter search (twitter-cli preferred; retry chain in social.md)
+twitter search "query" -n 10
+
+# Reddit (NO zero-config path — OpenCLI or rdt-cli, login required)
+opencli reddit search "query" -f yaml   # desktop
+rdt search "query" --limit 10            # legacy/server
+
+# XiaoHongShu (desktop prefers OpenCLI)
+opencli xiaohongshu search "query" -f yaml
+```
+
+## Environment check
+
+```bash
+# Channel availability + which backend serves each platform
+agent-reach doctor --json
+```
+
+## Workspace rules
+
+**Never create files in the agent workspace.** Use `/tmp/` for temporary
+output and `~/.agent-reach/` for persistent data.
+
+## Detailed references
+
+Read the matching file when you need specifics (commands above cover the
+common cases; references hold per-backend command groups, caveats, retry
+chains — note: reference docs are written in Chinese, commands are universal):
+
+- [Search](references/search.md) — Exa AI search
+- [Social](references/social.md) — XiaoHongShu, Twitter, Bilibili, V2EX, Reddit (multi-backend groups)
+- [Career](references/career.md) — LinkedIn
+- [Dev](references/dev.md) — GitHub CLI
+- [Web](references/web.md) — Jina Reader, RSS
+- [Video](references/video.md) — YouTube, Bilibili, Xiaoyuzhou
+
+## Configure a channel
+
+If a channel needs setup, fetch the install guide:
+https://raw.githubusercontent.com/Panniantong/agent-reach/main/docs/install.md
+
+The user only provides cookies / one extension click; the agent does the rest.
+
+
+hook: PostToolUse
+hook: PostToolUse
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PreToolUse
+hook: PreToolUse Completed
+exec
+/bin/zsh -lc 'rtk find . -maxdepth 3 -type f' in /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+ succeeded in 0ms:
+11F 5D:
+
+./ README.md
+decisions/ DECISIONS.md
+plan/ 01-product-spec.md 02-architecture.md 03-tech-stack.md 04-scenarios.md 05-execution-plan.md 06-risks-and-costs.md
+reviews/ codex-raw-output.txt
+vision/ ROADMAP.md VISION.md
+
+ext: .md(10) .txt(1)
+
+hook: PostToolUse
+hook: PostToolUse
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PreToolUse
+hook: PreToolUse Completed
+exec
+/bin/zsh -lc 'rtk read README.md && rtk read vision/VISION.md && rtk read vision/ROADMAP.md && rtk read decisions/DECISIONS.md' in /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+ succeeded in 0ms:
+# Clockwork
+
+> **The calendar where your agents show up for work.**
+
+Clockwork is a local-first desktop app that turns AI agents into a schedulable workforce. You don't watch agents — you **book** them: pick a calendar slot, attach a prompt + context + budget, and at exactly that time a Claude agent runs the job in isolation and files a structured report to your inbox. Recurring jobs, task chains, human-in-the-loop approvals, and capacity-aware scheduling make unattended agent work trustworthy.
+
+**Scope for v1: Claude agents only** (via the Claude Agent SDK). The runner is an interface, not a hardcoding — other agent CLIs come later.
+
+---
+
+## Repository map
+
+| Path | What it holds | Read it when |
+|---|---|---|
+| [`vision/VISION.md`](vision/VISION.md) | Product thesis, personas, differentiation, moats, business model, where this can go (H1→H3) | You want to know **why** this exists and where it ends up |
+| [`vision/ROADMAP.md`](vision/ROADMAP.md) | Three-horizon roadmap with themes and exit criteria | You want to know **what ships when** |
+| [`plan/01-product-spec.md`](plan/01-product-spec.md) | Personas, user stories, functional requirements (FR-xx), non-functional requirements, MVP cut-line | You're deciding **what to build** |
+| [`plan/02-architecture.md`](plan/02-architecture.md) | Components, data model (SQLite DDL), run lifecycle state machine, API contracts, sequence flows | You're deciding **how to build it** |
+| [`plan/03-tech-stack.md`](plan/03-tech-stack.md) | Every stack choice with rationale + rejected alternatives | You're challenging a technology decision |
+| [`plan/04-scenarios.md`](plan/04-scenarios.md) | Exhaustive scenario & edge-case matrix with required behavior (S-xx) | You're implementing or testing **any** feature |
+| [`plan/05-execution-plan.md`](plan/05-execution-plan.md) | Phase-by-phase task breakdown (T-xxx) with acceptance criteria, estimates, definition of done | You're **starting work** — begin at Phase 0 |
+| [`plan/06-risks-and-costs.md`](plan/06-risks-and-costs.md) | Risk register (R-xx) with mitigations, build cost, run cost, monetization math | You're funding or de-risking the project |
+| [`decisions/DECISIONS.md`](decisions/DECISIONS.md) | ADR-style log of the load-bearing decisions | You're about to relitigate something — check here first |
+| [`reviews/`](reviews/) | Adversarial reviews (Codex gpt-5.6-sol) and how each finding was resolved | You want proof the plan survived hostile scrutiny |
+
+## How to execute this plan
+
+1. Read `vision/VISION.md` (10 min) — internalize the core loop: **Book → Run → Review → Repeat**.
+2. Read `plan/01-product-spec.md` §MVP cut-line — know what is explicitly **not** in scope.
+3. Start `plan/05-execution-plan.md` **Phase 0 (the spike)**. Phase 0 is a go/no-go gate: if the spike fails its exit criteria, stop and rethink — do not proceed on momentum.
+4. During any implementation task, keep `plan/04-scenarios.md` open — every task lists the S-xx scenarios it must satisfy.
+5. Log every new decision in `decisions/DECISIONS.md`. Append-only; never rewrite history.
+
+## Status
+
+| | |
+|---|---|
+| Stage | Planning complete, pre–Phase 0 |
+| Plan reviewed by | Codex gpt-5.6-sol (adversarial round 1 — see `reviews/`) |
+| Next action | Execute Phase 0 spike (`plan/05-execution-plan.md` §Phase 0) |
+| Created | 2026-07-16 |
+
+# Clockwork — Vision
+
+> **The calendar where your agents show up for work.**
+
+## 1. The thesis
+
+Coding agents crossed a threshold: they can complete meaningful, multi-step work unattended. But the interaction model is still **synchronous babysitting** — you open a terminal, type a prompt, and watch. The result: agents work only when *you* work, your subscription capacity idles 18+ hours a day, and every recurring chore (test triage, dependency updates, digests, reviews) is re-typed by hand or buried in per-repo CI plumbing.
+
+The missing primitive is **time**. Humans coordinate work through calendars; agents have no equivalent. Whoever gives agents a calendar turns them from a tool you *operate* into a workforce you *manage*.
+
+**Clockwork's bet:** the next interface for agents is not a better chat window — it's a **booking system**. You schedule an agent the way you book a contractor: define the job, attach the context, set the budget, pick the time. The work happens without you. The results come to you.
+
+## 2. The core loop
+
+**Book → Run → Review → Repeat.**
+
+1. **Book** — click a calendar slot → task composer: prompt, working directory/repo, attached context (files, URLs, MCP servers, prior-run outputs), model, permission mode, budget caps (max spend / turns / wall-clock), one-off or recurring (RRULE).
+2. **Run** — a local daemon fires the task at the scheduled time via the Claude Agent SDK: isolated git worktree, sandboxed permissions, hard timeout, spend cap. Runs happen with the app window closed.
+3. **Review** — every run files a structured **Run Report** (summary, diff/PR link, artifacts, transcript, cost) into a results inbox + OS/Slack notification. Runs that hit a decision point don't fail — they **pause and file an approval request**.
+4. **Repeat** — save as template, chain tasks (B consumes A's output; B runs only if A succeeded), let capacity-aware scheduling shift flexible jobs into idle subscription windows.
+
+## 3. Who it's for
+
+| Persona | Situation | What Clockwork gives them |
+|---|---|---|
+| **Solo developer / indie hacker** | Pays for Claude Max, uses ~30% of capacity, drowns in repo chores | Overnight workforce: wake up to triaged issues, updated deps, a draft PR. Zero infra. |
+| **Tech lead on a small team** | Recurring hygiene (flaky tests, drift checks, release notes) eats senior time | A shared library of scheduled jobs; results in Slack; approvals instead of interruptions |
+| **Staff/platform engineer** | Already hand-rolls `claude -p` in cron/CI per repo | One pane of glass across all repos, with HITL, budgets, and an audit trail CI never gives |
+| **AI-forward PM / ops person** (H2) | Wants recurring digests, research, report generation without engineering help | Templates + non-code tasks; the calendar metaphor requires no terminal literacy |
+
+Primary wedge persona: **the solo developer on a Claude subscription.** Cheapest to reach, feels the capacity-waste pain daily, tolerates v1 rough edges, evangelizes in public.
+
+## 4. Why now
+
+- **Claude Agent SDK exists** — the full Claude Code harness (tools, MCP, permissions, hooks, sessions) is invocable headlessly. The execution engine is a dependency, not a build.
+- **Subscription capacity windows** (5-hour / weekly caps) created a new resource-management problem nobody owns: idle capacity is money already spent, evaporating.
+- **Trust tooling matured** — worktrees, permission modes, sandboxing, budget telemetry make unattended runs defensible for the first time.
+- **The competition is half-built**: AgentCalendar visualizes *past* sessions (observability-first, scheduling bolted on); Claude Code's cron primitives have no calendar, no composer, no inbox; CI cron is per-repo plumbing with no unified view and no HITL.
+
+## 5. Differentiation — the two features that make it *great*
+
+1. **Capacity-aware scheduling.** Clockwork models your Claude plan's rate-limit windows as schedulable inventory. It warns "this 2pm job collides with your interactive coding session," auto-shifts flexible jobs into idle/overnight windows, and shows a capacity forecast on the calendar itself. Your subscription becomes a resource you *schedule*, like a meeting room.
+2. **Human-in-the-loop as a calendar-native object.** Approvals, pauses, and "the agent has a question" are first-class items on the calendar and in the inbox — not failures, not buried logs. This is the trust mechanism that makes people delegate real work.
+
+Supporting moats (accrue over time):
+- **Template library** — shareable, versioned job definitions ("nightly flaky-test triage") become the npm of recurring agent work.
+- **Run history corpus** — local, private, and the substrate for "this job's cost is trending up 40%" intelligence nobody else can offer.
+- **Local-first privacy** — code and transcripts never leave the machine; the enterprise objection dies before it's raised.
+
+## 6. What Clockwork is NOT
+
+- **Not an agent framework.** We write zero agent-loop code; the Claude Agent SDK is the engine. We are the *scheduling, isolation, and review layer* around it.
+- **Not a CI replacement.** CI reacts to code events; Clockwork owns *time-driven* and *human-delegated* work. They compose (a Clockwork job can open the PR that CI then tests).
+- **Not a cloud service (in H1).** Local-first is the trust story, the zero-COGS story, and the fastest path to ship. Cloud enters only as an optional relay (H2+), never as a requirement.
+- **Not multi-agent-vendor on day one.** Claude-only until the core loop is loved. The runner is an interface so Codex/Gemini become collectors later, not rewrites.
+
+## 7. Where it can go — the horizons
+
+### H1 (months 0–4): The personal agent calendar
+Local desktop app, Claude-only. Book/Run/Review loop, recurrence, templates, chaining, HITL approvals, capacity awareness, Slack delivery. **Success: 1,000 weekly-active schedulers; ≥40% of runs are recurring jobs; churn-proof "wake up to results" habit demonstrably formed.**
+
+### H2 (months 4–10): The team's agent workforce
+Shared template library, per-repo run audit log, mobile/remote approvals via an optional relay, richer non-code tasks (research digests, report generation), multi-machine awareness (laptop + always-on mini). **Success: 50 paying teams; approvals answered from a phone; templates shared inside orgs.**
+
+### H3 (months 10+): The workforce OS
+The calendar becomes the management plane for a mixed workforce: multiple agent vendors, cost/quality routing ("cheapest agent that passes this job's eval"), delegation policies ("anything under $2 and no-prod-access runs unattended"), org-level capacity planning, compliance-grade audit. The wedge — time — becomes the organizing abstraction for how organizations consume agent labor. **Success: Clockwork is the system of record for "what did our agents do last quarter."**
+
+## 8. Business model (sketch — full math in `plan/06-risks-and-costs.md`)
+
+- **Free / open-source core** (local app, 3 active recurring jobs) — trust + distribution.
+- **Pro, $15/user/mo** — unlimited jobs, capacity intelligence, chaining, Slack/email delivery, template import.
+- **Team, $30/user/mo** (H2) — shared libraries, audit log, remote approvals relay, priorities & quotas.
+- The structural advantage: **agent tokens are the user's own subscription/API key — our COGS don't scale with usage.** Margin lives in software, not inference resale.
+
+## 9. North-star metric
+
+**Reviewed runs per user per week** — a run that executed *and whose report the user opened*. It captures the whole loop: enough trust to schedule, enough reliability to complete, enough value to read. Vanity counterpart to avoid: raw runs scheduled (a cron wrapper can inflate that).
+
+## 10. Kill criteria (intellectual honesty)
+
+Stop or pivot if, after H1 ships to 200+ users:
+- <20% of users have ≥1 recurring job alive after 30 days (no habit → no product, just a demo), or
+- Anthropic ships a first-party calendar/inbox with HITL inside Claude Code's surfaces **and** template/capacity features stop differentiating within one quarter, or
+- unattended-run trust incidents (destructive actions despite sandboxing) exceed 1 per 1,000 runs — the category itself isn't ready.
+
+# Clockwork — Roadmap
+
+Three horizons. Each horizon has a **theme**, its **shipping milestones**, and an **exit criterion** — the measurable state that unlocks the next horizon. Dates assume 1 senior engineer + heavy AI-assisted development from 2026-08; a second engineer compresses calendar time ~40%.
+
+---
+
+## Horizon 1 — The personal agent calendar (months 0–4)
+
+**Theme: make one developer trust unattended agent work enough to sleep on it.**
+
+| Milestone | Contents | Target |
+|---|---|---|
+| **M0 — Spike (go/no-go)** | Claude Agent SDK runner PoC: scheduled row → worktree → run → Run Report JSON. Kill, timeout, cost-cap, auth-expiry proven. | Week 1 |
+| **M1 — Private alpha** | Daemon + SQLite + scheduler (one-off + RRULE recurrence, DST-safe). Calendar UI (month/week/day). Task composer v1 (prompt, cwd, model, permission mode, budget). Run inbox with report, diff, cost. OS notifications. macOS only. | Week 8 |
+| **M2 — Public beta** | HITL pause/approve. Task chaining (B after A, output piping). Template save/apply. Missed-run policies (skip / run-late / ask). Crash-safe run recovery. Signed DMG + auto-update. | Week 12 |
+| **M3 — v1 launch** | Capacity-aware scheduling (rate-limit window model + collision warnings + auto-shift). Slack + email delivery. Template import/export (shareable JSON). Windows + Linux builds. Docs site + 10 canonical templates. | Week 16–18 |
+
+**Exit criteria:** 1,000 weekly-active schedulers · ≥40% of runs from recurring jobs · ≥20% of 200+ cohort users still have a live recurring job at day 30 · trust incidents <1/1,000 runs.
+
+**Explicitly deferred out of H1:** teams/multi-user, cloud anything, mobile, non-Claude agents, marketplace, Windows-first polish.
+
+---
+
+## Horizon 2 — The team's agent workforce (months 4–10)
+
+**Theme: from personal habit to shared operating rhythm.**
+
+- **Shared template library** — org-scoped, versioned templates; "install the team's nightly-triage pack."
+- **Audit log** — per-repo, per-user run history; exportable; the compliance answer.
+- **Remote approvals relay (optional cloud)** — E2E-encrypted push of approval requests to phone/web; the *only* cloud component, opt-in, no code or transcripts transit it.
+- **Multi-machine awareness** — laptop + always-on Mac mini/homelab register as "workers"; jobs pin to a machine or float.
+- **Non-code task packs** — research digests, report generation, inbox triage via MCP connectors; opens the PM/ops persona.
+- **Priorities & quotas** — per-job priority classes; per-person/per-team capacity budgets.
+
+**Exit criteria:** 50 paying teams · ≥30% of approvals answered from mobile · template packs shared inside ≥20 orgs.
+
+---
+
+## Horizon 3 — The workforce OS (months 10+)
+
+**Theme: the calendar becomes the management plane for agent labor.**
+
+- **Multi-vendor runners** — Codex, Gemini CLI collectors behind the same Runner interface; per-job vendor choice.
+- **Cost/quality routing** — "cheapest agent that passes this job's eval suite"; per-template eval harnesses.
+- **Delegation policies** — codified trust: "anything under $2, no prod access, test-passing → runs unattended; else HITL."
+- **Org capacity planning** — forecast agent-hours, budget burn, per-team allocation; the CFO view.
+- **Compliance-grade audit** — signed run provenance, retention policies, SIEM export.
+
+**Exit criterion (aspiration):** Clockwork is the system of record for "what did our agents do last quarter."
+
+---
+
+## Sequencing rationale
+
+1. **Trust before scale** — HITL, budgets, and isolation ship in H1 *before* any team feature; one destructive unattended run in beta kills the category locally.
+2. **Habit before monetization** — the recurring-job habit (H1 exit metric) is the retention engine; pricing lands with H2 team features, not on solo devs during trust-building.
+3. **Local before cloud** — every H1 feature works offline; cloud enters only where physics demands it (phone approvals), scoped to metadata.
+4. **One vendor before many** — the Runner interface is designed multi-vendor from day 0 (see DECISIONS ADR-007) but only Claude is implemented until the loop is loved. Breadth before depth is how AgentCalendar stayed shallow.
+
+# Clockwork — Decision Log
+
+ADR-style, append-only. Format: Decision → Context → Alternatives rejected → Why → Consequence. New entries at the bottom; never rewrite an accepted entry — supersede it.
+
+---
+
+## ADR-001 — Product shape: schedule-first calendar, not observability dashboard
+**Decision:** Clockwork's primary object is the *future run* (a booking); history rendering is secondary.
+**Context:** AgentCalendar proved demand but is observability-first (visualize past sessions, queue on capacity reset).
+**Alternatives rejected:** (a) Fork/extend AgentCalendar — MIT allows it, but its architecture centers on log collection, not authoring/execution; the hard parts we need (composer, FSM, HITL) don't exist there. (b) Observability-first with scheduling later — repeats their shallow-scheduling trap.
+**Why:** The unclaimed position is "book agents like contractors"; booking implies composer + executor + inbox as the spine.
+**Consequence:** We build an execution engine (harder), and log-collection interop (reading Claude Code session history for the capacity model) is a *feature*, not the foundation.
+
+## ADR-002 — Three-process split: UI / daemon / per-run runner
+**Decision:** Scheduler daemon is a user-level service independent of the UI; each run is a separate child process (own pgid).
+**Alternatives rejected:** UI-embedded scheduler (dies with the window — breaks the core promise); daemon-inline runs (a hung run or SDK OOM takes down the scheduler; can't kill by pgid safely).
+**Why:** S-60 ("closed for a week, everything ran") *is* the product. Crash isolation per run enables S-31 orphan adoption.
+**Consequence:** IPC + service-install complexity accepted; `clockworkd doctor` exists because service debugging is now a user-facing concern.
+
+## ADR-003 — SQLite as single source of truth; daemon as single writer for run state
+**Decision:** One WAL-mode SQLite DB; UI writes definitions only via daemon API; runners report via IPC, never direct DB.
+**Alternatives rejected:** UI direct-writes (validation and next_fire logic duplicated); per-run JSON files (no transactional FSM); Postgres (infra for a local app).
+**Why:** Crash-safe FSM transitions need transactions + a single serialization point.
+**Consequence:** Daemon API is mandatory even for local UI; read-only DB access allowed for history queries as a pragmatic exception.
+
+## ADR-004 — Claude Agent SDK as the entire execution engine
+**Decision:** No custom agent loop; the SDK's `query()`, permission callbacks, sessions, and usage telemetry are the engine.
+**Alternatives rejected:** Raw Messages API + custom tool loop (months, and we'd rebuild permissions badly); shelling `claude -p` (no programmatic permission callbacks / streaming usage — kills HITL and budget caps).
+**Why:** The differentiation is scheduling + trust + review UX, not agent internals.
+**Consequence:** SDK capability assumptions become existential (risk R-2/R-3) → Phase 0 verifies each; SDK pinned; all SDK contact confined to `packages/runner`.
+
+## ADR-005 — Time model: tick loop + materialized next_fire + wake-event sweeps
+**Decision:** 30s DB-driven tick loop with `next_fire` materialization; OS sleep/wake hooks trigger catch-up; missed occurrences coalesce to at most one catch-up run.
+**Alternatives rejected:** OS cron/launchd timers per task (unmanageable at N tasks, no queue/mutex semantics, hostile to policy logic); long-armed setTimeout (drifts, dies on sleep).
+**Why:** Laptops sleep. The product's credibility = deterministic behavior across sleep/DST/clock-jump (S-10…S-25).
+**Consequence:** Scheduler is custom code with a heavy fixture suite — the deepest-tested module in the codebase.
+
+## ADR-006 — Isolation: git worktree per run; output as branch, never direct commits
+**Decision:** Every repo run gets a fresh worktree + `clockwork/<task>/<run>` branch; main working tree untouchable by construction.
+**Alternatives rejected:** Running in the user's tree (one dirty-state collision destroys trust forever); full repo clones (slow, disk-hungry); containers (heavyweight for H1; revisit for content-sandboxing H2).
+**Why:** NFR-2's "guaranteed by construction" beats any behavioral promise.
+**Consequence:** Repo-level mutex + reconciliation logic required; non-git tasks get scratch dirs.
+
+## ADR-007 — `AgentRunner` interface from day 0; exactly one implementation in H1
+**Decision:** Multi-vendor seam (start/resume/cancel + IO callbacks) is structural now; Codex/Gemini implementations wait for H3.
+**Alternatives rejected:** Hardcode SDK calls throughout (cheap now, rewrite later); build 2+ runners now (breadth before the loop is loved — the AgentCalendar mistake).
+**Why:** Interface cost ≈ zero now; migration cost later ≈ months. Also cleanly bounds R-2 (SDK churn) into one package.
+**Consequence:** Some SDK-specific richness must be generalized through the interface; where it can't be (session semantics), the interface documents Claude-specific contracts explicitly.
+
+## ADR-008 — Deny-list floor is global-only, never per-task
+**Decision:** The blast-radius floor (force-push protected branches, credential-path reads, writes outside worktree) cannot be relaxed per task; global override requires a deliberately scary settings flow.
+**Alternatives rejected:** Per-task overrides (one convenient checkbox = the trust incident that kills the category, R-4).
+**Why:** Users under deadline pressure will click through per-task warnings; making the unsafe path *annoying and global* is the honest design.
+**Consequence:** Some legitimate power-user workflows are friction-full in H1; acceptable trade.
+
+## ADR-009 — Source-available core; paid Pro features; local-first with no accounts in H1
+**Decision:** Core app source-available (license TBD: FSL/BUSL-style or MIT core + closed Pro — finalize before public beta); no Clockwork accounts or cloud until H2 relay.
+**Alternatives rejected:** Fully closed (a closed daemon running autonomous agents on your machine fails the HN trust test); fully MIT everything (funds nothing; AgentCalendar occupies the free-tool slot already).
+**Why:** Trust is the adoption gate; revenue needs a gate too. Source-available + paid convenience is the proven middle (see: n8n, Sentry).
+**Consequence:** License choice is a launch blocker to resolve in Phase 2; contribution policy needed.
+
+## ADR-010 — H1 ships without solving prompt injection; scope bounded instead
+**Decision:** Untrusted-content risks are bounded (permission floor, budgets, branch isolation, URL/MCP context deferred to M3, imported templates arrive disabled) and documented — not "solved."
+**Alternatives rejected:** Claiming mitigation via content filtering (false safety); blocking all external content forever (kills legitimate use).
+**Why:** Honest posture + damage-bounding beats security theater; the industry has no real solution yet.
+**Consequence:** Public security page states the stance; R-10 tripwires monitored; content-sandboxing is a named H2 investigation.
+
+
+hook: PostToolUse
+hook: PostToolUse
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Completed
+hook: PreToolUse Completed
+hook: PreToolUse Completed
+exec
+/bin/zsh -lc 'rtk read plan/02-architecture.md' in /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+ succeeded in 0ms:
+# Clockwork — Architecture (H1)
+
+Three local processes with hard boundaries. No cloud. SQLite is the single source of truth; the daemon is the single writer for run state.
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│  UI — Tauri 2 shell + React                                   │
+│  Calendar · Composer · Inbox · Approvals · Settings · Tray    │
+│  (stateless: renders daemon API responses; no direct DB write │
+│   for run state; direct read-only SQLite for history queries) │
+└──────────────┬────────────────────────────────────────────────┘
+               │ HTTP + SSE, 127.0.0.1:<port>, bearer token
+┌──────────────┴────────────────────────────────────────────────┐
+│  DAEMON — Node.js 22, installed as user service               │
+│  ┌─────────────┐ ┌──────────────┐ ┌───────────────────────┐   │
+│  │ Scheduler    │ │ Run manager  │ │ API server (Fastify)  │   │
+│  │ tick loop +  │ │ queue, locks,│ │ REST + SSE events     │   │
+│  │ RRULE expand │ │ lifecycle FSM│ │                       │   │
+│  └─────────────┘ └──────┬───────┘ └───────────────────────┘   │
+│  ┌─────────────┐ ┌──────┴───────┐ ┌───────────────────────┐   │
+│  │ Capacity     │ │ Notifier     │ │ SQLite (WAL) + Drizzle│   │
+│  │ model (M3)   │ │ OS/Slack/mail│ │ migrations            │   │
+│  └─────────────┘ └──────────────┘ └───────────────────────┘   │
+└──────────────┬────────────────────────────────────────────────┘
+               │ spawn per run (child process, own pgid)
+┌──────────────┴────────────────────────────────────────────────┐
+│  RUNNER — Node.js child process (one per run)                 │
+│  Claude Agent SDK session · worktree lifecycle · budget guard │
+│  · deny-list hooks · report serializer · heartbeat to daemon  │
+└───────────────────────────────────────────────────────────────┘
+```
+
+**Why three processes** (not UI-embedded): scheduled execution must survive UI close, login/logout, and crashes independently (per-boundary rationale in DECISIONS ADR-002). The runner is a separate child so a hung/OOM'd agent run can be killed by pgid without touching the daemon, and a daemon restart can re-adopt or reap orphaned runners (S-31).
+
+---
+
+## 1. Data model (SQLite, Drizzle-managed; abridged DDL)
+
+```sql
+-- A task is the definition; a run is one execution of it.
+CREATE TABLE tasks (
+  id            TEXT PRIMARY KEY,          -- ulid
+  name          TEXT NOT NULL,
+  prompt        TEXT NOT NULL,
+  repo_path     TEXT,                      -- NULL = scratch/no-repo task
+  model         TEXT NOT NULL DEFAULT 'claude-sonnet-5',
+  permission_mode TEXT NOT NULL DEFAULT 'acceptEdits',
+  budget_usd    REAL NOT NULL DEFAULT 2.0,
+  max_turns     INTEGER NOT NULL DEFAULT 50,
+  timeout_sec   INTEGER NOT NULL DEFAULT 3600,
+  context_json  TEXT NOT NULL DEFAULT '[]',   -- attachments: files/urls/mcp/chain refs
+  delivery_json TEXT NOT NULL DEFAULT '{}',
+  missed_policy TEXT NOT NULL DEFAULT 'run-late', -- skip|run-late|ask
+  missed_window_sec INTEGER NOT NULL DEFAULT 21600,
+  flexible      INTEGER NOT NULL DEFAULT 0,  -- capacity auto-shift opt-in
+  chain_after   TEXT REFERENCES tasks(id),   -- DAG edge (validated acyclic)
+  chain_on      TEXT DEFAULT 'success',      -- success|always|failure
+  template_id   TEXT,
+  enabled       INTEGER NOT NULL DEFAULT 1,
+  created_at    INTEGER NOT NULL, updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE schedules (
+  id         TEXT PRIMARY KEY,
+  task_id    TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  kind       TEXT NOT NULL,                 -- once|rrule|cron
+  rrule      TEXT,                          -- iCal RRULE string
+  cron       TEXT,
+  run_at     INTEGER,                       -- for 'once' (UTC epoch)
+  tz         TEXT NOT NULL,                 -- IANA zone for expansion
+  next_fire  INTEGER,                       -- materialized next occurrence (UTC)
+  enabled    INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX idx_schedules_next ON schedules(enabled, next_fire);
+
+CREATE TABLE runs (
+  id           TEXT PRIMARY KEY,            -- ulid
+  task_id      TEXT NOT NULL REFERENCES tasks(id),
+  scheduled_for INTEGER,                    -- NULL for run-now
+  state        TEXT NOT NULL,               -- FSM below
+  state_changed_at INTEGER NOT NULL,
+  worktree_path TEXT, branch TEXT,
+  session_id   TEXT,                        -- SDK session for resume
+  pid          INTEGER, pgid INTEGER,       -- for orphan adoption/reaping
+  heartbeat_at INTEGER,
+  cost_usd     REAL DEFAULT 0, turns INTEGER DEFAULT 0,
+  started_at   INTEGER, ended_at INTEGER,
+  outcome_reason TEXT,                      -- budget_exceeded|timed_out|...
+  report_json  TEXT                         -- serialized Run Report
+);
+CREATE INDEX idx_runs_state ON runs(state);
+CREATE INDEX idx_runs_task_time ON runs(task_id, scheduled_for);
+
+CREATE TABLE approvals (
+  id         TEXT PRIMARY KEY,
+  run_id     TEXT NOT NULL REFERENCES runs(id),
+  kind       TEXT NOT NULL,                 -- permission|question
+  payload_json TEXT NOT NULL,               -- what's being asked
+  requested_at INTEGER NOT NULL,
+  responded_at INTEGER, response_json TEXT,
+  timeout_at INTEGER NOT NULL, fallback TEXT NOT NULL -- deny-and-continue|abort
+);
+
+CREATE TABLE capacity_samples (              -- M3: telemetry for window model
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at INTEGER NOT NULL, window_kind TEXT, used_pct REAL, source TEXT
+);
+
+CREATE TABLE events (                        -- append-only audit trail
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at INTEGER NOT NULL, run_id TEXT, kind TEXT NOT NULL, data_json TEXT
+);
+```
+
+Write discipline: **daemon is the only writer** for `runs`/`approvals`/`schedules.next_fire`; runners report via IPC (not direct DB); UI writes only `tasks`/`schedules` definitions **through the daemon API** (so validation + next_fire materialization happen in one place). UI may open the DB read-only for fast history rendering.
+
+## 2. Run lifecycle FSM
+
+```
+scheduled ──(next_fire due)──▶ queued ──(slot+repo lock free)──▶ preparing
+  │                                                                │ worktree created,
+  │ (machine asleep past window)                                   │ context assembled
+  ▼                                                                ▼
+missed ──(policy: run-late)──▶ queued                           running ◀──────────┐
+     └──(policy: ask)──▶ ask_user                                  │               │
+                                                                   ├─(SDK permission│
+                                                                   │  needs human)  │
+                                                                   ▼               │
+                                                            waiting_approval ──────┘
+                                                                   │ (approve/deny/answer, resume via session_id)
+running ──▶ finalizing ──▶ completed | failed | cancelled | budget_exceeded | timed_out
+                │ report serialized, branch pushed nowhere (local), notifications sent,
+                │ worktree retained per policy, chain successors enqueued
+```
+
+Every transition = one synchronous SQLite write + one `events` row + one SSE broadcast. Crash between any two steps is recoverable by re-reading state (see S-30..S-34 in `04-scenarios.md`).
+
+## 3. The Runner contract (multi-vendor-ready interface)
+
+```ts
+interface AgentRunner {
+  /** Execute one job to completion or interruption. Must be resumable. */
+  start(job: JobSpec, io: RunnerIO): Promise<RunOutcome>;
+  resume(sessionRef: string, decision: ApprovalDecision, io: RunnerIO): Promise<RunOutcome>;
+  cancel(sessionRef: string): Promise<void>;
+}
+interface RunnerIO {
+  onUsage(u: {costUsd: number; turns: number}): void;      // budget guard hook
+  onPermissionRequest(p: PermissionRequest): Promise<Decision | 'ESCALATE'>; // deny-list floor, then task allow-set, then ESCALATE→HITL
+  onHeartbeat(): void;
+  onArtifact(path: string): void;
+}
+```
+
+H1 ships exactly one implementation: `ClaudeSdkRunner` wrapping `@anthropic-ai/claude-agent-sdk` `query()` with `canUseTool` → `onPermissionRequest`, message-stream usage accounting → `onUsage`, and session persistence → `resume`. The interface is the ADR-007 multi-vendor seam; nothing outside the runner may import the SDK.
+
+## 4. Scheduler design
+
+- **Tick loop, not OS cron**: daemon wakes every 30s and runs `SELECT … WHERE next_fire <= now AND enabled` — plus subscribes to OS wake/power events (macOS `caffeinate`-style IOKit notifications via a small helper; systemd `PrepareForSleep`; Windows power broadcasts) to trigger an immediate catch-up sweep on wake (S-10).
+- **next_fire materialization**: on task save and after each fire, expand RRULE in the schedule's IANA zone → store UTC. DST rules: nonexistent local time → fire at the post-transition instant; ambiguous local time → first occurrence (documented; S-20/S-21).
+- **Missed detection**: on every tick and on wake, any `scheduled` occurrence whose `next_fire < now - grace(120s)` becomes `missed` → policy applied. Recurring tasks never "pile up": catch-up runs **at most one** instance per schedule regardless of how many occurrences were slept through (coalescing rule, S-11).
+- **Queue discipline**: global semaphore (default 2) + per-repo mutex. Priority = scheduled_for asc; `run-now` jumps queue but respects locks.
+
+## 5. Worktree & repo strategy
+
+- Worktree at `~/.clockwork/worktrees/<task-slug>/<run-id>`, branch `clockwork/<task-slug>/<run-id>` cut from the task's configured base branch (default: repo's default branch, **fetched first if remote configured**; falls back to local HEAD offline — recorded in report).
+- Dirty main tree is irrelevant by construction; dirty *base branch on remote* is the user's normal flow.
+- Repo-level advisory lock file + DB mutex prevents two Clockwork runs sharing a repo concurrently (git worktree add is safe, but npm installs etc. contending for global caches are not worth the flake risk at default concurrency 2).
+- Cleanup: `git worktree remove --force` + branch retained; prune per FR-19 retention. Orphaned worktrees from crashes are reconciled at daemon start by directory-scan vs DB (S-33).
+
+## 6. API surface (daemon ⇄ UI)
+
+REST (localhost, bearer token generated at install, stored `0600`):
+`GET/POST/PATCH /tasks` · `POST /tasks/:id/run-now` · `GET /runs?filter` · `POST /runs/:id/cancel` · `GET /runs/:id/report` · `POST /approvals/:id/respond` · `GET /capacity/forecast` · `GET /health` · `POST /pause-all`.
+SSE `/events`: `run.state_changed`, `approval.requested`, `report.ready`, `daemon.health`. UI is a pure client; anything scriptable via this API is scriptable by users too (deliberate — power users get a CLI for free later).
+
+## 7. Security model (H1)
+
+- **Blast-radius floor** (FR-11): runner-side hook denies irrespective of task settings — force-push to protected branches, writes outside worktree/scratch, reads of credential paths (`~/.ssh`, `~/.aws`, keychain), package-publish commands. Deny → auto-escalate to HITL (M2+) or fail-safe (M1).
+- **Secrets**: Clockwork stores no Anthropic credentials; Slack webhook + SMTP creds in OS keychain (keytar-equivalent), never SQLite.
+- **Local API**: loopback-only + bearer token; no CORS; UI token injected by Tauri at spawn.
+- **Prompt-injection stance (documented, not solved)**: attached URLs/files are untrusted input; permission floor + budgets bound the damage; `plan`-mode dry-run exists for exactly this; roadmap note for H2 content-sandboxing.
+
+## 8. Sequence — the happy path (US-1)
+
+1. UI `POST /tasks` (schedule once, tomorrow 02:00, tz local) → daemon validates, materializes `next_fire`, stores.
+2. 02:00 tick: scheduler moves occurrence → `queued`; run manager acquires slot + repo lock → `preparing`.
+3. Runner child spawned: fetch base branch → `git worktree add` → assemble context (snapshot excerpts, live refs) → SDK `query()` with budget/permission hooks → heartbeats every 15s.
+4. Agent finishes; runner emits Run Report JSON (summary is SDK structured output; diffstat computed by runner; cost from usage telemetry) → daemon `finalizing`: persist report, release locks, schedule next RRULE occurrence, notify OS notification → `completed`.
+5. 08:30: user clicks notification → inbox deep-link → report → "Open branch in editor" / "Create PR".
+
+Failure paths for every step: `04-scenarios.md` §S-30–S-45.
+
+
+hook: PostToolUse
+hook: PostToolUse
+exec
+/bin/zsh -lc 'rtk read plan/01-product-spec.md' in /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+ succeeded in 0ms:
+# Clockwork — Product Specification (H1)
+
+Scope: Horizon 1 (personal agent calendar, Claude-only, local-first). Requirement IDs (FR-xx / NFR-xx) are referenced from `05-execution-plan.md` tasks and `04-scenarios.md`.
+
+---
+
+## 1. Personas (H1)
+
+- **P1 — Solo dev "Asha"**: Claude Max subscriber, 6 side repos, wants overnight chores done. Terminal-fluent, impatient with setup.
+- **P2 — Tech lead "Marcus"**: 8-person team, wants recurring hygiene jobs + Slack results, needs to trust before delegating.
+- **P3 — Platform engineer "Dana"**: already runs `claude -p` in CI, wants a unified pane + HITL + budgets across repos.
+
+## 2. User stories
+
+| ID | Story | Priority |
+|---|---|---|
+| US-1 | As Asha, I click tomorrow 2am on the calendar, type "update deps + run tests + open PR" against repo X with a $3 cap, and wake up to a report with a PR link. | P0 |
+| US-2 | As Asha, I make US-1 recur every Monday 2am and stop thinking about it. | P0 |
+| US-3 | As Marcus, when the agent wants to force-push, the run pauses and I get a notification; I approve/deny from the inbox and the run resumes. | P0 |
+| US-4 | As Dana, I see every past/future run on one calendar across all repos, with cost per run. | P0 |
+| US-5 | As Asha, I chain "triage failing tests" → "fix the top issue" so job 2 consumes job 1's report. | P1 |
+| US-6 | As Asha, Clockwork warns me the 2pm job will eat the capacity window I need for afternoon coding, and offers to move it to 11pm. | P1 |
+| US-7 | As Marcus, I save "nightly flaky-test triage" as a template and apply it to three repos. | P1 |
+| US-8 | As Dana, results also post to a Slack channel. | P1 |
+| US-9 | As Asha, my laptop was asleep at 2am; Clockwork applies the job's missed-run policy and tells me what it did. | P0 |
+| US-10 | As Marcus, I dry-run a new job (plan-only, no writes) before trusting it on a schedule. | P1 |
+
+## 3. Functional requirements
+
+### 3.1 Task authoring (the composer)
+
+- **FR-1** Create a task from a calendar slot or a "New task" button. A task = **prompt** (required), **working directory** (required for repo tasks; a "no-repo" mode runs in a scratch dir), **model** (default from settings), **permission mode** (`plan` | `acceptEdits` | `default` | `bypassPermissions`, default `acceptEdits`), **budget** (max USD, max turns, max wall-clock — all with defaults), **schedule** (see FR-4), **delivery** (inbox always; OS notification default on; Slack/email optional), **missed-run policy** (`skip` | `run-late` | `ask`, default `run-late` with a staleness window).
+- **FR-2** Context attachment: (a) files/globs snapshotted or referenced live (user choice, default live-reference with snapshot for prompt-injected excerpts); (b) URLs (fetched at run time); (c) MCP servers from a per-task allow-list drawn from the user's existing Claude Code MCP config; (d) output of a prior task (chaining, FR-8).
+- **FR-3** Templates: save any task as a template (parameterized: repo, schedule, budget); apply template → prefilled composer; export/import as a single JSON file.
+
+### 3.2 Scheduling
+
+- **FR-4** One-off (specific datetime, user timezone) and recurring (RRULE subset: daily/weekly/monthly + custom cron for power users). All times stored UTC + IANA zone; DST transitions resolved per `04-scenarios.md` S-20/S-21.
+- **FR-5** Manual "Run now" on any task; ad-hoc runs recorded like scheduled ones.
+- **FR-6** Concurrency control: global max parallel runs (default 2, configurable); per-repo mutex (two runs never share a repo working tree — enforced via worktrees + repo-level queue); queue with priority = scheduled time.
+- **FR-7** Capacity awareness (M3): model subscription window usage from run telemetry; render capacity forecast band on calendar; warn on booking into a predicted-exhausted window; offer auto-shift for tasks marked `flexible`.
+- **FR-8** Chaining: task B declares `after: task A` with `on: success | always | failure`; B's prompt can reference `{{previous.report}}` / `{{previous.artifacts}}`; chains are DAGs (no cycles, validated at save).
+
+### 3.3 Execution
+
+- **FR-9** Runs execute via the Claude Agent SDK in a dedicated **git worktree** (repo tasks) or scratch directory (no-repo tasks). The main working tree is never touched.
+- **FR-10** Every run enforces: wall-clock timeout (SIGTERM → grace → SIGKILL), max-turns, max-cost (from SDK usage telemetry, checked per message; hard-stop + report `budget_exceeded`).
+- **FR-11** Permission model: SDK permission mode per task + a Clockwork-level **deny-list floor** that applies regardless of task settings (no `git push --force` to protected branches, no `rm -rf` outside the worktree, no reads of `~/.ssh`, `~/.aws`, keychain paths) implemented via SDK hook callbacks.
+- **FR-12** HITL: when the SDK surfaces a permission request outside the task's auto-allow set — or the agent asks a question — the run transitions to `waiting_approval`, persists full state, notifies the user, and resumes on decision. Approval timeout (default 4h) → configurable fallback (`deny-and-continue` | `abort`).
+- **FR-13** Run lifecycle states: `scheduled → queued → preparing → running → waiting_approval → finalizing → completed | failed | cancelled | budget_exceeded | timed_out | missed`. Transitions persisted synchronously (crash-safe; see S-30..S-34).
+- **FR-14** Cancellation: user can cancel `queued`/`running`/`waiting_approval` runs from UI; graceful stop, worktree preserved for inspection per retention policy.
+
+### 3.4 Results & review
+
+- **FR-15** Run Report per run: outcome, human-readable summary (agent-authored, structured-output-forced), diff stat + link to branch, artifacts list (files the agent nominated + anything under `artifacts/`), full transcript (collapsible), token/cost breakdown, duration, all approvals asked/answered.
+- **FR-16** Inbox: reverse-chron run reports; unread badges; filters (task, repo, outcome); mark-read; deep-link from notifications.
+- **FR-17** Repo-task outputs land as a **branch** (`clockwork/<task-slug>/<run-id>`) — never direct commits to the user's branch; report links the branch and (optional per task) opens a draft PR via `gh`.
+- **FR-18** Delivery: OS notification (always available); Slack incoming-webhook per task or global (M3); email via user-supplied SMTP (M3). Delivery failures never fail the run (S-43).
+- **FR-19** Retention: transcripts + worktrees pruned by policy (default: worktrees of successful runs deleted after 7 days; failed runs kept 30; reports kept forever; all configurable).
+
+### 3.5 App & platform
+
+- **FR-20** Daemon runs as a user-level service (launchd / systemd / Windows Service) independent of the UI; tray/menubar shows daemon health + next 3 runs + pause-all toggle.
+- **FR-21** First-run onboarding: detect Claude Code install + auth; detect MCP config; create sample task ("tomorrow 9am: summarize my repo's open TODOs") in one screen.
+- **FR-22** Auth: reuse the user's existing Claude Code credentials (subscription OAuth or `ANTHROPIC_API_KEY`); Clockwork stores nothing beyond a pointer; auth-expiry surfaces as actionable notification (S-40).
+- **FR-23** Settings: defaults (model, budgets, permission mode), concurrency, quiet hours (no notifications, runs still fire), retention, capacity plan type.
+- **FR-24** Full functionality offline except the agent call itself; UI reads/writes SQLite locally; no Clockwork account, no telemetry without opt-in.
+
+## 4. Non-functional requirements
+
+- **NFR-1 Reliability**: a scheduled run fires within 60s of its time when machine awake; missed-run detection within 120s of wake. Daemon crash never loses task definitions or completed reports (WAL + synchronous commits at state transitions).
+- **NFR-2 Safety**: main working tree untouched, guaranteed by construction (worktrees); deny-list floor cannot be disabled per-task, only in global settings with an explicit scary toggle.
+- **NFR-3 Performance**: UI cold start <2s; calendar renders 5,000 historical runs <500ms (indexed queries + windowed fetch); daemon idle CPU <0.5%, RSS <150MB.
+- **NFR-4 Privacy**: zero network calls except Anthropic API, user-configured deliveries (Slack/SMTP), and update-check (can be disabled).
+- **NFR-5 Portability**: macOS 13+ (M1 first), Windows 11, Ubuntu 22+; single codebase.
+- **NFR-6 Upgradability**: SQLite schema migrations forward-only with backup-on-migrate; daemon and UI version-handshake (S-50).
+
+## 5. MVP cut-line (M1 — what we ship first)
+
+**In:** FR-1 (minus Slack/email), FR-2a only (file attachment), FR-4, FR-5, FR-6, FR-9, FR-10, FR-11, FR-13, FR-14, FR-15, FR-16, FR-17 (branch only, no auto-PR), FR-20, FR-21, FR-22, FR-24. macOS only.
+**Out (M2/M3):** HITL resume (M2 — in M1, permission-blocked runs fail safe with a clear report), chaining, templates, capacity awareness, Slack/email, Windows/Linux, auto-PR, URL/MCP context.
+**Rationale:** M1 must prove the loop end-to-end (book → unattended run → trustworthy report) — everything else is leverage on a proven loop.
+
+## 6. Anti-requirements (explicit non-goals for H1)
+
+- No cloud execution, no Clockwork accounts, no server-side anything.
+- No agent-loop code of our own (no custom tool-use loop, no prompt-chain framework).
+- No multi-vendor runners (interface yes, implementation no).
+- No editing agent transcripts / "steering" mid-run beyond approve/deny/answer — that's a chat app, not a calendar.
+- No attempt to schedule *interactive* sessions — Clockwork owns unattended work only.
+
+
+hook: PostToolUse
+hook: PostToolUse
+exec
+/bin/zsh -lc 'rtk read plan/03-tech-stack.md' in /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+ succeeded in 0ms:
+# Clockwork — Tech Stack
+
+Every load-bearing choice, its rationale, and what was rejected. Cross-referenced from `decisions/DECISIONS.md`.
+
+| # | Layer | Choice | Rationale | Rejected alternatives |
+|---|---|---|---|---|
+| 1 | Execution engine | **Claude Agent SDK** (`@anthropic-ai/claude-agent-sdk`) | The entire agent harness free: tools, MCP, permission modes (`canUseTool`), hooks, session resume, usage/cost telemetry, structured output. We write zero agent-loop code. Rides the user's existing Claude Code auth. | Raw Messages API + custom loop (months of rework, permission model from scratch); shelling `claude -p` (no programmatic permission callbacks or streaming usage — disqualifying for HITL + budget caps) |
+| 2 | Desktop shell | **Tauri 2** | ~10MB installers, low RSS, native tray/notifications/autostart/updater, Rust shell hardens localhost token handling. UI is plain web tech. | Electron (viable fallback if Tauri friction bites — decision gate at end of Phase 1; ~150MB + heavier RSS); Swift/Kotlin native (kills single-codebase NFR-5) |
+| 3 | UI framework | **React 18 + TypeScript + Vite** | Team fluency, ecosystem, fastest AI-assisted velocity. | Svelte/Solid (fine tech, smaller AI training corpus + component ecosystem for calendars) |
+| 4 | Calendar component | **FullCalendar** (React) | The only battle-tested OSS calendar with month/week/day + drag-create + recurring-event rendering. Building a calendar is a known tarpit. | Schedule-X (younger, fewer views); custom (months) |
+| 5 | Component kit | shadcn/ui + Tailwind | Speed + ownable code (no runtime dep). | MUI/Antd (heavier, harder to make feel native) |
+| 6 | Daemon runtime | **Node.js 22 (LTS)** | Same language as SDK and UI; child-process + pgid control is mature; single-binary packaging via `pkg`-style not needed (ships inside app bundle with bundled Node). | Rust daemon (better RSS but splits the codebase and slows every feature; SDK is TS-first); Bun (child-process/IPC edge cases too risky for a reliability product) |
+| 7 | Daemon HTTP | Fastify + SSE | Tiny, fast, schema-validated routes (zod). WebSockets unnecessary — SSE is one-directional events + REST commands. | Express (fine, slower validation story); gRPC (overkill for loopback) |
+| 8 | Service install | launchd (mac) / systemd --user (linux) / Windows Service via `node-windows` | User-level, survives logout-not-reboot semantics per OS; health-checkable; standard uninstall story. | Login-item background app (dies with session, no restart policy); kernel-level anything (no) |
+| 9 | Storage | **SQLite (WAL) + better-sqlite3 + Drizzle ORM** | Local-first, zero-infra, synchronous writes for crash-safe FSM transitions; Drizzle gives typed schema + migrations. | Postgres (infra for no reason); JSON files (no transactions — FSM corruption guaranteed); electric/livestore sync layers (H2 problem) |
+| 10 | Scheduling lib | **rrule** (iCal expansion) + croner (cron strings) + **Luxon** (tz/DST) | RRULE is the lingua franca of recurrence (also enables iCal export later); Luxon handles IANA zones + DST edge resolution explicitly. | node-cron alone (no RRULE, naive tz); date-fns-tz (weaker DST disambiguation API) |
+| 11 | IDs | ULID | Sortable, collision-safe, embeddable in branch names. | UUIDv4 (unsortable), autoincrement (merge/export hostile) |
+| 12 | Git operations | System `git` via child_process (+ `gh` CLI optional for PRs) | Worktrees, fetch, diffstat — battle-tested; users already have it; no lib can match worktree semantics. | isomorphic-git/nodegit (worktree support weak/abandoned) |
+| 13 | Notifications | Tauri notification API (OS-native) + Slack incoming webhooks + nodemailer (M3) | Zero-dependency paths first. | Push services (H2 relay problem, not H1) |
+| 14 | Secrets | OS keychain via Tauri plugin (mac Keychain / DPAPI / libsecret) | Slack/SMTP creds never in SQLite (NFR-4). | Encrypted file (weaker, custom crypto smell) |
+| 15 | Packaging/updates | Tauri bundler + tauri-updater; signed DMG + MSI + AppImage; npm-distributed CLI shim later | Auto-update is table stakes for a daemon product (security patches). | Manual downloads only (stale daemons forever) |
+| 16 | Testing | Vitest (unit) · Playwright (UI) · **fake-clock harness for the scheduler** (deterministic time travel across DST fixtures) · a `MockRunner` implementing `AgentRunner` for full-loop tests without API spend | The scheduler and FSM are the product; they get the deepest tests. Real-SDK smoke tests run nightly with a $2 budget cap. | |
+| 17 | Repo layout | pnpm monorepo: `packages/daemon` · `packages/runner` · `packages/ui` · `packages/shared` (types, API client, zod schemas) | Runner isolated so ADR-007 (multi-vendor seam) is structural, not aspirational. | |
+
+## Version pins (at kickoff; revisit each phase)
+
+Node 22 LTS · Tauri 2.x · React 18 · `@anthropic-ai/claude-agent-sdk` latest stable (pin minor; the SDK moves fast — see R-2 in risks) · better-sqlite3 12.x · rrule 2.8 · Luxon 3.x · FullCalendar 6.x.
+
+## Deliberate debt (accepted for H1)
+
+- No i18n scaffolding (retrofit cost acknowledged).
+- Capacity model is heuristic (observed usage + plan-type priors), not an official quota API — Anthropic exposes none; treat as estimate UX, never a guarantee.
+- Windows service wrapper (`node-windows`) is the flakiest of the three platforms — Windows ships M3, not M1, partly for this reason.
+- SDK pinning means new Claude features lag until we bump — acceptable; the alternative (floating latest) risks silent behavior change under scheduled unattended runs, which is worse.
+
+
+hook: PostToolUse
+hook: PostToolUse
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Completed
+hook: PreToolUse Completed
+hook: PreToolUse Completed
+exec
+/bin/zsh -lc 'rtk read plan/06-risks-and-costs.md' in /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+ succeeded in 0ms:
+# Clockwork — Risks & Costs
+
+## 1. Risk register
+
+Scored Impact × Likelihood (H/M/L). Every H×* risk has a mitigation **and** a tripwire (the observable that says the risk is materializing).
+
+| ID | Risk | I×L | Mitigation | Tripwire |
+|---|---|---|---|---|
+| R-1 | **Anthropic ships first-party scheduling/calendar** in Claude Code or claude.ai | H×M | Differentiate where a platform vendor won't: cross-repo local orchestration, capacity intelligence, template library, multi-vendor seam (ADR-007). Ship fast; own the UX layer, not the API layer. | Anthropic changelog mentions "scheduled tasks/routines" for Code surfaces |
+| R-2 | **Claude Agent SDK breaking changes / instability** (young, fast-moving) | H×M | Pin minor versions; nightly real-SDK smoke suite; runner isolates 100% of SDK contact (ADR-007) so migrations touch one package; T-004 error taxonomy revisited each bump | Smoke suite red after a pin bump; changelog deprecations |
+| R-3 | **Session resume from a new process doesn't work / degrades** → HITL architecture broken | H×L | Phase 0 T-003 tests exactly this before product code; fallback design documented (keep-alive runner processes during `waiting_approval`) | T-003 failure |
+| R-4 | **Trust incident**: unattended run does something destructive | H×L | Worktree-by-construction, deny-list floor (not per-task overridable), budgets, `plan` dry-run, branch-never-main; incident post-mortems public | Any deny-list trigger in beta telemetry; any user report |
+| R-5 | **ToS/auth risk**: subscription-auth automation limits, or Anthropic restricts SDK use with consumer subscriptions | H×L→M | SDK is Anthropic's *sanctioned* programmatic surface and rides Claude Code auth; still: abstract auth so API-key mode is first-class; monitor ToS; no auth scraping ever | ToS update; SDK auth behavior change |
+| R-6 | **Scheduler/time correctness bugs** (DST, sleep, clock jumps) erode the core promise | M×H | Fixture-first development (fake clock, 4 zones); missed-run coalescing rule; wake-event hooks; S-matrix coverage gates every task | Any dogfood "it didn't run and didn't tell me" |
+| R-7 | **Capacity model is wrong** (no official quota API) → false warnings destroy the flagship feature's credibility | M×M | Ship as clearly-labeled estimate; confidence intervals; learn from observed telemetry; kill the feature behind a flag if precision <70% | Beta feedback "the warning was wrong" ×3 |
+| R-8 | **Windows service reliability** (node-windows flakiness, power events) | M×M | Windows deferred to M3; dedicated CI runner; consider NSSM-style wrapper if node-windows fails | Windows fixture suite flake rate >2% |
+| R-9 | Tauri friction (native APIs, updater edge cases) stalls UI velocity | M×M | Electron fallback decision gate at end of Phase 1 (stack #2); UI is plain web tech either way | 2+ blocked days on shell-layer issues |
+| R-10 | **Prompt injection** via attached URLs/files steers agent into harmful actions | M×M | Permission floor + budgets bound damage; URL/MCP context deferred to M3; import preview (S-74); documented stance — never claim "solved" | Security researcher report; deny-list triggers correlated with URL tasks |
+| R-11 | Solo-builder bus factor / burnout | M×M | Plan is executable-by-anyone (this repo); phase gates allow pause-resume; second engineer option priced in | Two consecutive slipped gates |
+| R-12 | AgentCalendar or a well-funded clone wins mindshare first | L×M | They're observability-first; our moat list (VISION §5); speed to M2 beta; open-source core builds community faster than closed | Their scheduling UX ships composer+inbox |
+| R-13 | Retention fails: novelty wears off, recurring jobs get disabled | H×M | This is the kill-criteria metric; counter with template quality (jobs that stay valuable: deps, triage, digests) and result quality bar (report must be worth reading) | 30-day recurring-job survival <20% in beta |
+
+## 2. Build cost
+
+Rates: blended senior contractor $85/hr ≈ $680/ed. Solo-founder building = opportunity cost, not cash.
+
+| Milestone | Effort (from `05` §summary) | Contracted cost | Cumulative |
+|---|---|---|---|
+| Phase 0 spike | 5 ed | $3.4k | $3.4k |
+| Phase 1 → M1 alpha | ~41 ed | $27.9k | $31.3k |
+| Phase 2 → M2 beta | ~19 ed | $12.9k | $44.2k |
+| Phase 3 → M3 v1 | ~20.5 ed | $13.9k | **$58.1k** |
+| +20% integration buffer | — | — | **~$70k** |
+
+One-off costs: Apple Developer $99/yr · Windows EV code-signing ~$300–400/yr · domain/site ~$200 · design assets (icon, landing) ~$1–2k if outsourced. **All-in to public v1: ~$72–75k contracted, or ~4 months of one strong founder-engineer.**
+
+H2 (team tier + relay) adds ~35–45 ed ≈ $25–32k plus the first real infra.
+
+## 3. Run cost (the structural advantage)
+
+- **H1 COGS ≈ $0.** Local-first: no servers, no accounts, no storage. Agent tokens bill to the **user's** subscription/API key. Our cost of a user's 1,000th run is zero.
+- Fixed opex: code-signing certs + CI (~$50–100/mo GitHub Actions incl. Windows/mac runners) + update/download hosting (GitHub Releases, free) + docs hosting (~$0–20/mo).
+- Development-time API spend: nightly real-SDK smoke ≈ $2/day; spike + manual testing budget $300 total is generous.
+- H2 relay (the only cloud): stateless push relay for approvals, metadata-only, E2E-encrypted → single small instance + APNs/FCM ≈ **$100–300/mo** to thousands of users. Deliberately designed to stay boring.
+
+## 4. Monetization math (sanity check, H1→H2)
+
+- Free core (3 active recurring jobs) → Pro $15/mo (unlimited, capacity intelligence, chaining, Slack) → Team $30/user/mo (H2).
+- Break-even on contracted build (~$75k): ~420 Pro users for 12 months. Against a wedge audience (Claude Max subscribers with repos — hundreds of thousands and growing), that's a 0.x% attach problem, not a market-size problem. The risk is R-13 (retention), not TAM.
+- Open-source core decision (see DECISIONS ADR-009): source-available core, paid Pro features — community trust for a daemon that runs agents on your machine is *the* adoption gate; closed-source daemons die in HN comments.
+
+## 5. Assumptions register (things this plan treats as true — re-verify at Phase 0)
+
+1. Claude Agent SDK exposes: per-message usage/cost telemetry, `canUseTool`-style permission callbacks, session resume from a new process, structured output. *(Each is individually load-bearing; T-001…T-004 verify all four.)*
+2. Subscription auth (Claude Code login) is usable by SDK sessions launched from a daemon context without interactive prompts (until expiry).
+3. Rate-limit/capacity errors are programmatically distinguishable from other API errors (T-004).
+4. `git worktree` semantics are stable across git ≥2.38 on all 3 OSes.
+5. Tauri 2 tray + notifications + updater work on macOS 13+ without entitlement drama beyond standard notarization.
+
+
+hook: PostToolUse
+hook: PostToolUse
+exec
+/bin/zsh -lc 'rtk read plan/05-execution-plan.md' in /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+ succeeded in 0ms:
+# Clockwork — Execution Plan
+
+Phased task breakdown. Each task: ID, deliverable, acceptance criteria (AC), scenario coverage (S-xx from `04-scenarios.md`), estimate in ideal engineer-days (ed) assuming AI-assisted development. **Do tasks in order within a phase; phases gate on exit criteria.**
+
+Team assumption: 1 senior full-stack engineer (TypeScript-strong) + AI pairing. A second engineer parallelizes UI vs daemon tracks from Phase 1 (≈40% calendar compression).
+
+---
+
+## Phase 0 — Spike: prove the engine (Week 1, go/no-go gate)
+
+Goal: kill the riskiest assumptions for <1 week of cost. **No product code — throwaway allowed.**
+
+| ID | Task | AC | Est |
+|---|---|---|---|
+| T-001 | SDK runner PoC: script takes `{prompt, repoPath, budgetUsd, timeoutSec}` → creates worktree → runs `query()` with `canUseTool` callback → writes report JSON (summary via structured output, diffstat, cost) | Real run completes on a toy repo; report JSON matches draft schema; cost figure within 10% of console-reported usage | 1.5 |
+| T-002 | Interruption matrix on T-001: SIGTERM/SIGKILL the run; enforce timeout; enforce cost cap mid-run; verify worktree state after each | All four interruptions leave: recoverable repo state, truthful final state, no zombie processes (pgid kill verified) | 1.5 |
+| T-003 | HITL feasibility: pause on `canUseTool` ESCALATE, persist session, resume in a **new process** via session id with an approval decision | Resumed run completes and its transcript shows continuity | 1 |
+| T-004 | Auth + capacity probes: run with expired/absent auth (S-40); identify SDK error classes for rate-limit vs capacity-window vs auth | Error taxonomy documented → feeds runner error mapper | 0.5 |
+| T-005 | Scheduler micro-PoC: 30s tick loop + rrule + Luxon; fake-clock DST fixtures for S-20/S-21/S-25 | Fixtures pass across 4 zones | 0.5 |
+
+**Gate G0 (exit):** T-001…T-005 all green. **Specifically: T-003 resume-in-new-process must work** — if the SDK cannot resume a session from a fresh process, HITL architecture (FR-12, S-50…S-54) must be redesigned around keep-alive runners *before* any product code is written. If cost telemetry (T-001) is unavailable mid-stream, budget enforcement degrades to turn/time caps — decide and record in DECISIONS.
+
+## Phase 1 — MVP core loop (Weeks 2–8) → M1 private alpha
+
+### Track A — Daemon & runner
+
+| ID | Task | AC / Scenarios | Est |
+|---|---|---|---|
+| T-101 | Monorepo scaffold (pnpm, packages/{daemon,runner,ui,shared}), CI (lint, vitest, build) | CI green on empty packages | 1 |
+| T-102 | SQLite schema + Drizzle migrations + WAL config (`02-architecture.md` §1) | Migration up/down; crash-mid-write test (S-34 partial) | 1.5 |
+| T-103 | Scheduler service: tick loop, next_fire materialization, occurrence dedupe, missed detection + policies, wake-event hooks (macOS) | S-1, S-2, S-5, S-7, S-9, S-10, S-11, S-14, S-20…S-26 fixtures green | 4 |
+| T-104 | Run manager: FSM, global semaphore, per-repo mutex, queue; synchronous state persistence + events table | S-2, S-3, S-4, S-8; kill -9 recovery suite S-30…S-33 | 4 |
+| T-105 | Runner package: `AgentRunner` interface + `ClaudeSdkRunner` (productionize T-001/T-002): worktree lifecycle, context assembly (files), budget guard, deny-list floor hooks, heartbeat IPC, report serializer | S-13, S-35…S-39, S-44, S-45, S-55(M1 fail-safe), S-67 | 5 |
+| T-106 | Runner error mapper (from T-004 taxonomy): auth, rate-limit, capacity, offline pre-flight | S-40…S-42, S-46…S-48 | 2 |
+| T-107 | Daemon API (Fastify): tasks/runs/reports/health CRUD + SSE events + bearer token | API contract tests; UI-less curl walkthrough of US-1 | 2.5 |
+| T-108 | Service install: launchd plist gen + health check + `clockworkd doctor` CLI | Survives logout/reboot; doctor detects 5 canned misconfigs | 2 |
+| T-109 | Notifier v1: OS notifications + quiet hours | S-65 | 1 |
+| T-110 | Retention/pruning job + startup worktree reconciliation | S-33, FR-19 | 1.5 |
+
+### Track B — UI (parallelizable from T-107 stub)
+
+| ID | Task | AC / Scenarios | Est |
+|---|---|---|---|
+| T-121 | Tauri shell: window + tray (daemon health, next 3 runs, pause-all), token handshake, auto-launch daemon if down | Tray reflects live SSE health | 2.5 |
+| T-122 | Calendar view (FullCalendar): month/week/day; past runs colored by outcome; future occurrences rendered from schedules; click-slot → composer | S-60, S-64 (windowed fetch) | 3.5 |
+| T-123 | Composer v1: prompt, repo picker (validated), model, permission mode, budget, schedule (once + RRULE builder), missed-policy; zod-shared validation | S-23, S-26, S-36, S-69 | 3.5 |
+| T-124 | Inbox + Run Report view: list, unread, filters; report page (summary, diff viewer, transcript collapse, cost, timeline); "open branch in editor" | US-1 review path; S-39, S-68 masking | 3.5 |
+| T-125 | Settings + onboarding (detect Claude auth, sample task) | S-40 surfaced in onboarding; FR-21 | 2 |
+| T-126 | Run detail live view: streaming state + heartbeat + cancel button | S-12 visibility, FR-14 | 1.5 |
+
+**Gate G1 (M1 exit):** US-1/US-2/US-4/US-9 demo end-to-end on a fresh Mac by someone who didn't build it, using only the app (no terminal). Fixture suites (scheduler, FSM, MockRunner) green in CI. Dogfood starts: ≥3 real recurring jobs on the builder's machine for 1 week with zero silent failures (silent failure = anything wrong that produced no inbox/notification signal).
+
+## Phase 2 — Trust & leverage (Weeks 9–12) → M2 public beta
+
+| ID | Task | AC / Scenarios | Est |
+|---|---|---|---|
+| T-201 | HITL end-to-end: ESCALATE path, `waiting_approval` persistence, approval inbox UI, resume, timeouts + fallbacks | S-50…S-56 (MockRunner + one real-SDK test) | 4 |
+| T-202 | Chaining: DAG validation, `{{previous.*}}` prompt assembly, ghost rendering on calendar | S-70…S-73 | 3 |
+| T-203 | Templates: save/apply/param-fill; export/import JSON with security preview | S-74, S-75 | 2.5 |
+| T-204 | Crash-recovery hardening pass: orphan adoption (S-31 re-adopt), disk-full behavior, DB backup-on-migrate | S-31, S-34, S-61 | 3 |
+| T-205 | Packaging: signed DMG, notarization, tauri-updater channel, versioned daemon handshake | S-61, S-62; update applied on a dogfood machine | 3 |
+| T-206 | Beta telemetry (opt-in, structure-only: counts/outcomes/durations — no prompts/paths) + crash reporting | Documented in privacy note | 1.5 |
+| T-207 | Docs site v1 + 5 canonical templates (nightly deps, test triage, TODO digest, changelog draft, repo health) | A stranger sets up first recurring job in <10 min | 2 |
+
+**Gate G2 (M2 exit):** 20 external beta users; ≥60% create a recurring job in week 1; HITL round-trip demonstrated in the wild; zero data-loss incidents.
+
+## Phase 3 — v1 launch (Weeks 13–18) → M3
+
+| ID | Task | AC / Scenarios | Est |
+|---|---|---|---|
+| T-301 | Capacity model: usage sampling from run telemetry, window forecasting, calendar capacity band, booking collision warnings, `flexible` auto-shift | S-47; US-6 demo; forecast labeled as estimate | 4.5 |
+| T-302 | Slack + email delivery + per-task delivery config | S-43 | 2 |
+| T-303 | Auto-PR option via `gh` (draft PR, template body from report) | US-1 full; S-37 | 1.5 |
+| T-304 | Windows support: service wrapper, power events, MSI signing | Full fixture suite on Windows CI runner | 4 |
+| T-305 | Linux support: systemd --user, AppImage | Fixture suite on Ubuntu runner | 2 |
+| T-306 | URL + MCP context attachment (per-task MCP allow-list from user's Claude config) | FR-2b/c; prompt-injection stance documented in-product | 2.5 |
+| T-307 | Performance pass: 5k-run calendar, DB vacuum, idle profiling vs NFR-3 | NFR-3 numbers met on 2019 Intel Mac | 2 |
+| T-308 | Launch kit: landing page, demo video, 10 templates, HN/Twitter narrative ("I wake up to PRs") | Launch | 2 |
+
+**Gate G3 (v1):** All fixture suites green on 3 OSes; 30-day dogfood streak without a trust incident; kill-criteria metrics instrumented (VISION §10).
+
+---
+
+## Effort & calendar summary
+
+| Phase | Ideal eng-days | Calendar (1 eng) | Calendar (2 eng) |
+|---|---|---|---|
+| 0 — Spike | 5 | 1 wk | 1 wk |
+| 1 — MVP | ~41 | 6–7 wk | 4 wk |
+| 2 — Beta | ~19 | 3–4 wk | 2–2.5 wk |
+| 3 — v1 | ~20.5 | 4–5 wk | 2.5–3 wk |
+| **Total** | **~86 ed** | **~16–18 wk** | **~10–11 wk** |
+
+Buffer policy: estimates already assume AI-assisted throughput; add 20% integration buffer per phase — reflected in the calendar ranges. The historically underestimated items are **T-103/T-104 (time + crash correctness)** and **T-304 (Windows service)** — they carry the largest padding, matching the risk register (R-6, R-8).
+
+## Working agreements
+
+1. **Scenario-driven development**: no task is "done" until its listed S-IDs have tests or a written [manual] verification log.
+2. **Decisions log discipline**: any deviation from `02/03/04` docs → DECISIONS.md entry same day.
+3. **Dogfood from M1**: the builder's own machine runs ≥3 real jobs continuously; every silent failure becomes a P0.
+4. **No scope creep across the cut-line**: new ideas go to `vision/ROADMAP.md`, not the current phase.
+
+
+hook: PostToolUse
+hook: PostToolUse
+exec
+/bin/zsh -lc 'rtk read plan/04-scenarios.md' in /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+ succeeded in 0ms:
+# Clockwork — Scenario & Edge-Case Matrix
+
+The contract for "handle all scenarios." Every implementation task in `05-execution-plan.md` cites the S-IDs it must satisfy; every S-ID gets at least one automated test (fake-clock harness, MockRunner, or Playwright) unless marked **[manual]**.
+
+Legend: **Required behavior** is normative — deviations need a DECISIONS entry.
+
+---
+
+## A. Scheduling & time (S-1 … S-29)
+
+| ID | Scenario | Required behavior |
+|---|---|---|
+| S-1 | One-off task fires while machine awake, daemon healthy | Run starts within 60s of `next_fire` (NFR-1); state `scheduled→queued→…` |
+| S-2 | Two tasks fire at the same instant, concurrency limit 2 | Both start; a third queues FIFO by `scheduled_for` |
+| S-3 | Two tasks same instant, **same repo** | Repo mutex: second waits; report notes queue delay |
+| S-4 | "Run now" clicked while same task's scheduled run is running | Second instance queues behind repo mutex; warn in UI ("already running — queue another?") |
+| S-5 | Task edited while a run of it is `running` | Running run keeps its captured JobSpec snapshot; edits affect next occurrence only |
+| S-6 | Task deleted while run in-flight | Run completes/cancels per user choice prompt; history + report retained (task row soft-deleted) |
+| S-7 | Task disabled mid-queue | Queued occurrence cancelled with state `cancelled`, reason `task_disabled` |
+| S-8 | Recurring schedule's next occurrence lands while previous run still executing | Skip-or-queue per task setting (`overlap_policy`, default **skip** with report note) — never unbounded pileup |
+| S-9 | 500 tasks defined, 50 due in same minute | Scheduler tick remains O(due) via `idx_schedules_next`; queue drains at concurrency; no tick starvation (tick loop must not await run completion) |
+| S-10 | **Machine asleep at fire time**, wakes 20 min later | Wake event triggers catch-up sweep ≤120s; missed-run policy applies: `run-late` (within `missed_window_sec`) → run with report banner "ran 20m late"; `skip` → `missed` + notification; `ask` → inbox item |
+| S-11 | Machine asleep over a weekend; daily task missed 2 occurrences | **Coalescing rule:** at most ONE catch-up run per schedule; report lists occurrences it covers; `next_fire` re-materialized forward |
+| S-12 | Laptop lid closed mid-run (sleep during `running`) | Runner process suspended with system; on wake, heartbeat gap detected → if process alive, continue (timeout clock = wall-clock, so long sleeps may trigger S-13 path); if dead, S-31 |
+| S-13 | Run exceeds `timeout_sec` (incl. sleep-inflated wall-clock) | SIGTERM to pgid → 30s grace → SIGKILL; state `timed_out`; worktree preserved; report includes partial transcript. Sleep-inflation nuance: timeout guard uses *monotonic active* time where OS exposes it, else wall-clock with a report note |
+| S-14 | Daemon not running at fire time (crashed, was upgrading) | On next start: startup sweep = same path as wake catch-up (S-10/S-11) |
+| S-20 | Schedule at 02:30 local; DST spring-forward makes 02:30 nonexistent | Fire at post-transition instant (03:00→03:30 zone-dependent); documented; test fixture per zone (US, EU, AU) |
+| S-21 | DST fall-back makes 01:30 occur twice | Fire on first occurrence only |
+| S-22 | User changes system timezone / travels | Schedules follow their stored IANA zone, not system zone; UI shows both when they differ |
+| S-23 | User sets schedule in the past ("today 9am" at 10am) | Composer blocks with inline fix suggestions (tomorrow 9am / run now) |
+| S-24 | RRULE with no future occurrences (COUNT exhausted) | Schedule auto-disables; task remains; inbox note |
+| S-25 | System clock jumps (NTP correction, manual change) | Tick loop uses wall-clock comparisons only (no cached deltas); backward jump must not re-fire completed occurrences (dedupe on (schedule_id, occurrence_time) unique index) |
+| S-26 | Cron string invalid / RRULE unparsable | Rejected at save with zod + rrule validation; daemon never sees invalid rows |
+
+## B. Execution & git (S-30 … S-39)
+
+| ID | Scenario | Required behavior |
+|---|---|---|
+| S-30 | **Daemon crashes** between `queued` and `preparing` | On restart: rows in transient states with stale `state_changed_at` are re-queued (idempotent — no worktree exists yet) |
+| S-31 | Daemon crashes while runner `running` | Restart: for each `running` row, check pid/pgid + heartbeat: process alive → **re-adopt** (reattach IPC via socket path); dead → state `failed`, reason `orphaned`, worktree preserved, notification |
+| S-32 | Runner crashes (OOM, unhandled) mid-run | Daemon detects heartbeat gap (>60s) + child exit; `failed` with captured stderr tail in report |
+| S-33 | Crash left orphan worktrees/branches | Startup reconciliation: scan `~/.clockwork/worktrees` vs DB; unknown dirs → quarantine list in settings UI (never auto-delete unknown data) |
+| S-34 | SQLite corruption / disk full mid-transition | WAL + synchronous=NORMAL; on open-failure: backup-and-recreate flow with exported reports; disk-full → pause-all + persistent notification **[manual]** |
+| S-35 | Repo's base branch fetch fails (offline, auth) | Proceed from local HEAD of base branch; report banner "based on local state (fetch failed: reason)" |
+| S-36 | Repo has no commits / not a git repo / path missing | Composer validates at save; daemon re-validates at `preparing` → `failed` reason `repo_invalid` with actionable message |
+| S-37 | Agent's changes conflict with upstream by review time | Not Clockwork's problem to solve — report shows branch base SHA; "Create PR" surfaces conflicts naturally; template docs recommend fetch-first tasks |
+| S-38 | `git worktree add` fails (locked index, permissions) | One retry after 10s; then `failed` reason `worktree_error` + exact git stderr |
+| S-39 | Agent commits nothing (analysis-only task) | Valid outcome: report with summary + no diff section; branch auto-pruned immediately (nothing on it) |
+
+## C. Budget, auth, API (S-40 … S-49)
+
+| ID | Scenario | Required behavior |
+|---|---|---|
+| S-40 | Claude auth expired / revoked at run start | Fail fast at `preparing` with a **pre-flight auth check**; state `failed`, reason `auth`; actionable notification ("Open Claude Code and re-login"); recurring schedules keep firing into same failure at most twice, then auto-pause task with inbox alert |
+| S-41 | Auth expires **mid-run** | SDK errors; runner maps to `failed:auth`; same auto-pause rule |
+| S-42 | Rate limit / overloaded API mid-run | SDK retries internally; on terminal 429/529: `failed`, reason `rate_limited`; scheduler applies task-level backoff (next retry +30min, max 2) if task opted into `retry_on_transient` |
+| S-43 | Slack webhook / SMTP delivery fails | Never affects run outcome; delivery marked failed in report footer; retry ×3 exponential |
+| S-44 | Run hits `budget_usd` cap | Hard-stop after current message; state `budget_exceeded`; partial work committed to branch + report explains where it stopped |
+| S-45 | Run hits `max_turns` | Same pattern, reason `max_turns` |
+| S-46 | Anthropic model deprecated / renamed | Model validated at save-time against SDK model list; run-time unknown-model error → `failed` + task auto-pause + suggested replacement in notification |
+| S-47 | Capacity window exhausted (subscription 5-hour cap hit) | Detected via SDK error class; `failed:capacity` **or** (if task `flexible`) auto-defer to predicted window reset with inbox note — never silent |
+| S-48 | Network offline at fire time | Pre-flight connectivity probe; task `flexible` → defer 15min ×4 then missed-policy; else `failed:offline` |
+| S-49 | SDK minor upgrade changes behavior | SDK pinned (stack #17); upgrade only via explicit release with nightly real-SDK smoke suite green |
+
+## D. HITL & approvals (S-50 … S-56)
+
+| ID | Scenario | Required behavior |
+|---|---|---|
+| S-50 | Agent requests permission outside allow-set | Run → `waiting_approval`; state + session persisted; OS notification + inbox item with the exact command/diff being approved |
+| S-51 | User approves | Runner resumes via session_id; approval + decision recorded in report timeline |
+| S-52 | User denies | Agent continues with denial (SDK deny message); if agent cannot proceed → normal completion paths |
+| S-53 | Approval times out (default 4h) | Task-level fallback: `deny-and-continue` (default) or `abort`; report flags the timeout prominently |
+| S-54 | Approval pending when daemon restarts | `waiting_approval` rows survive; inbox still actionable; resume path re-validated on restart |
+| S-55 | Deny-list floor triggered (`rm -rf /`, force-push protected, `~/.ssh` read) | M1: auto-deny + run continues (agent told why); M2+: auto-deny + escalate visibility (inbox security banner). Never approvable per-task; global override requires the scary settings toggle + typed confirmation |
+| S-56 | Multiple approvals pile up across runs | Inbox approval queue view; oldest-first; each with its own timeout clock |
+
+## E. UI, upgrade, misc (S-60 … S-69)
+
+| ID | Scenario | Required behavior |
+|---|---|---|
+| S-60 | UI closed for a week; reopened | Everything ran on schedule; inbox shows unread reports; calendar backfilled — the *product proof* moment |
+| S-61 | Daemon/UI version mismatch after app update | API version handshake; older daemon → UI triggers daemon self-update flow; never silent incompatibility |
+| S-62 | App uninstalled | Uninstaller offers: keep or export `~/.clockwork` (reports/DB); removes service registration cleanly **[manual]** |
+| S-63 | Two UI windows / instances open | Both are stateless SSE clients; safe by construction |
+| S-64 | User on 5,000-run history opens calendar year view | Windowed fetch + aggregation (counts per day, not events) — NFR-3 |
+| S-65 | Quiet hours active when run completes | Notification suppressed, inbox badge still increments; delivery integrations unaffected |
+| S-66 | Laptop battery <10% at fire time | Default: run anyway; optional setting "defer non-flexible runs on battery" — never silently skip |
+| S-67 | Prompt references files outside repo (`~/notes.md`) | Allowed read-only if inside user-configured "context roots"; else deny-list floor applies |
+| S-68 | Report contains secrets agent happened to read | Report renderer masks common credential patterns (best-effort, documented as such); transcripts stay local either way |
+| S-69 | Machine has no `git` / repo task on machine without repo path | Composer + preflight validation with install/fix guidance |
+
+## F. Chaining & templates (S-70 … S-75) — M2
+
+| ID | Scenario | Required behavior |
+|---|---|---|
+| S-70 | Chain A→B, A fails, B `on: success` | B skipped with state `cancelled`, reason `upstream_failed`; visible on calendar as ghost |
+| S-71 | Chain A→B, A `budget_exceeded` | Treated as failure for chaining purposes (documented) |
+| S-72 | Chain cycle attempted (A→B→A) | Rejected at save (DAG validation) |
+| S-73 | `{{previous.report}}` exceeds context budget | Truncate to summary + artifact refs, note in prompt assembly log |
+| S-74 | Template imported from untrusted source | Import preview shows full prompt/permissions/budget diff vs defaults; `bypassPermissions` templates flagged red; never auto-enable — imported tasks arrive disabled |
+| S-75 | Template applied to repo lacking assumed structure | Template variables validated (paths exist) at apply time |
+
+---
+
+## Test-fixture inventory (minimum)
+
+1. **Fake-clock scheduler suite**: S-1…S-11, S-20…S-26 as table-driven fixtures (zones: America/New_York, Europe/Berlin, Australia/Lord_Howe, UTC).
+2. **FSM crash-recovery suite**: kill -9 the daemon at each transition boundary (S-30…S-34), assert recovery invariants.
+3. **MockRunner suite**: budget/turn/timeout/approval paths (S-13, S-44, S-45, S-50…S-56) without API spend.
+4. **Nightly real-SDK smoke**: one tiny scheduled run end-to-end on macOS runner, $2 cap (S-1, S-15, S-40 pre-flight).
+5. **Playwright**: composer validation (S-23, S-26, S-36), inbox/approval flows, S-60 cold-reopen.
+
+
+hook: PostToolUse
+hook: PostToolUse
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+codex
+I’ve completed the plan read. For the currency check, I’m using agent-reach on the public web via Exa, with official Anthropic/OpenAI documentation and the live AgentCalendar repository as primary evidence; volatile claims will be separated from deductions based only on the plan.
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Completed
+hook: PreToolUse Completed
+hook: PreToolUse Completed
+exec
+/bin/zsh -lc 'rtk read /Users/vimoxshah/.agents/skills/agent-reach/references/search.md' in /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+ succeeded in 0ms:
+# 搜索工具
+
+Exa AI 搜索引擎。
+
+## Exa AI 搜索
+
+高质量 AI 搜索引擎，擅长技术和代码搜索。
+
+```bash
+mcporter call 'exa.web_search_exa(query: "query", numResults: 5)'
+mcporter call 'exa.get_code_context_exa(query: "code question", tokensNum: 3000)'
+```
+
+### 使用场景
+
+| 场景 | 参数 |
+|-----|------|
+| 网页搜索 | `web_search_exa(query: "...", numResults: 5)` |
+| 代码搜索 | `get_code_context_exa(query: "...", tokensNum: 3000)` |
+
+### 特点
+
+- 擅长英文内容和技术文档
+- 支持代码上下文搜索
+- 结果质量高
+
+## 与其他搜索工具对比
+
+| 工具 | 来源 | 适用场景 |
+|-----|------|---------|
+| Exa | agent-reach | 英文/技术/代码搜索 |
+| 智谱搜索 | my-mcp-tools | 中文搜索 |
+| GitHub 搜索 | agent-reach (dev.md) | 仓库/代码搜索 |
+
+
+hook: PostToolUse
+hook: PostToolUse
+exec
+/bin/zsh -lc 'rtk read /Users/vimoxshah/.agents/skills/agent-reach/references/web.md' in /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+ succeeded in 0ms:
+# 网页阅读
+
+通用网页、RSS。
+
+## 通用网页 (Jina Reader)
+
+```bash
+# 读取任意网页内容
+curl -s "https://r.jina.ai/URL"
+
+# 示例
+curl -s "https://r.jina.ai/https://example.com/article"
+```
+
+**适用场景**: 大多数网页可以直接用 Jina Reader 读取。
+
+## Web Reader (MCP)
+
+```bash
+# 读取网页内容 (Markdown 格式)
+mcporter call 'web-reader.webReader(url: "https://example.com")'
+
+# 保留图片
+mcporter call 'web-reader.webReader(url: "https://example.com", retain_images: true)'
+
+# 纯文本格式
+mcporter call 'web-reader.webReader(url: "https://example.com", return_format: "text")'
+```
+
+**适用场景**: 需要更精确控制输出格式时使用。
+
+## RSS (feedparser)
+
+```python
+python3 -c "
+import feedparser
+for e in feedparser.parse('FEED_URL').entries[:5]:
+    print(f'{e.title} — {e.link}')
+"
+```
+
+**适用场景**: 订阅博客、新闻源、播客等 RSS feed。
+
+## 选择指南
+
+| 场景 | 推荐工具 |
+|-----|---------|
+| 通用网页 | Jina Reader (`curl r.jina.ai`) |
+| 需要图片/格式控制 | web-reader MCP |
+| RSS 订阅 | feedparser |
+
+
+hook: PostToolUse
+hook: PostToolUse
+exec
+/bin/zsh -lc 'rtk read /Users/vimoxshah/.agents/skills/agent-reach/references/dev.md' in /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+ succeeded in 0ms:
+# 开发工具
+
+GitHub CLI 
+
+## GitHub (gh CLI)
+
+GitHub 官方命令行工具，用于仓库、Issue、PR、Actions、Release 以及 API 访问。
+
+```bash
+# 认证
+gh auth login
+gh auth status
+
+# 搜索
+gh search repos "query" --sort stars --limit 10
+gh search code "query" --language python
+
+# 仓库
+gh repo view owner/repo
+gh repo clone owner/repo
+gh repo create my-repo --private
+gh repo fork owner/repo
+gh repo fork owner/repo --clone
+gh repo sync owner/repo
+
+# Issues
+gh issue list -R owner/repo --state open
+gh issue view 123 -R owner/repo
+gh issue create -R owner/repo --title "Title" --body "Body"
+
+# Pull Requests
+gh pr list -R owner/repo --state open
+gh pr view 123 -R owner/repo
+gh pr create -R owner/repo --title "Title" --body "Body"
+gh pr checks 123 --repo owner/repo
+
+# Actions / CI
+gh run list --repo owner/repo --limit 10
+gh run view <run-id> --repo owner/repo
+gh run view <run-id> --repo owner/repo --log-failed
+gh workflow list --repo owner/repo
+
+# Releases
+gh release list -R owner/repo
+gh release create v1.0.0
+
+# API
+gh api /user
+gh api repos/owner/repo
+
+# JSON 输出
+gh issue list --repo owner/repo --json number,title --jq '.[] | "\(.number): \(.title)"'
+```
+
+
+## 选择指南
+
+| 工具 | 来源 | 用途 |
+|-----|------|------|
+| gh CLI | agent-reach | Git 操作 |
+| zread | my-mcp-tools | 读仓库内容 |
+| context7 | my-mcp-tools | 查技术文档 |
+
+
+hook: PostToolUse
+hook: PostToolUse
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Completed
+hook: PreToolUse Completed
+hook: PreToolUse Completed
+hook: PreToolUse Completed
+exec
+/bin/zsh -lc "rtk proxy mcporter call 'exa.web_search_exa(query: \"AgentCalendar GitHub Claude scheduling calendar agentcalendar\", numResults: 8)'" in /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+ exited 1 in 0ms:
+rtk: Failed to execute command: mcporter: No such file or directory (os error 2)
+
+hook: PostToolUse
+hook: PostToolUse
+exec
+/bin/zsh -lc "rtk proxy mcporter call 'exa.web_search_exa(query: \"site:openai.com OR site:developers.openai.com Codex app automations scheduled tasks recurring 2026\", numResults: 8)'" in /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+ exited 1 in 0ms:
+rtk: Failed to execute command: mcporter: No such file or directory (os error 2)
+
+hook: PostToolUse
+hook: PostToolUse
+exec
+/bin/zsh -lc "rtk proxy mcporter call 'exa.web_search_exa(query: \"site:docs.anthropic.com Claude Code scheduled tasks cron recurring jobs agent SDK 2026\", numResults: 8)'" in /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+ exited 1 in 0ms:
+rtk: Failed to execute command: mcporter: No such file or directory (os error 2)
+
+hook: PostToolUse
+hook: PostToolUse
+exec
+/bin/zsh -lc "rtk proxy mcporter call 'exa.web_search_exa(query: \"site:platform.claude.com/docs agent SDK TypeScript resume session canUseTool structured output usage authentication Claude Code subscription OAuth 2026\", numResults: 8)'" in /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+ exited 1 in 0ms:
+rtk: Failed to execute command: mcporter: No such file or directory (os error 2)
+
+hook: PostToolUse
+hook: PostToolUse
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+codex
+The Exa command advertised by the skill is unavailable in this environment (`mcporter` is missing). Per the skill’s fallback rules, I’m checking the installed routes before retrying; I won’t treat failed live lookup as current evidence.
+hook: PreToolUse
+hook: PreToolUse Completed
+exec
+/bin/zsh -lc 'rtk agent-reach doctor --json' in /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+hook: PostToolUse
+hook: PostToolUse
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+ succeeded in 4524ms:
+{
+  "github": {
+    "status": "warn",
+    "name": "GitHub 仓库和代码",
+    "message": "gh CLI 已安装但未认证。运行 gh auth login 可解锁完整功能",
+    "tier": 0,
+    "backends": [
+      "gh CLI"
+    ],
+    "active_backend": "gh CLI"
+  },
+  "twitter": {
+    "status": "warn",
+    "name": "Twitter/X 推文",
+    "message": "Twitter CLI 未安装。安装方式：\n  pipx install twitter-cli\n或：\n  uv tool install twitter-cli",
+    "tier": 1,
+    "backends": [
+      "twitter-cli",
+      "OpenCLI",
+      "bird CLI (legacy)"
+    ],
+    "active_backend": null
+  },
+  "youtube": {
+    "status": "ok",
+    "name": "YouTube 视频和字幕",
+    "message": "可提取视频信息和字幕",
+    "tier": 0,
+    "backends": [
+      "yt-dlp"
+    ],
+    "active_backend": "yt-dlp"
+  },
+  "reddit": {
+    "status": "off",
+    "name": "Reddit 帖子和评论",
+    "message": "未安装任何 Reddit 后端。注意：Reddit 没有零配置路径（匿名 .json 已被封，官方 API 需人工审批），必须用登录态。推荐：\n  桌面：agent-reach install --channels opencli\n       （复用 Chrome 登录态，登录过 reddit.com 即可用）\n  服务器/存量：pipx install 'git+https://github.com/public-clis/rdt-cli.git@5e4fb3720d5c174e976cd425ccc3b879d52cac66'\n       然后 `rdt login` 或手动写入 Cookie（见 doctor 提示）\n中国大陆访问 Reddit 需要代理",
+    "tier": 1,
+    "backends": [
+      "OpenCLI",
+      "rdt-cli"
+    ],
+    "active_backend": null
+  },
+  "bilibili": {
+    "status": "off",
+    "name": "B站视频、字幕和搜索",
+    "message": "没有可用的 B站后端（搜索 API 也不可达，可能是网络问题）。推荐：\n  pipx install bilibili-cli（搜索/热门/视频详情，无需登录）\n  或桌面装 OpenCLI（额外解锁字幕）：agent-reach install --channels opencli",
+    "tier": 1,
+    "backends": [
+      "bili-cli",
+      "OpenCLI",
+      "B站搜索 API"
+    ],
+    "active_backend": null
+  },
+  "xiaohongshu": {
+    "status": "off",
+    "name": "小红书笔记",
+    "message": "未安装任何小红书后端。推荐：\n  桌面：agent-reach install --channels opencli\n       （复用 Chrome 登录态，刷过小红书即零配置可用）\n  服务器：xiaohongshu-mcp（自带无头浏览器+扫码登录）：https://github.com/xpzouying/xiaohongshu-mcp",
+    "tier": 1,
+    "backends": [
+      "OpenCLI",
+      "xiaohongshu-mcp",
+      "xhs-cli (xiaohongshu-cli)"
+    ],
+    "active_backend": null
+  },
+  "linkedin": {
+    "status": "off",
+    "name": "LinkedIn 职业社交",
+    "message": "基本内容可通过 Jina Reader 读取。完整功能需要：\n  pip install linkedin-scraper-mcp\n  mcporter config add linkedin http://localhost:3000/mcp\n  详见 https://github.com/stickerdaniel/linkedin-mcp-server",
+    "tier": 2,
+    "backends": [
+      "linkedin-scraper-mcp",
+      "Jina Reader"
+    ],
+    "active_backend": null
+  },
+  "xiaoyuzhou": {
+    "status": "off",
+    "name": "小宇宙播客转文字",
+    "message": "转录脚本未安装。运行：\n  agent-reach install --env=auto\n  或手动复制 transcribe.sh 到 ~/.agent-reach/tools/xiaoyuzhou/",
+    "tier": 1,
+    "backends": [
+      "groq-whisper",
+      "ffmpeg"
+    ],
+    "active_backend": null
+  },
+  "v2ex": {
+    "status": "warn",
+    "name": "V2EX 节点、主题与回复",
+    "message": "V2EX API 连接失败（可能需要代理）：<urlopen error [Errno 8] nodename nor servname provided, or not known>",
+    "tier": 0,
+    "backends": [
+      "V2EX API (public)"
+    ],
+    "active_backend": null
+  },
+  "xueqiu": {
+    "status": "warn",
+    "name": "雪球股票行情与社区动态",
+    "message": "Xueqiu API 连接失败：<urlopen error [Errno 8] nodename nor servname provided, or not known>。请先登录雪球后运行：agent-reach configure --from-browser chrome",
+    "tier": 1,
+    "backends": [
+      "Xueqiu API (需要登录 Cookie)"
+    ],
+    "active_backend": null
+  },
+  "rss": {
+    "status": "ok",
+    "name": "RSS/Atom 订阅源",
+    "message": "可读取 RSS/Atom 源",
+    "tier": 0,
+    "backends": [
+      "feedparser"
+    ],
+    "active_backend": "feedparser"
+  },
+  "exa_search": {
+    "status": "off",
+    "name": "全网语义搜索",
+    "message": "需要 mcporter + Exa MCP。安装：\n  npm install -g mcporter\n  mcporter config add exa https://mcp.exa.ai/mcp",
+    "tier": 0,
+    "backends": [
+      "Exa via mcporter"
+    ],
+    "active_backend": null
+  },
+  "web": {
+    "status": "ok",
+    "name": "任意网页",
+    "message": "通过 Jina Reader 读取任意网页（curl https://r.jina.ai/URL）",
+    "tier": 0,
+    "backends": [
+      "Jina Reader"
+    ],
+    "active_backend": "Jina Reader"
+  }
+}
+
+codex
+Live web access is available through agent-reach’s Jina Reader backend, so I’m continuing there (official pages and repository pages only where possible).
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Completed
+hook: PreToolUse Completed
+hook: PreToolUse Completed
+hook: PreToolUse Completed
+exec
+/bin/zsh -lc 'rtk proxy curl -s "https://r.jina.ai/https://www.google.com/search?q=site%3Aplatform.claude.com%2Fdocs%2Fen%2Fagent-sdk+session+resume+canUseTool+structured+output+usage"' in /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+exec
+/bin/zsh -lc 'rtk proxy curl -s "https://r.jina.ai/https://www.google.com/search?q=site%3Adocs.anthropic.com+Claude+Code+scheduled+tasks+cron"' in /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+exec
+/bin/zsh -lc 'rtk proxy curl -s "https://r.jina.ai/https://www.google.com/search?q=site%3Aopenai.com%2Findex+Codex+automations+scheduled+tasks"' in /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+exec
+/bin/zsh -lc 'rtk proxy curl -s "https://r.jina.ai/https://www.google.com/search?q=AgentCalendar+GitHub+Claude+calendar"' in /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+hook: PostToolUse
+hook: PostToolUse
+hook: PostToolUse
+hook: PostToolUse
+hook: PostToolUse
+hook: PostToolUse
+hook: PostToolUse
+hook: PostToolUse
+ exited 6 in 253ms:
+ exited 6 in 253ms:
+ exited 6 in 255ms:
+ exited 6 in 254ms:
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+codex
+For the OpenAI-equivalent check specifically, I’m also using the official OpenAI docs skill so that claim is sourced from current first-party material, not inferred from stale product memory.
+hook: PreToolUse
+hook: PreToolUse Completed
+exec
+/bin/zsh -lc 'rtk read /Users/vimoxshah/.codex/skills/.system/openai-docs/SKILL.md' in /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+ succeeded in 0ms:
+---
+name: "openai-docs"
+description: "Use when the user asks how to build with OpenAI products or APIs, asks about Codex itself or choosing Codex surfaces, needs up-to-date official documentation with citations, help choosing the latest model for a use case, or model upgrade and prompt-upgrade guidance; use OpenAI docs MCP tools for non-Codex docs questions, use the Codex manual helper first for broad Codex self-knowledge, and restrict fallback browsing to official OpenAI domains."
+---
+
+
+# OpenAI Docs
+
+Provide authoritative, current guidance from OpenAI developer docs using the developers.openai.com MCP server. "Docs MCP" means `mcp__openaiDeveloperDocs__search_openai_docs` and `mcp__openaiDeveloperDocs__fetch_openai_doc`; for API reference, schema, parameter, or required-field questions, also use `mcp__openaiDeveloperDocs__get_openapi_spec` when available. Official-domain web search is fallback after those tools are unavailable or unhelpful. Broad Codex questions use the manual helper before Docs MCP. This skill also owns model selection, API model migration, and prompt-upgrade guidance.
+
+## API Key Setup
+
+For requests to build, run, configure, debug, or implement an API-backed app, script, CLI, generator, or tool, use `openai-platform-api-key` first when available. After that credential gate is resolved, return here for current docs as needed.
+
+Use this skill directly for docs-only questions, citations, model/API guidance, conceptual explanations, and examples that do not require building or running an API-backed artifact.
+
+## Workflow Configuration
+
+### Source Priority
+
+- For Codex self-knowledge, use the Codex source route below; it owns when to use the manual helper, Docs MCP, or bounded uncertainty.
+- For non-Codex OpenAI docs questions, use `mcp__openaiDeveloperDocs__search_openai_docs` to find the most relevant doc pages.
+- For non-Codex OpenAI docs questions, fetch the relevant page with `mcp__openaiDeveloperDocs__fetch_openai_doc` before answering. If search is noisy, run a narrower Docs MCP search; when any plausible official OpenAI docs URL is known or found, try fetching that URL through Docs MCP before relying on web-search content.
+- For API reference, schema, parameter, or required-field questions, use `mcp__openaiDeveloperDocs__get_openapi_spec` when available to verify the API shape alongside the relevant guide or reference page.
+- Use `mcp__openaiDeveloperDocs__list_openai_docs` only when you need to browse or discover non-Codex pages without a clear query.
+- For model-selection, "latest model", or default-model questions, fetch `https://developers.openai.com/api/docs/guides/latest-model.md` first. If that is unavailable, load `references/latest-model.md`.
+- For model upgrades or prompt upgrades, run `node scripts/resolve-latest-model-info.js` only when the target is latest/current/default or otherwise unspecified; otherwise preserve the explicitly requested target.
+- Preserve explicit target requests: if the user names a target model like "migrate to GPT-5.4", keep that requested target even if `latest-model.md` names a newer model. Mention newer guidance only as optional.
+- If current remote guidance is needed, fetch both the returned migration and prompting guide URLs directly. If direct fetch fails, use MCP/search fallback; if that also fails, use bundled fallback references and disclose the fallback.
+
+## OpenAI product snapshots
+
+1. Apps SDK: Build ChatGPT apps by providing a web component UI and an MCP server that exposes your app's tools to ChatGPT.
+2. Responses API: A unified endpoint designed for stateful, multimodal, tool-using interactions in agentic workflows.
+3. Chat Completions API: Generate a model response from a list of messages comprising a conversation.
+4. Codex: OpenAI's coding agent for software development that can write, understand, review, and debug code.
+5. gpt-oss: Open-weight OpenAI reasoning models (gpt-oss-120b and gpt-oss-20b) released under the Apache 2.0 license.
+6. Realtime API: Build low-latency, multimodal experiences including natural speech-to-speech conversations.
+7. Agents SDK: A toolkit for building agentic apps where a model can use tools and context, hand off to other agents, stream partial results, and keep a full trace.
+
+## Codex self-knowledge
+
+Use this path for questions about Codex itself: configuring, extending, operating, troubleshooting, local state, product surfaces, or where Codex behavior should live. A codebase merely mentioning a plugin, skill, hook, MCP server, browser, or automation is not enough. For generic software tasks, answer the software task directly; if asked whether Codex self-knowledge applies, answer that meta question briefly and continue the requested artifact.
+
+### Source Route
+
+The Codex manual is the first source for broad Codex synthesis. Treat the manual and Docs MCP as different lanes, not interchangeable official-doc sources. For published-user Codex product answers, the source route is complete: the manual, Docs MCP when this route calls for it, official OpenAI web fallback, and callable capabilities surfaced in the current session when the question is about that capability. Knowledge bases outside developers.openai.com are outside this route for public product answers.
+
+For broad Codex behavior, setup, customization, skills, plugins, MCP, hooks, `AGENTS.md`, automations, surfaces, local state, or system-map questions:
+
+1. Reuse a same-thread manual and outline path when it is still fresh.
+2. Otherwise run the skill-local helper first in normal writable sessions. Skip it without trying only when the session is explicitly read-only, shell execution is unavailable, or visible policy shows no allowed temp cache.
+3. By default, the helper chooses the first usable temp cache dir in this order: `$TMPDIR/openai-docs-cache`, `%TEMP%\openai-docs-cache`, `%TMP%\openai-docs-cache`, `/private/tmp/openai-docs-cache`, then `/tmp/openai-docs-cache`. Workspace-only write access is not enough for this temp cache.
+4. Run the helper directly unless you need to override the cache dir. The helper falls back to `curl` when native `fetch` is unavailable or when proxy env vars are present, so no shell-specific proxy prefix is required. Resolve `<skill-dir>` to this skill's actual directory; in copied local eval workdirs this is usually `.codex/skills/openai-docs`:
+
+```bash
+node <skill-dir>/scripts/fetch-codex-manual.mjs
+```
+
+If you need to override the cache dir, pass `--cache-dir <cache-dir>`. On Windows, the helper checks `%TEMP%` and `%TMP%` automatically; in PowerShell, `$env:TEMP\\openai-docs-cache` is a typical explicit override.
+
+Treat helper availability as established by explicit read-only/no-shell policy or an actual command result. A guessed sandbox or guessed helper failure is not enough to switch to Docs MCP or web lookup; after an actual helper command failure, continue to the narrowest official next source below.
+
+The helper verifies freshness, writes `codex-manual.md`, and emits `codex-manual.outline.md`. The outline maps source pages and headings to line ranges; use it to choose the relevant manual section, then read or search targeted manual sections for Codex product facts. Use the skill directory to locate and run the helper; after the helper succeeds, use the returned manual and outline paths as the search scope for Codex product facts and term coverage checks.
+
+Reuse the same-thread manual and outline paths for follow-up Codex questions. Refresh first when the manual was fetched more than about a day ago, the path is unusable, the path came from another thread or uncertain provenance, or likely-current information is missing and staleness is plausible.
+
+For questions about whether the manual is current enough to rely on now, run the helper when temp caching is allowed and base the answer on its returned status, manual path, and outline path.
+
+If the manual resolves a Codex claim, answer from it and stop expanding sources for that claim; continue the user's broader task if the docs lookup was only one dependency. Manual source pages and known anchors are enough citation support for manual-covered material.
+
+If the helper is skipped because the session is read-only, has no shell execution, or has no allowed temp cache, the next source is Docs MCP: call `mcp__openaiDeveloperDocs__search_openai_docs`, then `mcp__openaiDeveloperDocs__fetch_openai_doc` for a relevant hit before any web fallback.
+
+If a user names a Codex term or mode that a fresh manual does not use, search the manual for obvious adjacent concepts, then answer that the exact term is not documented and use the closest documented terminology. If the prompt asks how that term maps to Codex behavior, resolve the mapping from adjacent manual sections. If the exact term remains material or likely current after that manual pass, use one narrow Docs MCP search/fetch before bounded uncertainty; otherwise, the source lookup for that terminology or mapping claim is complete.
+
+Use the narrowest official next source only when the manual is unavailable, the helper fails, temp caching is not allowed, another material claim is missing or likely stale, or the user explicitly needs a page-specific citation. Prefer one specific Docs MCP search and, if it returns a clearly relevant page, one fetch; for unresolved Codex capability names, acronyms, scheduling terms, or exact error text, this Docs MCP step is the next source before web search. After the manual plus any permitted Docs MCP gap-fill, resolve remaining gaps as bounded uncertainty. Use official-domain web fallback only after that Docs MCP path is unavailable or unhelpful. If the claim is still not established, stop with bounded uncertainty. If official docs/manual conflict with a callable capability already surfaced in the current session, state the conflict and prefer verified current-session behavior for that environment.
+
+For undocumented or private-looking model slugs, product mode labels, entitlement labels, account access paths, or rollout names, answer from current public docs and bounded uncertainty. Those labels are not a reason to leave the public source route.
+
+For support-style diagnostics, prefer a layer-by-layer answer from the manual over provider-specific web lookups: installed/enabled plugin, bundled app or connector authorization, MCP setup, workspace/admin policy, restart or new-thread expectations, then support or feedback if still unresolved.
+
+If the source route still does not establish a claim, return bounded uncertainty or route to support, an admin, or product feedback instead of widening the investigation.
+
+For unresolved product terminology, answer from the manual plus the allowed official next source. If those sources do not establish the term, answer with bounded uncertainty from those sources.
+
+### Surface Map
+
+When Codex nouns or durable-instruction surfaces overlap, recommend the smallest surface that matches the scope:
+
+- Prompt or thread context -> one-off task constraints.
+- `AGENTS.md` -> durable repo conventions, commands, verification steps, and review expectations; closer nested files apply under their subtree.
+- Project `.codex/config.toml` -> trusted-repo Codex settings such as sandbox, MCP, hooks, model, or reasoning defaults.
+- Global config or global guidance -> personal defaults across repos.
+- Skill -> reusable task workflow with references or scripts.
+- Plugin -> installable bundle with skills plus commands, tools, MCP config, hooks, assets, apps, or marketplace metadata.
+- MCP server or app connector -> live external data/actions or authorized private app/workspace data. Use connectors for private Google Docs, Calendar, Slack, GitHub, Notion, and similar data instead of web search or model memory.
+- Automation -> scheduled checks, reminders, monitors, or follow-up work; use a thread heartbeat when continuity in an existing thread matters.
+- Hook -> lifecycle enforcement around tool calls, commands, or file edits.
+
+Split mixed-scope requests instead of forcing one answer. Example: "always do X, but only for this PR" defaults to prompt/thread context for the current run; use `AGENTS.md` or project config only if it should persist, hooks only for mechanical enforcement, and automations only for scheduled or follow-up work.
+
+Use this quick product map when needed: CLI is terminal-first local repo work; IDE extension is editor-attached coding; Codex app is desktop planning, review, and interactive work; cloud/web is hosted parallel/offloaded work; Browser Use/in-app browser is Codex-controlled web testing; Chrome extension uses the user's Chrome profile; Computer Use controls desktop apps and OS UI. Keep `config.toml` defaults, `requirements.toml` constraints, and managed/admin policy separate.
+
+### Boundaries And Output
+
+- API key auth does not imply ChatGPT, cloud task, or connector access. For plugin/app/auth failures, check bundle availability, plugin installed/enabled state, connector/app authorization, MCP setup, restart/refresh expectations, workspace policy, and per-surface availability before answering.
+- Sandbox or network denials need scoped escalation with a clear justification. Destructive commands, writes outside the workspace, or broad access changes require explicit approval.
+- Memory can provide user preference or context, but explicit prompt instructions win and memory is not a source for current external facts.
+- For affirmative surface-selection answers, use this shape: recommendation, why, what to avoid, and the manual/source evidence used.
+- When page-specific Codex citations are actually needed, these anchors often fit: `concepts/customization#agents-guidance` for `AGENTS.md`, `concepts/customization#skills` for skills, `plugins/build#plugin-structure` for plugins, `concepts/customization#mcp` for MCP, `config-advanced#hooks` for hooks, `app/automations#thread-automations` for thread automations, and `config-reference#configtoml` for config.
+
+## If MCP server is missing
+
+If MCP tools fail or no OpenAI docs resources are available:
+
+1. Run the install command yourself: `codex mcp add openaiDeveloperDocs --url https://developers.openai.com/mcp`
+2. If it fails due to permissions/sandboxing, immediately retry the same command with escalated permissions and include a 1-sentence justification for approval.
+3. Ask the user to run the install command only if the escalated attempt fails.
+4. Ask the user to restart Codex.
+5. Re-run the doc search/fetch after restart.
+
+## Workflow
+
+1. Clarify whether the request is general docs lookup, model selection, a model-string upgrade, prompt-upgrade guidance, or broader API/provider migration.
+2. For Codex self-knowledge requests, follow the Codex self-knowledge source procedure above.
+3. For model-selection or upgrade requests, prefer current remote docs over bundled references when the user asks for latest/current/default guidance.
+   - Fetch `https://developers.openai.com/api/docs/guides/latest-model.md`.
+   - Find the latest model ID and explicit migration or prompt-guidance links.
+   - Prefer explicit links from the latest-model page over derived URLs.
+   - For explicit named-model requests, preserve the requested model target. Mention newer remote guidance only as optional.
+   - For dynamic latest/current/default upgrades, run `node scripts/resolve-latest-model-info.js`, then fetch both returned guide URLs directly when possible.
+   - If direct guide fetch fails, use the developer-docs MCP tools or official OpenAI-domain search to find the same guide content.
+   - If remote docs are unavailable, use bundled fallback references and say that fallback guidance was used.
+4. For model upgrades, keep changes narrow: update active OpenAI API model defaults and directly related prompts only when safe.
+5. Leave historical docs, examples, eval baselines, fixtures, provider comparisons, provider registries, pricing tables, alias defaults, low-cost fallback paths, and ambiguous older model usage unchanged unless the user explicitly asks to upgrade them.
+6. Keep SDK, tooling, IDE, plugin, shell, auth, and provider-environment migrations out of a model-and-prompt upgrade unless the user explicitly asks for them.
+7. If an upgrade needs API-surface changes, schema rewiring, tool-handler changes, or implementation work beyond a literal model-string replacement and prompt edits, report it as blocked or confirmation-needed.
+8. For general docs lookup, start with a compact, title-like search query of 2-6 essential terms. Do not turn the full user question into a keyword list. Fetch the best page and exact section needed, and answer with concise citations.
+
+## Reference map
+
+Read only what you need:
+
+- `https://developers.openai.com/api/docs/guides/latest-model.md` -> current model-selection and "best/latest/current model" questions.
+- `scripts/fetch-codex-manual.mjs` -> current Codex manual fetch, verification, local temp cache, and outline generation.
+- `https://developers.openai.com/codex/codex-manual.md` -> current Codex self-knowledge synthesis, including setup, customization, skills, plugins, MCP, hooks, `AGENTS.md`, automations, and surface behavior; normally access it through the helper path and targeted file reads when temp caching is available.
+- `references/latest-model.md` -> bundled fallback for model-selection and "best/latest/current model" questions.
+- `references/upgrade-guide.md` -> bundled fallback for model upgrade and upgrade-planning requests.
+- `references/prompting-guide.md` -> bundled fallback for prompt rewrites and prompt-behavior upgrades.
+
+## Quality rules
+
+- Treat OpenAI docs as the source of truth; avoid speculation.
+- For Codex self-knowledge, follow the source route above instead of relying on remembered behavior.
+- Keep migration changes narrow and behavior-preserving.
+- Prefer prompt-only upgrades when possible.
+- Avoid inventing pricing, availability, parameters, API changes, or breaking changes.
+- Keep quotes short and within policy limits; prefer paraphrase with citations.
+- If multiple pages differ, call out the difference and cite both.
+- If official docs and verified callable current-session behavior disagree, state the conflict before making broad claims or edits.
+- If docs do not cover the user’s need, say so and offer next steps.
+
+## Tooling notes
+
+- Use MCP doc tools before web search for OpenAI-related markdown docs. The Codex manual flow is the exception: follow the Codex self-knowledge source procedure for broad Codex synthesis.
+- If the MCP server is installed but returns no meaningful results, then use web search as a fallback.
+- When falling back to web search, restrict to official OpenAI domains (developers.openai.com, platform.openai.com) and cite sources.
+
+
+hook: PostToolUse
+hook: PostToolUse
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PreToolUse
+hook: PreToolUse Completed
+exec
+/bin/zsh -lc 'rtk node /Users/vimoxshah/.codex/skills/.system/openai-docs/scripts/fetch-codex-manual.mjs' in /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+ exited 1 in 0ms:
+Error: Manual cache directory is unavailable; pass --cache-dir to override or use OpenAI Docs MCP fallback.
+
+Details:
+ManualFetchError: Manual cache directory is unavailable; pass --cache-dir to override or use OpenAI Docs MCP fallback.
+    at fetchCodexManual (file:///Users/vimoxshah/.codex/skills/.system/openai-docs/scripts/fetch-codex-manual.mjs:415:11)
+    at async main (file:///Users/vimoxshah/.codex/skills/.system/openai-docs/scripts/fetch-codex-manual.mjs:534:35)
+
+hook: PostToolUse
+hook: PostToolUse
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+hook: PreToolUse
+hook: PreToolUse Completed
+hook: PostToolUse
+hook: PostToolUse
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+codex
+The official OpenAI docs cache/MCP path is blocked by this read-only session, so I’m bounding that part: I’ll use any already-installed official manual snapshot if present; otherwise I’ll mark the OpenAI roadmap statement as current-session knowledge rather than pretend it was live-verified.
+hook: PreToolUse
+hook: PreToolUse Completed
+exec
+/bin/zsh -lc 'rtk find codex-manual /Users/vimoxshah/.codex /private/tmp /tmp' in /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+hook: PostToolUse
+hook: PostToolUse
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+ succeeded in 108ms:
+0 for 'codex-manual'
+
+codex
+Agent-reach’s network backend is blocked here, so I’m switching the live verification step to the in-app browser. This is still read-only research and stays within the requested audit.
+hook: PreToolUse
+hook: PreToolUse Completed
+exec
+/bin/zsh -lc 'rtk read /Users/vimoxshah/.codex/plugins/cache/openai-bundled/browser/26.707.72221/skills/control-in-app-browser/SKILL.md' in /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+ succeeded in 0ms:
+---
+name: control-in-app-browser
+description: "Control the in-app Browser for opening, navigating, inspecting visible or interactive page state, clicking, typing, screenshots, and local web testing. It can have existing signed-in sessions. For semantic operations on linked resources, prefer a purpose-built connector, API, or CLI when available."
+---
+
+# Browser
+## Stop: choose the right surface before any browser action
+Explicit browser intent wins: if the user names the in-app browser or Chrome, or asks to open, show, or navigate to a page; inspect its visual or interactive state; or interact with its UI, continue with Browser and do not substitute a connector.
+
+Otherwise, a URL or open browser tab is context, not browser intent. For any request to check, read, review, summarize, search, or edit a linked resource, your first task action MUST be tool discovery for a purpose-built connector, API, or CLI, including deferred tools. Do not initialize the browser runtime or call `agent.browsers` until that search finds no applicable tool. If an applicable non-browser tool exists, use it and stop without continuing into browser setup; otherwise, continue with Browser.
+
+Use this skill for browser automation tasks such as inspecting pages, navigating, testing local apps, clicking, typing, taking screenshots, and reading visible page state.
+
+If this plugin is listed as available in the session, treat that as mandatory reading before browser work. Open and follow this skill before saying that Browser is unavailable and before falling back to standalone Playwright or Computer Use.
+
+Do not skip this skill just because Computer Use MCP tool calls are directly visible or appear easier to invoke. The presence of Computer Use tools is not evidence that Computer Use is the preferred browser surface.
+
+## Setup Documentation
+Use `await agent.documentation.get("<name>")` when one of these setup topics applies:
+- `bootstrap-troubleshooting`: read when browser setup succeeds but discovery or selection fails
+- `chrome-troubleshooting`: read when Chrome extension setup, installation, or communication fails
+
+## Bootstrap
+These setup details are internal. User-facing progress updates should be less technical in nature. Never mention `Node REPL`, `node_repl`, `REPL`, JavaScript sessions, module exports, reading documentation, or loading instructions unless a user is asking for that exact information. If setup or recovery is needed, describe it naturally as connecting to the browser or retrying the browser connection.
+
+The `browser-client` module is the core entry point for browser use, and is available under `scripts/browser-client.mjs` in this plugin's root directory. ALWAYS import it using an absolute path. IMPORTANT: If this path cannot be found, stop and report that this plugin is missing `scripts/browser-client.mjs`. NEVER use the built in `browser-client` library.
+
+Run browser setup code through the Node REPL `js` tool. In this environment the callable tool id typically appears as `mcp__node_repl__js`. If it is not already available, use tool discovery for `node_repl js` without setting a result limit. You need the `js` execution tool: `js_reset` only clears state, and `js_add_node_module_dir` only changes package resolution. Do not call either helper while trying to expose `js`. If `js` is still not available, search again for `node_repl js` with `limit: 10`.
+
+Initialize the runtime once per fresh Node session. If `agent.browsers` already exists, reuse it; do not import or initialize another browser runtime.
+
+```js
+if (globalThis.agent?.browsers == null) {
+  const { setupBrowserRuntime } = await import("<plugin root>/scripts/browser-client.mjs");
+  await setupBrowserRuntime({ globals: globalThis });
+}
+```
+
+Once a browser connection is established, reuse its existing browser binding across later turns and do not reread this skill. Once you have read a browser's complete documentation, do not read it again unless you select a different browser.
+
+A tab binding is separate from its browser binding. If a later turn reports that a tab is missing, stale, closed, or not part of the current browser session, discard that tab binding and obtain or create a fresh tab from the existing browser binding. An empty `browser.tabs.list()` or `browser.user.openTabs()` result is normal after tab cleanup and does not invalidate the browser binding. Never call `agent.browsers.get*` to recover a tab; only an explicit browser-disconnected error invalidates the binding.
+
+## Browser selection
+The scenarios below are for the initial browser selection only. Before calling any `agent.browsers.get*` method, reuse an existing `globalThis.browser`, `globalThis.iab`, or `globalThis.chrome` binding that already serves the task. A new user turn does not invalidate a browser binding or require another selection or documentation call.
+
+Select the initial browser with exactly one of these scenarios, in the order
+shown. An explicit request for the in-app browser or Chrome always wins over URL
+selection. Never call `getForUrl()` when the user names a browser.
+
+App-provided in-app-browser context is ambient UI state, not a user instruction to select or switch browsers. Only the text of the user's request can explicitly choose a browser.
+
+Use Chrome when the user explicitly requests it or the task requires an existing Chrome tab, logged-in session, profile, or extension. Do not switch to Chrome solely because a preferred connector, API, or CLI has missing or expired authentication; ask the user to fix authentication or explicitly approve Chrome as a fallback.
+
+Do not inspect browser cookies, local storage, profiles, passwords, or session stores. Browser discovery must remain read-only.
+
+When authentication blocks requested browser navigation, do not replace it with web search, a search engine, another site, or another source merely to bypass sign-in.
+
+### The user explicitly requests a browser
+The in-app browser is available only when the Browser skill is listed for the session. If the user explicitly requests the in-app browser and that skill is available, use a distinct persistent binding and immediately read its complete documentation:
+
+```js
+if (globalThis.iab == null) {
+  globalThis.iab = await agent.browsers.get("iab");
+  nodeRepl.write(await iab.documentation());
+}
+```
+
+If the user explicitly requests the in-app browser but the Browser skill is not available, report that the in-app browser is unavailable instead of substituting another browser.
+
+Chrome is available only when the Chrome skill is listed for the session. If the user explicitly requests Chrome and that skill is available, use a separate persistent binding and immediately read its complete documentation:
+
+```js
+if (globalThis.chrome == null) {
+  globalThis.chrome = await agent.browsers.get("extension");
+  nodeRepl.write(await chrome.documentation());
+}
+```
+
+If the user explicitly requests Chrome but the Chrome skill is not available, report that Chrome is unavailable instead of substituting another browser.
+
+An explicit browser choice remains in force for the task. If authentication blocks the task in an explicitly selected browser, your next response must explicitly ask the user to sign in in that browser and tell you when it is ready, unless that browser's documentation provides a supported authentication flow to try first. Merely reporting that sign-in is required is not sufficient. Do not switch to another browser unless the user asks or approves the switch.
+
+### The task requires browser interaction, the user does not specify a browser, and the task has a target URL
+When the user supplies a URL or the intended URL can be reasonably inferred from the request, replace the example below with that URL and let browser-client choose the browser best suited to it:
+
+```js
+if (globalThis.browser == null) {
+  globalThis.browser = await agent.browsers.getForUrl("https://example.com/");
+  nodeRepl.write(await browser.documentation());
+}
+```
+
+This runtime-selected browser is not a user constraint. If the page requires authentication and another available browser may have the needed session, try that browser before asking the user to sign in.
+
+### The user specifies neither a browser nor a target URL
+Use the runtime default, which prefers the in-app browser when it is available and otherwise uses Chrome. Do not list browsers first:
+
+```js
+if (globalThis.browser == null) {
+  globalThis.browser = await agent.browsers.getDefault();
+  nodeRepl.write(await browser.documentation());
+}
+```
+
+## After setup
+If setup succeeds but browser discovery or selection fails, read `await agent.documentation.get("bootstrap-troubleshooting")` before resetting the JavaScript session or trying another browser-control mechanism.
+
+If the failure is specific to Chrome extension setup, installation, or communication, read `await agent.documentation.get("chrome-troubleshooting")` before retrying or taking another recovery action.
+
+When the user did not explicitly choose a browser, you may select another browser later without resetting the Node session. Preserve existing `iab`, `chrome`, and `browser` bindings when they are still useful. Existing tabs remain bound to the browser that created them. After selecting a different browser, obtain a tab from that browser before continuing and read its complete documentation.
+
+The ability to interact directly with browsers is exposed through the `browser-client` runtime via the `agent.browsers.*` API. Before trying to interact with a selected browser for the first time, you MUST emit and read the complete documentation returned by its `documentation()` call in one go. For the initial documentation read, run the exact direct `nodeRepl.write(await <browser>.documentation());` call shown in the applicable scenario above. Do not assign the documentation to a variable, inspect its length, slice it, truncate it, summarize it, or emit only an excerpt. Do not proactively split the documentation into pages or chunks. Only if the tool output itself explicitly reports that it was truncated may you emit and read smaller chunks until you have read the documentation in its entirety.
+
+Only the Node REPL `js` tool (`mcp__node_repl__js`) can be used to control the selected browser. Do not use external MCP browser-control tools, separate browser automation servers, or other browser skills for this surface. References to Playwright mean the in-skill `tab.playwright` API after browser-client setup.
+
+<!-- BROWSER_SKILL_EOF: This is the complete Browser skill. Do not request additional lines. -->
+
+
+hook: PostToolUse
+hook: PostToolUse
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+mcp: node_repl/js started
+mcp: node_repl/js (failed)
+mcp: node_repl/js started
+mcp: node_repl/js (completed)
+hook: PostToolUse
+hook: PostToolUse
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+mcp: node_repl/js started
+mcp: node_repl/js (completed)
+hook: PostToolUse
+hook: PostToolUse
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+codex
+No browser surface is attached either. I can still verify public GitHub data through the installed CLI; official web claims that cannot be fetched will be labeled unverified rather than stated as fact.
+hook: PreToolUse
+hook: PreToolUse Completed
+exec
+/bin/zsh -lc 'rtk gh search repos agentcalendar --limit 10' in /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+hook: PostToolUse
+hook: PostToolUse
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+ exited 1 in 173ms:
+error connecting to api.github.com
+check your internet connection or https://githubstatus.com
+
+codex
+I’m now reconciling the written architecture against its own schema and scenario contracts. Several failures are internal and deterministic—no SDK lookup is needed to prove them—including duplicate recurrence claims, impossible “DAG” modeling, notification-process mismatch, and the false isolation guarantee.
+hook: PreToolUse
+hook: PreToolUse Completed
+exec
+/bin/zsh -lc 'rtk find claude-agent-sdk /Users/vimoxshah/.npm /Users/vimoxshah/.cache /Users/vimoxshah/Desktop/Vimox/poc/clockwork' in /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+hook: PostToolUse
+hook: PostToolUse
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+ succeeded in 3043ms:
+0 for 'claude-agent-sdk'
+
+hook: PreToolUse
+hook: PreToolUse Completed
+exec
+/bin/zsh -lc 'rtk find agent-sdk /Users/vimoxshah/.codex /Users/vimoxshah/.agents /Users/vimoxshah/Desktop/Vimox' in /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+hook: PostToolUse
+hook: PostToolUse
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+ succeeded in 204ms:
+0 for 'agent-sdk'
+
+hook: PreToolUse
+hook: PreToolUse Completed
+exec
+/bin/zsh -lc 'rtk git status --short && rtk git branch --show-current' in /Users/vimoxshah/Desktop/Vimox/poc/clockwork
+ exited 128 in 0ms:
+fatal: not a git repository (or any of the parent directories): .git
+
+hook: PostToolUse
+hook: PostToolUse
+hook: PostToolUse Completed
+hook: PostToolUse Completed
+codex
+This is not execution-ready. It rests on an unproven economic premise, promises security that the architecture does not provide, and underestimates the product by roughly a factor of two to three.
+
+1. **CRITICAL — [vision/VISION.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/vision/VISION.md) §1, §4, §8; [plan/06-risks-and-costs.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/06-risks-and-costs.md) §3, §5.** The business depends on consuming idle Claude subscription capacity, but the plan has not established that a third-party desktop product may reuse Claude Code consumer OAuth and subscription limits. Historically, Anthropic has distinguished Claude Code’s own subscription login from authentication offered by third-party Agent SDK products. If API keys are required, the “already paid, zero marginal cost” wedge collapses. **Fix:** make written Anthropic policy/contract confirmation a pre-code gate. Design API-key mode and its cost UX as the baseline until consumer-subscription use is explicitly supported.
+
+2. **CRITICAL — [vision/VISION.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/vision/VISION.md) §2–3; [vision/ROADMAP.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/vision/ROADMAP.md) H1; [plan/04-scenarios.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/04-scenarios.md) S-10–S-14.** The “overnight workforce” does not work on the target user’s sleeping laptop. A local process cannot execute at 2 a.m. while the machine is suspended; running the task after the user opens the laptop is not “wake up to results.” This breaks the primary story, not an edge case. **Fix:** either require an always-on worker in H1, add an optional remote worker, or reposition the product honestly as “runs when this machine is awake.” Validate how many target users actually have always-on machines.
+
+3. **HIGH — [vision/VISION.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/vision/VISION.md) §4–5; [plan/06-risks-and-costs.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/06-risks-and-costs.md) R-1/R-12.** The competitive analysis is already too narrow. OpenAI Codex Automations occupies scheduled background agent work plus later review; Claude’s own scheduled/loop primitives can expand into this UX quickly; GitHub Actions plus hosted coding agents cover many repository chores. “AgentCalendar stayed shallow” is asserted without a versioned feature comparison or user evidence. **Fix:** maintain a quarterly competitor matrix covering scheduling, persistence, execution location, approvals, results, templates, pricing and cross-repo operation. Define a wedge that survives a first-party calendar view.
+
+4. **HIGH — [vision/VISION.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/vision/VISION.md) §1–3.** The plan contains no demand evidence. It jumps from “subscription capacity idles” to “developers want calendar bookings,” ignoring that most recurring engineering work is event-driven, CI-driven or explicitly triggered—not naturally calendar-shaped. **Fix:** run a Phase -1 with at least 15–20 design partners. Require evidence of recurring jobs, current workaround, failure cost, unattended-trust threshold and willingness to pay before building the calendar UI.
+
+5. **CRITICAL — [vision/VISION.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/vision/VISION.md) §5; [plan/01-product-spec.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/01-product-spec.md) FR-7; [plan/05-execution-plan.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/05-execution-plan.md) T-301.** Capacity-aware scheduling is presented as the flagship feature, but Clockwork sees only its own runs. It cannot observe interactive Claude usage, other terminals, other machines, server-side adjustments or the actual reset boundary. “Plan-type priors” cannot make automatic shifting trustworthy. **Fix:** demote it to an observational estimate, remove auto-shift until validated, and measure prediction error against real reset events. Do not charge for it until it demonstrates useful accuracy.
+
+6. **HIGH — [vision/VISION.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/vision/VISION.md) §9–10.** “Reviewed runs” is a weak north-star metric. Opening a report says nothing about whether the work was correct, merged, reused or worth its token cost. Recurring-run percentage can be inflated by useless automation. **Fix:** measure accepted outcomes: branch merged, artifact used, explicit useful/not-useful rating, human correction time, recurring-job survival at 8–12 weeks and silent-failure rate.
+
+7. **HIGH — [plan/06-risks-and-costs.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/06-risks-and-costs.md) §4; [decisions/DECISIONS.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/decisions/DECISIONS.md) ADR-009.** “420 Pro users for 12 months” is gross revenue equivalence, not break-even. It ignores churn, payment fees, taxes, refunds, support, CAC and ongoing development. Worse, the execution plan contains no payment, entitlement or license-enforcement work, while H1 explicitly has no accounts. **Fix:** add a real commercial architecture and contribution-margin model, or state that H1 has no monetization and fund it accordingly.
+
+8. **HIGH — [vision/VISION.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/vision/VISION.md) §5, §8; [decisions/DECISIONS.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/decisions/DECISIONS.md) ADR-009.** The product alternates between “open-source core” and “source-available,” while the actual license remains undecided. FSL/BUSL is not open source. There is no licensing task before public beta. **Fix:** decide the license, paid-feature boundary, contributor agreement and local entitlement mechanism before alpha distribution.
+
+9. **CRITICAL — [plan/01-product-spec.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/01-product-spec.md) NFR-2; [plan/02-architecture.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/02-architecture.md) §5, §7; [decisions/DECISIONS.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/decisions/DECISIONS.md) ADR-006.** A git worktree is not a security boundary. The agent runs as the user and can access the main tree by absolute path, traverse symlinks, edit the shared git directory, modify refs, read credentials, invoke network clients or run arbitrary interpreters. “Untouched, guaranteed by construction” is false. **Fix:** use an OS-enforced sandbox with filesystem and network allowlists. Prefer a disposable clone or restricted bare mirror rather than a worktree sharing the user repository’s `.git`.
+
+10. **CRITICAL — [plan/01-product-spec.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/01-product-spec.md) FR-11; [decisions/DECISIONS.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/decisions/DECISIONS.md) ADR-008.** The deny-list floor is security theater. `rm`, `git push` and credential reads can be performed through Python, Node, shell redirection, aliases, symlinks, archives, subprocesses or custom binaries. Permission callbacks may also be bypassed by `bypassPermissions` semantics. **Fix:** remove `bypassPermissions` from H1, enforce positive filesystem/network/process capabilities below the SDK, and use hooks only for user-facing policy—not containment.
+
+11. **CRITICAL — [plan/02-architecture.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/02-architecture.md) §6–7.** The agent process runs under the same user account as the daemon and can read the localhost API token, call the API, retrieve reports, schedule more work or potentially approve its own requests. File mode `0600` protects against other users, not against the agent. **Fix:** place runners in a sandbox that cannot reach Clockwork state or IPC credentials. Use Unix sockets/named pipes with peer credentials, scoped one-run capabilities and a separate administrator channel for safety overrides.
+
+12. **CRITICAL — [plan/02-architecture.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/02-architecture.md) §7; [plan/03-tech-stack.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/03-tech-stack.md) #14.** Putting Slack and SMTP credentials in the OS keychain does not protect them if the runner inherits them or can ask the daemon/keychain to retrieve them. The same applies to `ANTHROPIC_API_KEY`, git credentials and MCP secrets. Regex masking occurs after exposure. **Fix:** sanitize runner environments, broker credentials per operation, prevent runner keychain access, isolate delivery into a post-run process and enforce outbound-network destinations.
+
+13. **HIGH — [vision/VISION.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/vision/VISION.md) §5; [plan/01-product-spec.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/01-product-spec.md) NFR-4.** “Code and transcripts never leave the machine” is plainly false. Prompt context and code are sent to Anthropic; URL/MCP tasks contact third parties; Slack/email exports reports. **Fix:** replace this claim with “no Clockwork-hosted cloud.” Publish an explicit per-feature data-flow diagram and destination disclosure.
+
+14. **CRITICAL — [plan/02-architecture.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/02-architecture.md) §2, §4, §8.** The recurrence design can duplicate runs. The happy path advances `next_fire` only during finalization, so every 30-second tick continues seeing the same due row while its run is queued or running. The alleged `(schedule_id, occurrence_time)` dedupe constraint does not exist in the DDL. **Fix:** create a `schedule_occurrences` ledger with a unique `(schedule_id, scheduled_for)` key. Atomically claim the occurrence and advance `next_fire` in the same transaction before queueing.
+
+15. **HIGH — [plan/02-architecture.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/02-architecture.md) §1; [plan/04-scenarios.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/04-scenarios.md) S-6/S-8/S-25/S-42.** The schema cannot implement its scenario contract. It lacks soft deletion, `overlap_policy`, retry policy/backoff state, base branch, occurrence identity and the promised dedupe constraint. The FSM diagram adds `ask_user`, which is absent from the declared state list. **Fix:** create a requirement-to-schema trace and reject the architecture until every persisted behavior has a field, invariant or derived rule.
+
+16. **HIGH — [plan/01-product-spec.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/01-product-spec.md) FR-8; [plan/02-architecture.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/02-architecture.md) §1.** `chain_after` models one parent, not a DAG. It cannot express fan-in, and `{{previous.report}}` is ambiguous when the upstream task is recurring or has concurrent runs. **Fix:** introduce `task_edges`, explicit upstream-run binding, fan-in completion rules and idempotent successor creation.
+
+17. **CRITICAL — [plan/05-execution-plan.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/05-execution-plan.md) T-003; [plan/06-risks-and-costs.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/06-risks-and-costs.md) R-3.** Session resume is being confused with resuming a suspended permission callback. A resumed conversation in a new process does not necessarily restore the pending tool call, callback stack or SDK iterator. Even if transcript continuation works, exact approve-and-continue semantics may not. **Fix:** define two supported models: a durable, kept-alive runner with an approval broker; or terminate the turn and resume with a new prompt containing the decision. Specify the semantic degradation before building UI around it.
+
+18. **HIGH — [plan/02-architecture.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/02-architecture.md) §3; [plan/04-scenarios.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/04-scenarios.md) S-31.** Runner “re-adoption” is hand-waving. A daemon restart loses stdio and inherited IPC; PID existence is unsafe because PIDs are reused; reconnecting sockets need ownership, authentication, epochs and split-brain handling. **Fix:** give each runner a nonce-authenticated durable socket and generation identifier, or supervise it through a stable per-run process. Persist process start identity, not only PID.
+
+19. **HIGH — [plan/02-architecture.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/02-architecture.md) top-level process model; [plan/05-execution-plan.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/05-execution-plan.md) T-304.** POSIX pgids, `SIGTERM` and `SIGKILL` do not provide the proposed Windows behavior. Detached grandchildren can also escape the Unix process group. **Fix:** implement and test platform-specific supervision: Job Objects on Windows, process-group/session containment on Unix and explicit handling of detached descendants.
+
+20. **HIGH — [plan/03-tech-stack.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/03-tech-stack.md) #8; [plan/01-product-spec.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/01-product-spec.md) FR-20.** The service claims are wrong across platforms. A launchd user agent and ordinary `systemd --user` service do not simply survive logout; a Windows service running outside the interactive user session will not automatically see the user’s OAuth, home directory, keychain or notification session. **Fix:** specify exact lifecycle semantics per OS. Ship macOS-at-login first and stop claiming logout-independent behavior until it is demonstrated.
+
+21. **HIGH — [plan/03-tech-stack.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/03-tech-stack.md) #13; [plan/05-execution-plan.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/05-execution-plan.md) T-109.** The Node daemon is supposed to notify while the UI is closed, but the selected notification mechanism is the Tauri notification API. Tauri is in the UI process. **Fix:** use a native notification helper callable by the daemon or keep a deliberately persistent tray host and make that lifecycle explicit.
+
+22. **HIGH — [plan/02-architecture.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/02-architecture.md) §1; [plan/04-scenarios.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/04-scenarios.md) S-34.** `synchronous=NORMAL` does not provide the power-loss durability implied by “synchronous crash-safe transitions.” Keeping full transcripts and reports forever in `report_json` also turns the control database into an unbounded blob store; long UI readers can prevent WAL checkpointing. **Fix:** use `FULL` durability for critical claims, make transition plus event one transaction, store large transcripts/artifacts outside SQLite with checksums, and test restore from real backups.
+
+23. **HIGH — [plan/01-product-spec.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/01-product-spec.md) FR-10; [plan/06-risks-and-costs.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/06-risks-and-costs.md) assumption 1.** Budget enforcement is not a hard dollar cap merely because usage messages exist. Telemetry may be cumulative or delivered only after expensive operations; the current message can overshoot; subscription execution may have no meaningful USD charge. **Fix:** use a provider-native maximum-budget option where guaranteed, distinguish API-dollar caps from subscription usage, and label client-side cancellation as a soft limit with documented overshoot.
+
+24. **HIGH — [plan/06-risks-and-costs.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/06-risks-and-costs.md) §5.** The SDK assumptions register is too vague to be a gate:
+
+   - `canUseTool` existing does not prove it intercepts every dangerous effect or applies under bypass mode.
+   - Structured output guarantees shape, not truthful summaries or complete artifact enumeration.
+   - Session resume does not prove pending-permission continuation.
+   - Usage availability does not prove enforceable cost.
+   - Consumer subscription auth in a daemon is an unresolved policy and runtime dependency.
+   - Stable error classes for auth, capacity and generic 429s should not be assumed.
+   - A runtime model-list API is assumed elsewhere but not established.
+
+   **Fix:** pin an exact SDK version and create a versioned contract matrix containing observed inputs, emitted messages, error payloads and supported guarantees. A failed contract must remove or redesign the dependent feature.
+
+25. **HIGH — [plan/04-scenarios.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/04-scenarios.md) scheduling/FSM sections.** Missing scenarios include: two daemon instances claiming the same occurrence; edit/delete/pause racing the scheduler transaction; update occurring between claim and spawn; duplicate SSE delivery; token rotation; notification sent twice after finalization retry; clock rollback during an in-flight claim. **Fix:** add explicit at-least-once/exactly-once invariants, idempotency keys and concurrency tests using two daemon processes.
+
+26. **HIGH — [plan/04-scenarios.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/04-scenarios.md) execution/platform sections.** Missing OS/process scenarios include: reboot or logout mid-run; FileVault/keychain locked before login; OS notification permission denied; app updater replacing the daemon while runners live; migration rollback; PID reuse; detached grandchildren; service account lacking access to the user repository. **Fix:** add destructive clean-machine and upgrade tests for every supported OS before claiming support.
+
+27. **HIGH — [plan/04-scenarios.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/04-scenarios.md) git/security sections.** Missing repository scenarios include: malicious hooks or repo-local agent instructions; symlink escape; submodules and LFS; shallow/bare repositories; case-insensitive branch collisions; concurrent manual `git gc`/worktree pruning; remote default branch changing; nested worktrees; huge binary artifacts; transcript or artifact symlinks pointing at secrets. **Fix:** define a supported repository matrix, disable hooks and inherited dangerous config, resolve paths against sandbox roots and impose artifact size/type limits.
+
+28. **HIGH — [plan/04-scenarios.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/04-scenarios.md) HITL/delivery sections.** Missing distributed-systems scenarios include: stale approval after cancellation; two clients submitting conflicting decisions; repeated permission request after denial; tool side effect completed but acknowledgement lost; retried PR creation/email/MCP mutation; approval timeout racing a response. **Fix:** make approvals compare-and-set transitions and give every external side effect a persisted idempotency key plus reconciliation state.
+
+29. **CRITICAL — [plan/05-execution-plan.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/05-execution-plan.md) effort summary.** The schedule arithmetic is internally false. Phase 1 is 41 ideal days, which is already 8.2 engineer-weeks for one engineer, yet it is presented as 6–7 weeks. The stated 20% integration buffer makes the 86-day total roughly 103 days—over 20 weeks—not 16–18. **Fix:** rebuild the schedule from capacity, dependencies and risk ranges rather than milestone dates.
+
+30. **CRITICAL — [plan/05-execution-plan.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/05-execution-plan.md) T-103/T-104/T-105/T-201/T-205/T-301/T-304/T-306.** The individual estimates are fantasy. Four days does not buy a DST/sleep-safe scheduler; four does not buy crash recovery and orphan adoption; five does not buy secure execution; four does not buy cross-process HITL; three does not buy signing/updating; four does not buy Windows services and power events; 2.5 does not buy safe arbitrary MCP integration. T-301 cannot even be estimated before quota observability is proven. **Fix:** budget roughly 180–300 engineer-days for a credible macOS-first paid beta plus security hardening, then estimate Windows/Linux separately. Treat 86 days as a prototype budget.
+
+31. **HIGH — [plan/05-execution-plan.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/05-execution-plan.md) Phase 1–2.** Safety is sequenced after unattended execution. M1 dogfood runs with no usable HITL, no real sandbox and only a bypassable deny-list; the plan then asks a fresh user to trust it. **Fix:** move sandboxing, credential isolation, durable approval semantics and threat-model review ahead of any unattended external alpha.
+
+32. **MEDIUM — [plan/04-scenarios.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/04-scenarios.md) test-fixture inventory.** The “exhaustive” matrix references nonexistent S-15, omits multiple IDs in its claimed ranges and does not map every requirement to a scenario. That is embarrassing for a document positioned as the normative test contract. **Fix:** machine-check requirement, scenario and execution-task references in CI.
+
+33. **HIGH — [plan/06-risks-and-costs.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/06-risks-and-costs.md) R-4/R-10; [vision/VISION.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/vision/VISION.md) §10.** Security tripwires are not observable. Telemetry is opt-in and structure-only, so “any deny-list trigger” and incidents-per-1,000-runs cannot be measured consistently. One credential exfiltration is not made acceptable by a favorable denominator. **Fix:** define incident severity classes, local safety audit events, explicit user-report channels and a zero-tolerance launch blocker for containment escapes.
+
+Verification: all ten requested Markdown files were read. No files were changed. Live public lookup was attempted through agent-reach, official OpenAI documentation tooling and the browser surface; network/browser access was unavailable, so no unverified Anthropic roadmap claim was treated as fact. `git status` could not run because this directory is not a Git repository.
+
+## Verdict: RETHINK
+
+Top three changes that most improve survival odds:
+
+1. Prove the auth/ToS/economics and real user demand before product implementation.
+2. Replace worktree-plus-deny-list theater with genuine OS isolation, credential separation and scoped IPC.
+3. Cut H1 to macOS, API-key auth and awake/always-on workers; redesign scheduling around an occurrence ledger and HITL around a durable approval broker, then re-estimate from roughly 180–300 engineer-days.
+hook: Stop
+hook: Stop
+hook: Stop Completed
+hook: Stop Completed
+tokens used
+1,60,747
+This is not execution-ready. It rests on an unproven economic premise, promises security that the architecture does not provide, and underestimates the product by roughly a factor of two to three.
+
+1. **CRITICAL — [vision/VISION.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/vision/VISION.md) §1, §4, §8; [plan/06-risks-and-costs.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/06-risks-and-costs.md) §3, §5.** The business depends on consuming idle Claude subscription capacity, but the plan has not established that a third-party desktop product may reuse Claude Code consumer OAuth and subscription limits. Historically, Anthropic has distinguished Claude Code’s own subscription login from authentication offered by third-party Agent SDK products. If API keys are required, the “already paid, zero marginal cost” wedge collapses. **Fix:** make written Anthropic policy/contract confirmation a pre-code gate. Design API-key mode and its cost UX as the baseline until consumer-subscription use is explicitly supported.
+
+2. **CRITICAL — [vision/VISION.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/vision/VISION.md) §2–3; [vision/ROADMAP.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/vision/ROADMAP.md) H1; [plan/04-scenarios.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/04-scenarios.md) S-10–S-14.** The “overnight workforce” does not work on the target user’s sleeping laptop. A local process cannot execute at 2 a.m. while the machine is suspended; running the task after the user opens the laptop is not “wake up to results.” This breaks the primary story, not an edge case. **Fix:** either require an always-on worker in H1, add an optional remote worker, or reposition the product honestly as “runs when this machine is awake.” Validate how many target users actually have always-on machines.
+
+3. **HIGH — [vision/VISION.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/vision/VISION.md) §4–5; [plan/06-risks-and-costs.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/06-risks-and-costs.md) R-1/R-12.** The competitive analysis is already too narrow. OpenAI Codex Automations occupies scheduled background agent work plus later review; Claude’s own scheduled/loop primitives can expand into this UX quickly; GitHub Actions plus hosted coding agents cover many repository chores. “AgentCalendar stayed shallow” is asserted without a versioned feature comparison or user evidence. **Fix:** maintain a quarterly competitor matrix covering scheduling, persistence, execution location, approvals, results, templates, pricing and cross-repo operation. Define a wedge that survives a first-party calendar view.
+
+4. **HIGH — [vision/VISION.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/vision/VISION.md) §1–3.** The plan contains no demand evidence. It jumps from “subscription capacity idles” to “developers want calendar bookings,” ignoring that most recurring engineering work is event-driven, CI-driven or explicitly triggered—not naturally calendar-shaped. **Fix:** run a Phase -1 with at least 15–20 design partners. Require evidence of recurring jobs, current workaround, failure cost, unattended-trust threshold and willingness to pay before building the calendar UI.
+
+5. **CRITICAL — [vision/VISION.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/vision/VISION.md) §5; [plan/01-product-spec.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/01-product-spec.md) FR-7; [plan/05-execution-plan.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/05-execution-plan.md) T-301.** Capacity-aware scheduling is presented as the flagship feature, but Clockwork sees only its own runs. It cannot observe interactive Claude usage, other terminals, other machines, server-side adjustments or the actual reset boundary. “Plan-type priors” cannot make automatic shifting trustworthy. **Fix:** demote it to an observational estimate, remove auto-shift until validated, and measure prediction error against real reset events. Do not charge for it until it demonstrates useful accuracy.
+
+6. **HIGH — [vision/VISION.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/vision/VISION.md) §9–10.** “Reviewed runs” is a weak north-star metric. Opening a report says nothing about whether the work was correct, merged, reused or worth its token cost. Recurring-run percentage can be inflated by useless automation. **Fix:** measure accepted outcomes: branch merged, artifact used, explicit useful/not-useful rating, human correction time, recurring-job survival at 8–12 weeks and silent-failure rate.
+
+7. **HIGH — [plan/06-risks-and-costs.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/06-risks-and-costs.md) §4; [decisions/DECISIONS.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/decisions/DECISIONS.md) ADR-009.** “420 Pro users for 12 months” is gross revenue equivalence, not break-even. It ignores churn, payment fees, taxes, refunds, support, CAC and ongoing development. Worse, the execution plan contains no payment, entitlement or license-enforcement work, while H1 explicitly has no accounts. **Fix:** add a real commercial architecture and contribution-margin model, or state that H1 has no monetization and fund it accordingly.
+
+8. **HIGH — [vision/VISION.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/vision/VISION.md) §5, §8; [decisions/DECISIONS.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/decisions/DECISIONS.md) ADR-009.** The product alternates between “open-source core” and “source-available,” while the actual license remains undecided. FSL/BUSL is not open source. There is no licensing task before public beta. **Fix:** decide the license, paid-feature boundary, contributor agreement and local entitlement mechanism before alpha distribution.
+
+9. **CRITICAL — [plan/01-product-spec.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/01-product-spec.md) NFR-2; [plan/02-architecture.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/02-architecture.md) §5, §7; [decisions/DECISIONS.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/decisions/DECISIONS.md) ADR-006.** A git worktree is not a security boundary. The agent runs as the user and can access the main tree by absolute path, traverse symlinks, edit the shared git directory, modify refs, read credentials, invoke network clients or run arbitrary interpreters. “Untouched, guaranteed by construction” is false. **Fix:** use an OS-enforced sandbox with filesystem and network allowlists. Prefer a disposable clone or restricted bare mirror rather than a worktree sharing the user repository’s `.git`.
+
+10. **CRITICAL — [plan/01-product-spec.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/01-product-spec.md) FR-11; [decisions/DECISIONS.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/decisions/DECISIONS.md) ADR-008.** The deny-list floor is security theater. `rm`, `git push` and credential reads can be performed through Python, Node, shell redirection, aliases, symlinks, archives, subprocesses or custom binaries. Permission callbacks may also be bypassed by `bypassPermissions` semantics. **Fix:** remove `bypassPermissions` from H1, enforce positive filesystem/network/process capabilities below the SDK, and use hooks only for user-facing policy—not containment.
+
+11. **CRITICAL — [plan/02-architecture.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/02-architecture.md) §6–7.** The agent process runs under the same user account as the daemon and can read the localhost API token, call the API, retrieve reports, schedule more work or potentially approve its own requests. File mode `0600` protects against other users, not against the agent. **Fix:** place runners in a sandbox that cannot reach Clockwork state or IPC credentials. Use Unix sockets/named pipes with peer credentials, scoped one-run capabilities and a separate administrator channel for safety overrides.
+
+12. **CRITICAL — [plan/02-architecture.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/02-architecture.md) §7; [plan/03-tech-stack.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/03-tech-stack.md) #14.** Putting Slack and SMTP credentials in the OS keychain does not protect them if the runner inherits them or can ask the daemon/keychain to retrieve them. The same applies to `ANTHROPIC_API_KEY`, git credentials and MCP secrets. Regex masking occurs after exposure. **Fix:** sanitize runner environments, broker credentials per operation, prevent runner keychain access, isolate delivery into a post-run process and enforce outbound-network destinations.
+
+13. **HIGH — [vision/VISION.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/vision/VISION.md) §5; [plan/01-product-spec.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/01-product-spec.md) NFR-4.** “Code and transcripts never leave the machine” is plainly false. Prompt context and code are sent to Anthropic; URL/MCP tasks contact third parties; Slack/email exports reports. **Fix:** replace this claim with “no Clockwork-hosted cloud.” Publish an explicit per-feature data-flow diagram and destination disclosure.
+
+14. **CRITICAL — [plan/02-architecture.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/02-architecture.md) §2, §4, §8.** The recurrence design can duplicate runs. The happy path advances `next_fire` only during finalization, so every 30-second tick continues seeing the same due row while its run is queued or running. The alleged `(schedule_id, occurrence_time)` dedupe constraint does not exist in the DDL. **Fix:** create a `schedule_occurrences` ledger with a unique `(schedule_id, scheduled_for)` key. Atomically claim the occurrence and advance `next_fire` in the same transaction before queueing.
+
+15. **HIGH — [plan/02-architecture.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/02-architecture.md) §1; [plan/04-scenarios.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/04-scenarios.md) S-6/S-8/S-25/S-42.** The schema cannot implement its scenario contract. It lacks soft deletion, `overlap_policy`, retry policy/backoff state, base branch, occurrence identity and the promised dedupe constraint. The FSM diagram adds `ask_user`, which is absent from the declared state list. **Fix:** create a requirement-to-schema trace and reject the architecture until every persisted behavior has a field, invariant or derived rule.
+
+16. **HIGH — [plan/01-product-spec.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/01-product-spec.md) FR-8; [plan/02-architecture.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/02-architecture.md) §1.** `chain_after` models one parent, not a DAG. It cannot express fan-in, and `{{previous.report}}` is ambiguous when the upstream task is recurring or has concurrent runs. **Fix:** introduce `task_edges`, explicit upstream-run binding, fan-in completion rules and idempotent successor creation.
+
+17. **CRITICAL — [plan/05-execution-plan.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/05-execution-plan.md) T-003; [plan/06-risks-and-costs.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/06-risks-and-costs.md) R-3.** Session resume is being confused with resuming a suspended permission callback. A resumed conversation in a new process does not necessarily restore the pending tool call, callback stack or SDK iterator. Even if transcript continuation works, exact approve-and-continue semantics may not. **Fix:** define two supported models: a durable, kept-alive runner with an approval broker; or terminate the turn and resume with a new prompt containing the decision. Specify the semantic degradation before building UI around it.
+
+18. **HIGH — [plan/02-architecture.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/02-architecture.md) §3; [plan/04-scenarios.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/04-scenarios.md) S-31.** Runner “re-adoption” is hand-waving. A daemon restart loses stdio and inherited IPC; PID existence is unsafe because PIDs are reused; reconnecting sockets need ownership, authentication, epochs and split-brain handling. **Fix:** give each runner a nonce-authenticated durable socket and generation identifier, or supervise it through a stable per-run process. Persist process start identity, not only PID.
+
+19. **HIGH — [plan/02-architecture.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/02-architecture.md) top-level process model; [plan/05-execution-plan.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/05-execution-plan.md) T-304.** POSIX pgids, `SIGTERM` and `SIGKILL` do not provide the proposed Windows behavior. Detached grandchildren can also escape the Unix process group. **Fix:** implement and test platform-specific supervision: Job Objects on Windows, process-group/session containment on Unix and explicit handling of detached descendants.
+
+20. **HIGH — [plan/03-tech-stack.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/03-tech-stack.md) #8; [plan/01-product-spec.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/01-product-spec.md) FR-20.** The service claims are wrong across platforms. A launchd user agent and ordinary `systemd --user` service do not simply survive logout; a Windows service running outside the interactive user session will not automatically see the user’s OAuth, home directory, keychain or notification session. **Fix:** specify exact lifecycle semantics per OS. Ship macOS-at-login first and stop claiming logout-independent behavior until it is demonstrated.
+
+21. **HIGH — [plan/03-tech-stack.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/03-tech-stack.md) #13; [plan/05-execution-plan.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/05-execution-plan.md) T-109.** The Node daemon is supposed to notify while the UI is closed, but the selected notification mechanism is the Tauri notification API. Tauri is in the UI process. **Fix:** use a native notification helper callable by the daemon or keep a deliberately persistent tray host and make that lifecycle explicit.
+
+22. **HIGH — [plan/02-architecture.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/02-architecture.md) §1; [plan/04-scenarios.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/04-scenarios.md) S-34.** `synchronous=NORMAL` does not provide the power-loss durability implied by “synchronous crash-safe transitions.” Keeping full transcripts and reports forever in `report_json` also turns the control database into an unbounded blob store; long UI readers can prevent WAL checkpointing. **Fix:** use `FULL` durability for critical claims, make transition plus event one transaction, store large transcripts/artifacts outside SQLite with checksums, and test restore from real backups.
+
+23. **HIGH — [plan/01-product-spec.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/01-product-spec.md) FR-10; [plan/06-risks-and-costs.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/06-risks-and-costs.md) assumption 1.** Budget enforcement is not a hard dollar cap merely because usage messages exist. Telemetry may be cumulative or delivered only after expensive operations; the current message can overshoot; subscription execution may have no meaningful USD charge. **Fix:** use a provider-native maximum-budget option where guaranteed, distinguish API-dollar caps from subscription usage, and label client-side cancellation as a soft limit with documented overshoot.
+
+24. **HIGH — [plan/06-risks-and-costs.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/06-risks-and-costs.md) §5.** The SDK assumptions register is too vague to be a gate:
+
+   - `canUseTool` existing does not prove it intercepts every dangerous effect or applies under bypass mode.
+   - Structured output guarantees shape, not truthful summaries or complete artifact enumeration.
+   - Session resume does not prove pending-permission continuation.
+   - Usage availability does not prove enforceable cost.
+   - Consumer subscription auth in a daemon is an unresolved policy and runtime dependency.
+   - Stable error classes for auth, capacity and generic 429s should not be assumed.
+   - A runtime model-list API is assumed elsewhere but not established.
+
+   **Fix:** pin an exact SDK version and create a versioned contract matrix containing observed inputs, emitted messages, error payloads and supported guarantees. A failed contract must remove or redesign the dependent feature.
+
+25. **HIGH — [plan/04-scenarios.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/04-scenarios.md) scheduling/FSM sections.** Missing scenarios include: two daemon instances claiming the same occurrence; edit/delete/pause racing the scheduler transaction; update occurring between claim and spawn; duplicate SSE delivery; token rotation; notification sent twice after finalization retry; clock rollback during an in-flight claim. **Fix:** add explicit at-least-once/exactly-once invariants, idempotency keys and concurrency tests using two daemon processes.
+
+26. **HIGH — [plan/04-scenarios.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/04-scenarios.md) execution/platform sections.** Missing OS/process scenarios include: reboot or logout mid-run; FileVault/keychain locked before login; OS notification permission denied; app updater replacing the daemon while runners live; migration rollback; PID reuse; detached grandchildren; service account lacking access to the user repository. **Fix:** add destructive clean-machine and upgrade tests for every supported OS before claiming support.
+
+27. **HIGH — [plan/04-scenarios.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/04-scenarios.md) git/security sections.** Missing repository scenarios include: malicious hooks or repo-local agent instructions; symlink escape; submodules and LFS; shallow/bare repositories; case-insensitive branch collisions; concurrent manual `git gc`/worktree pruning; remote default branch changing; nested worktrees; huge binary artifacts; transcript or artifact symlinks pointing at secrets. **Fix:** define a supported repository matrix, disable hooks and inherited dangerous config, resolve paths against sandbox roots and impose artifact size/type limits.
+
+28. **HIGH — [plan/04-scenarios.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/04-scenarios.md) HITL/delivery sections.** Missing distributed-systems scenarios include: stale approval after cancellation; two clients submitting conflicting decisions; repeated permission request after denial; tool side effect completed but acknowledgement lost; retried PR creation/email/MCP mutation; approval timeout racing a response. **Fix:** make approvals compare-and-set transitions and give every external side effect a persisted idempotency key plus reconciliation state.
+
+29. **CRITICAL — [plan/05-execution-plan.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/05-execution-plan.md) effort summary.** The schedule arithmetic is internally false. Phase 1 is 41 ideal days, which is already 8.2 engineer-weeks for one engineer, yet it is presented as 6–7 weeks. The stated 20% integration buffer makes the 86-day total roughly 103 days—over 20 weeks—not 16–18. **Fix:** rebuild the schedule from capacity, dependencies and risk ranges rather than milestone dates.
+
+30. **CRITICAL — [plan/05-execution-plan.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/05-execution-plan.md) T-103/T-104/T-105/T-201/T-205/T-301/T-304/T-306.** The individual estimates are fantasy. Four days does not buy a DST/sleep-safe scheduler; four does not buy crash recovery and orphan adoption; five does not buy secure execution; four does not buy cross-process HITL; three does not buy signing/updating; four does not buy Windows services and power events; 2.5 does not buy safe arbitrary MCP integration. T-301 cannot even be estimated before quota observability is proven. **Fix:** budget roughly 180–300 engineer-days for a credible macOS-first paid beta plus security hardening, then estimate Windows/Linux separately. Treat 86 days as a prototype budget.
+
+31. **HIGH — [plan/05-execution-plan.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/05-execution-plan.md) Phase 1–2.** Safety is sequenced after unattended execution. M1 dogfood runs with no usable HITL, no real sandbox and only a bypassable deny-list; the plan then asks a fresh user to trust it. **Fix:** move sandboxing, credential isolation, durable approval semantics and threat-model review ahead of any unattended external alpha.
+
+32. **MEDIUM — [plan/04-scenarios.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/04-scenarios.md) test-fixture inventory.** The “exhaustive” matrix references nonexistent S-15, omits multiple IDs in its claimed ranges and does not map every requirement to a scenario. That is embarrassing for a document positioned as the normative test contract. **Fix:** machine-check requirement, scenario and execution-task references in CI.
+
+33. **HIGH — [plan/06-risks-and-costs.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/plan/06-risks-and-costs.md) R-4/R-10; [vision/VISION.md](/Users/vimoxshah/Desktop/Vimox/poc/clockwork/vision/VISION.md) §10.** Security tripwires are not observable. Telemetry is opt-in and structure-only, so “any deny-list trigger” and incidents-per-1,000-runs cannot be measured consistently. One credential exfiltration is not made acceptable by a favorable denominator. **Fix:** define incident severity classes, local safety audit events, explicit user-report channels and a zero-tolerance launch blocker for containment escapes.
+
+Verification: all ten requested Markdown files were read. No files were changed. Live public lookup was attempted through agent-reach, official OpenAI documentation tooling and the browser surface; network/browser access was unavailable, so no unverified Anthropic roadmap claim was treated as fact. `git status` could not run because this directory is not a Git repository.
+
+## Verdict: RETHINK
+
+Top three changes that most improve survival odds:
+
+1. Prove the auth/ToS/economics and real user demand before product implementation.
+2. Replace worktree-plus-deny-list theater with genuine OS isolation, credential separation and scoped IPC.
+3. Cut H1 to macOS, API-key auth and awake/always-on workers; redesign scheduling around an occurrence ledger and HITL around a durable approval broker, then re-estimate from roughly 180–300 engineer-days.

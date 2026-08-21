@@ -1,0 +1,51 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# Test artifacts
+coverage/
+.vitest-cache/
+playwright-report/
+test-results/
+
+# Clockwork local data (never commit user run data)
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+.clockwork-home/
+
+# Environment & secrets — never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials*.json
+secrets*.json
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Logs
+logs/
+*.log
+
+# Tauri / Rust build artifacts
+src-tauri/target/
+src-tauri/gen/
+
+# Spike throwaway artifacts (Phase 0 keeps reports, not scratch repos)
+spikes/scratch/
+spikes/out/*.local/
