@@ -148,6 +148,7 @@ export class RunManager {
       // worktree or scratch (S-38 handled inside createWorktree retry)
       if (spec.scratchPath) {
         mkdirSync(spec.scratchPath, { recursive: true });
+        spec.worktreePath = spec.scratchPath; // scratch dir IS the child cwd
       } else {
         const wt = await createWorktree({
           repoPath: spec.repoPath!,
@@ -181,12 +182,15 @@ export class RunManager {
 
     const nonce = newId();
     // Sanitized env (arch §7.3): nothing but the minimum. No bearer token, no delivery creds.
+    // USER/LOGNAME required for macOS keychain ACL identification (verified 2026-08-21).
     const env: Record<string, string> = {
       PATH: process.env.PATH ?? '/usr/bin:/bin',
       HOME: process.env.HOME ?? os.homedir(),
       TERM: 'dumb',
       LANG: process.env.LANG ?? 'en_US.UTF-8',
       CW_ENGINE: process.env.CW_ENGINE ?? '', // test hook only
+      ...(process.env.USER ? { USER: process.env.USER } : {}),
+      ...(process.env.LOGNAME ? { LOGNAME: process.env.LOGNAME } : {}),
     };
 
     const prefix = this.deps.childCommandPrefix ?? [];

@@ -126,6 +126,9 @@ export class ClaudeCliRunner implements AgentRunner {
     }
 
     // Sanitized env: only what Node + the CLI genuinely need (arch §7.3).
+    // USER/LOGNAME are required by macOS keychain ACL identification —
+    // verified empirically: without them the engine cannot read its own
+    // OAuth item ("Not logged in"), with them auth succeeds.
     const env: Record<string, string> = {
       PATH: process.env.PATH ?? '/usr/bin:/bin:/usr/local/bin',
       HOME: process.env.HOME ?? os.homedir(),
@@ -133,6 +136,8 @@ export class ClaudeCliRunner implements AgentRunner {
       NO_COLOR: '1',
       LANG: process.env.LANG ?? 'en_US.UTF-8',
       SHELL: '/bin/zsh',
+      ...(process.env.USER ? { USER: process.env.USER } : {}),
+      ...(process.env.LOGNAME ? { LOGNAME: process.env.LOGNAME } : {}),
     };
 
     const child = spawn(fullArgv[0]!, fullArgv.slice(1), {
