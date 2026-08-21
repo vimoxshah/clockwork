@@ -76,6 +76,20 @@ export const api = {
   patchTask: (id: string, p: unknown) => req<TaskViewT>('PATCH', `/tasks/${id}`, p),
   deleteTask: (id: string) => req<{ deleted: boolean }>('DELETE', `/tasks/${id}`),
   runNow: (id: string) => req<{ runId: string }>('POST', `/tasks/${id}/run-now`),
+  queue: () =>
+    req<Array<{ runId: string; taskId: string; name: string; position: number; reason: string }>>(
+      'GET',
+      '/queue',
+    ),
+  onboardingStatus: () =>
+    req<{
+      claudeInstalled: boolean;
+      claudeAuthed: boolean;
+      gitInstalled: boolean;
+      mcpDetected: boolean;
+      hasTasks: boolean;
+      readyToBook: boolean;
+    }>('GET', '/onboarding/status'),
   runs: (filter: { state?: string; taskId?: string; limit?: number } = {}) => {
     const qs = new URLSearchParams();
     if (filter.state) qs.set('state', filter.state);

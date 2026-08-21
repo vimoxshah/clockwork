@@ -65,7 +65,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
   app.addHook('onRequest', async (req, reply) => {
     const url = (req.raw.url ?? '').split('?')[0]!;
     const needsAuth =
-      /^\/(tasks|runs|approvals|profiles|search|widget|pause-all|resume|capacity)/.test(url) ||
+      /^\/(tasks|runs|approvals|profiles|search|widget|queue|onboarding|pause-all|resume|capacity)/.test(url) ||
       url.startsWith('/events');
     if (!needsAuth) return; // /health + static UI assets carry no user data
     // SSE handled via query param (EventSource cannot set headers)
@@ -433,6 +433,73 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     deps.scheduler.start();
     broadcast({ type: 'daemon.health', data: { paused: false }, at: Date.now() });
     return { paused: false };
+  });
+
+  // ---- queue lane (FR-6): waiting items with position + reason ----
+  app.get('/queue', async () => {
+    const rows = deps.db
+      .prepare(
+        `SELECT r.id, r.task_id, r.scheduled_for, r.jobspec_json FROM runs r WHERE r.state='queued' ORDER BY COALESCE(r.scheduled_for, r.state_changed_at) ASC`,
+      )
+      .all() as unknown as Array<{ id: string; task_id: string; scheduled_for: number | null; jobspec_json: string }>;
+    const active = deps.runManager.countActive();
+    const maxParallel = 2;
+    let position = 0;
+    return rows.map((r) => {
+      position++;
+      const spec = JSON.parse(r.jobspec_json ?? '{}');
+      const repoBusy =
+        spec.repoPath &&
+        (deps.db
+          .prepare(`SELECT COUNT(*) c FROM runs WHERE id != ? AND jobspec_json LIKE ? AND state IN ('preparing','running','waiting_approval','finalizing')`)
+          .get(r.id, `%${spec.repoPath}%`) as any).c > 0;
+      const reason =
+        repoBusy ? 'waiting for repo'
+        : active + position > maxParallel ? 'waiting for slot'
+        : paused ? 'paused'
+        : 'starting soon';
+      return {
+        runId: r.id,
+        taskId: r.task_id,
+        name: spec.taskName ?? '(task)',
+        position,
+        reason,
+      };
+    });
+  });
+
+  // ---- onboarding (FR-21): environment detection ----
+  app.get('/onboarding/status', async () => {
+    const { existsSync } = await import('node:fs');
+    const { execFileSync } = await import('node:child_process');
+    const home = process.env.HOME ?? '';
+    const claudeOk = (() => {
+      try {
+        execFileSync('claude', ['--version'], { encoding: 'utf8', timeout: 8000 });
+        return true;
+      } catch {
+        return false;
+      }
+    })();
+    const authOk = existsSync(`${home}/.claude/.credentials.json`);
+    const gitOk = (() => {
+      try {
+        execFileSync('git', ['--version'], { encoding: 'utf8', timeout: 5000 });
+        return true;
+      } catch {
+        return false;
+      }
+    })();
+    const mcpConfigured = existsSync(`${home}/.claude.json`);
+    const hasTasks = (deps.db.prepare('SELECT COUNT(*) c FROM tasks WHERE deleted_at IS NULL').get() as any).c > 0;
+    return {
+      claudeInstalled: claudeOk,
+      claudeAuthed: authOk,
+      gitInstalled: gitOk,
+      mcpDetected: mcpConfigured,
+      hasTasks,
+      readyToBook: claudeOk && authOk && gitOk,
+    };
   });
 
   // ---- SSE ----

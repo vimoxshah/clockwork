@@ -108,6 +108,7 @@ export default function App(): JSX.Element {
         </div>
       </header>
       <main className="main">
+        <OnboardingGate />
         {tab === 'calendar' && <CalendarView />}
         {tab === 'inbox' && <InboxView />}
         {tab === 'tasks' && <TasksView />}
@@ -115,6 +116,33 @@ export default function App(): JSX.Element {
         {tab === 'settings' && <SettingsView />}
       </main>
     </>
+  );
+}
+
+/** FR-21: first-run environment detection + sample task guidance. */
+function OnboardingGate(): JSX.Element | null {
+  const [status, setStatus] = useState<Awaited<ReturnType<typeof api.onboardingStatus>> | null>(null);
+  const [dismissed, setDismissed] = useState(false);
+  useEffect(() => {
+    void api.onboardingStatus().then(setStatus).catch(() => {});
+  }, []);
+  if (!status || dismissed || status.hasTasks) return null;
+  return (
+    <div className="form-card" style={{ marginBottom: 18, background: 'var(--panel)', borderRadius: 10, padding: '12px 16px' }}>
+      <strong>Welcome to Clockwork</strong>
+      <p className="hint" style={{ margin: '6px 0' }}>
+        Runs execute when this Mac is awake — for overnight jobs, plug in or use an always-on machine.
+      </p>
+      <ul style={{ margin: 0, paddingLeft: 18, color: 'var(--ink-mut)', fontSize: 13 }}>
+        <li>{status.claudeInstalled ? '✅' : '❌'} Claude Code installed {status.claudeInstalled ? '' : '— install the claude CLI and log in once'}</li>
+        <li>{status.claudeAuthed ? '✅' : '⚠️'} Claude auth detected {status.claudeAuthed ? '(subscription login — no API key needed)' : '(run `claude` interactively once to authenticate)'}</li>
+        <li>{status.gitInstalled ? '✅' : '❌'} git available</li>
+        <li>{status.mcpDetected ? 'ℹ️' : 'ℹ️'} MCP config {status.mcpDetected ? 'detected (per-task allow-lists in composer)' : 'not found (optional)'}</li>
+      </ul>
+      <button className="btn" style={{ marginTop: 8 }} onClick={() => setDismissed(true)}>
+        Got it
+      </button>
+    </div>
   );
 }
 
@@ -334,15 +362,41 @@ function chipClass(state: string): string {
   return '';
 }
 
-// ---------- Tasks (FR-5 management surface) ----------
+// ---------- Tasks (FR-5/FR-6 management surface) ----------
 function TasksView(): JSX.Element {
   const [tasks, setTasks] = useState<TaskViewT[]>([]);
+  const [queue, setQueue] = useState<Array<{ runId: string; name: string; position: number; reason: string }>>([]);
   const load = (): void => {
     void api.tasks().then(setTasks).catch(() => {});
+    void api.queue().then(setQueue).catch(() => {});
   };
   useEffect(load, []);
   return (
     <div style={{ maxWidth: 760 }}>
+      {queue.length > 0 && (
+        <div style={{ marginBottom: 18 }}>
+          <h3 style={{ margin: '0 0 8px' }}>Queue</h3>
+          {queue.map((q) => (
+            <div key={q.runId} className="tasklist-row" data-testid={`queue-${q.position}`}>
+              <span className="chip running">#{q.position}</span>
+              <div className="grow">
+                <strong>{q.name}</strong>
+                <div className="hint" style={{ margin: 0 }}>{q.reason}</div>
+              </div>
+              <button
+                className="btn danger"
+                onClick={async () => {
+                  await api.cancelRun(q.runId);
+                  load();
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <h3 style={{ margin: '0 0 8px' }}>Tasks</h3>
       {tasks.length === 0 && <div className="empty">No tasks yet.</div>}
       {tasks.map((t) => (
         <div key={t.id} className="tasklist-row">

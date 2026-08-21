@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Clockwork — the calendar where your agents show up for work</title>
+<style>
+  :root { --ground:#0c0e14; --panel:#141824; --brass:#e8a33d; --ink:#e9ebf3; --mut:#9ba1b6; --dim:#6a7189; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--ground); color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,sans-serif; line-height:1.6; }
+  .wrap { max-width:760px; margin:0 auto; padding:64px 24px; }
+  h1 { font-size:34px; letter-spacing:.14em; margin:0 0 8px; font-weight:600; }
+  h1 b { color:var(--brass); font-weight:600; }
+  .sub { color:var(--mut); font-size:19px; margin-bottom:36px; }
+  .card { background:var(--panel); border-radius:14px; padding:26px; margin:18px 0; }
+  .card h3 { margin-top:0; }
+  ul { color:var(--mut); padding-left:20px; }
+  li { margin:6px 0; }
+  .honest { border-left:3px solid var(--brass); padding:10px 16px; color:var(--dim); font-size:14px; background:#11141d; border-radius:0 8px 8px 0; }
+  input, textarea { width:100%; background:#1a1f2e; color:var(--ink); border:1px solid #2a3247; border-radius:8px; padding:10px 12px; font-size:15px; margin:6px 0; }
+  button { background:var(--brass); color:#14100a; font-weight:700; border:none; border-radius:9px; padding:12px 22px; font-size:15px; cursor:pointer; }
+  .fineprint { color:var(--dim); font-size:12.5px; margin-top:14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>CLOCK<b>WORK</b></h1>
+  <p class="sub">The calendar where your agents show up for work.</p>
+
+  <div class="card">
+    <h3>You already pay for a coding agent. It idles 18+ hours a day.</h3>
+    <p style="color:var(--mut)">Clockwork lets you <strong>book</strong> agent jobs on a calendar:
+    pick a time, describe the chore, set a budget. At that hour your own Claude Code runs
+    the job in an isolated sandbox and files a report you can actually read — branch,
+    diffstat, cost, transcript.</p>
+    <ul>
+      <li><strong>Recurring chores, gone.</strong> Dependency triage every Monday. Flaky-test sweep every Wednesday. Docs drift check every Friday.</li>
+      <li><strong>Trustworthy unattended execution.</strong> OS-sandboxed per run, writes locked to its worktree, SSH keys unreadable, hard budget caps, never commits to main.</li>
+      <li><strong>Reports worth reading.</strong> What it did, what it skipped and why, what it cost — in your inbox, searchable forever.</li>
+      <li><strong>No new account, no API key.</strong> It drives the Claude Code login you already have.</li>
+    </ul>
+  </div>
+
+  <div class="honest">
+    ⏾ <strong>The honest constraint:</strong> jobs run when your machine is awake.
+    Clockwork keeps a laptop awake through booked windows when plugged in and tells you
+    loudly when sleep caused a miss — but if you want true overnight runs, use an
+    always-on machine. We'd rather tell you now than disappoint you at 2am.
+  </div>
+
+  <div class="card">
+    <h3>Join the waitlist</h3>
+    <p style="color:var(--mut);margin-top:0">We're building this for people who feel the chore pain weekly.
+    Tell us yours — it shapes what ships first.</p>
+    <!-- T-012: point form action at your waitlist backend / Tally / Formspree before driving traffic -->
+    <form data-waitlist>
+      <input type="email" name="email" placeholder="you@dev.com" required />
+      <textarea name="use_case" rows="3" placeholder="What recurring job would you schedule THIS WEEK? Be specific." required></textarea>
+      <button type="submit">Request an invite</button>
+      <p class="fineprint">macOS first. Free during the beta. We read every answer.</p>
+    </form>
+  </div>
+</div>
+<script>
+  // Smoke-test instrumentation (T-012): visitor → waitlist-with-use-case conversion ≥5% on ≥300 visitors.
+  document.querySelector('[data-waitlist]')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const email = f.email.value.trim();
+    const useCase = f.use_case.value.trim();
+    if (!email || !useCase) return;
+    // Replace with real endpoint. Local dev logs to console + localStorage for manual counting.
+    const leads = JSON.parse(localStorage.getItem('cw-leads') || '[]');
+    leads.push({ at: Date.now(), email, useCase });
+    localStorage.setItem('cw-leads', JSON.stringify(leads));
+    f.innerHTML = '<p style="color:var(--brass)">You\'re in. Watch your inbox.</p>';
+  });
+</script>
+</body>
+</html>
