@@ -39,6 +39,8 @@ export interface CliRunnerOptions {
   diskFloorBytes?: number;
   /** injectable clock for tests */
   now?: () => number;
+  /** override SIGTERM→SIGKILL grace for tests (default 30s per S-13) */
+  graceMs?: number;
 }
 
 interface LiveRun {
@@ -47,15 +49,18 @@ interface LiveRun {
   pgid: number;
   startedAtMs: number;
   aborted: boolean;
+  abortReason?: 'cancel' | 'timeout' | 'budget' | 'turns';
 }
 
 export class ClaudeCliRunner implements AgentRunner {
   readonly engine = 'cli' as const;
   private live: LiveRun | null = null;
   private readonly bin: string;
+  private readonly graceMs: number;
 
   constructor(private readonly opts: CliRunnerOptions = {}) {
     this.bin = opts.claudeBin ?? 'claude';
+    this.graceMs = opts.graceMs ?? GRACE_MS;
   }
 
   /** R-2: record CLI version per run for the contract matrix trail. */
@@ -165,11 +170,12 @@ export class ClaudeCliRunner implements AgentRunner {
     const timeoutTimer = setTimeout(() => {
       if (this.live && !this.live.aborted) {
         this.live.aborted = true;
+        this.live.abortReason = 'timeout';
         writeJournal(journalPath, { at: now(), kind: 'timeout_sigterm' });
         killGroup(pgid, 'SIGTERM');
         setTimeout(() => {
           if (this.live?.aborted) killGroup(pgid, 'SIGKILL');
-        }, GRACE_MS);
+        }, this.graceMs);
       }
     }, job.budget.timeoutSec * 1000);
 
@@ -178,10 +184,11 @@ export class ClaudeCliRunner implements AgentRunner {
       () => {
         if (this.live) {
           this.live.aborted = true;
+          this.live.abortReason = 'cancel';
           killGroup(pgid, 'SIGTERM');
           setTimeout(() => {
             if (this.live?.aborted) killGroup(pgid, 'SIGKILL');
-          }, GRACE_MS);
+          }, this.graceMs);
         }
       },
       { once: true },
@@ -200,10 +207,12 @@ export class ClaudeCliRunner implements AgentRunner {
           ctx.io.onHeartbeat();
           if (guard.observe(usageDelta.costUsd, usageDelta.turns) && this.live && !this.live.aborted) {
             this.live.aborted = true;
+            this.live.abortReason =
+              guard.snapshot.stopped === 'max_turns' ? 'turns' : 'budget';
             killGroup(pgid, 'SIGTERM');
             setTimeout(() => {
               if (this.live?.aborted) killGroup(pgid, 'SIGKILL');
-            }, GRACE_MS);
+            }, this.graceMs);
           }
         }
       };
@@ -238,81 +247,46 @@ export class ClaudeCliRunner implements AgentRunner {
         clearTimeout(timeoutTimer);
         guard.finalize(acc.totalCostUsd);
 
-        if (diskFullStop) {
-          resolve({
-            state: 'failed',
-            failureReason: 'disk_full',
-            sessionId: acc.sessionId,
-            summary: acc.lastResult ?? '',
-            transcriptPath: `${journalPath}.stdout`,
-            artifacts: [],
-            costUsd: acc.totalCostUsd,
-            turns: acc.turns,
-          });
-          return;
-        }
-        if (this.live?.aborted || signal) {
-          resolve({
-            state: 'cancelled',
-            sessionId: acc.sessionId,
-            summary: acc.lastResult ?? '',
-            transcriptPath: `${journalPath}.stdout`,
-            artifacts: [],
-            costUsd: acc.totalCostUsd,
-            turns: acc.turns,
-          });
-          return;
-        }
+        const base = {
+          sessionId: acc.sessionId,
+          summary: acc.lastResult ?? '',
+          transcriptPath: `${journalPath}.stdout`,
+          artifacts: [] as string[],
+        };
 
-        if (acc.lastError) {
-          resolve({
-            state: 'failed',
-            failureReason: acc.lastError.class === 'other' ? 'internal' : acc.lastError.class,
-            sessionId: acc.sessionId,
-            summary: acc.lastResult ?? '',
-            transcriptPath: `${journalPath}.stdout`,
-            artifacts: [],
-            costUsd: acc.totalCostUsd,
-            turns: acc.turns,
-          });
+        if (diskFullStop) {
+          resolve({ ...base, state: 'failed', failureReason: 'disk_full', costUsd: acc.totalCostUsd, turns: acc.turns });
+          return;
+        }
+        if (this.live?.aborted && this.live.abortReason === 'timeout') {
+          resolve({ ...base, state: 'timed_out', costUsd: acc.totalCostUsd, turns: acc.turns }); // S-13
           return;
         }
         if (guard.snapshot.stopped === 'max_turns') {
-          resolve({
-            state: 'failed',
-            failureReason: 'max_turns',
-            sessionId: acc.sessionId,
-            summary: acc.lastResult ?? '',
-            transcriptPath: `${journalPath}.stdout`,
-            artifacts: [],
-            costUsd: acc.totalCostUsd,
-            turns: acc.turns,
-          });
+          // guard counts = enforcement point; trailing grace-window events excluded
+          resolve({ ...base, state: 'failed', failureReason: 'max_turns', costUsd: guard.snapshot.costUsd, turns: guard.snapshot.turns });
           return;
         }
         if (guard.snapshot.stopped === 'budget_exceeded') {
+          resolve({ ...base, state: 'budget_exceeded', costUsd: acc.totalCostUsd /* incl. overshoot */, turns: guard.snapshot.turns });
+          return;
+        }
+        if ((this.live?.aborted && this.live.abortReason === 'cancel') || signal) {
+          resolve({ ...base, state: 'cancelled', costUsd: acc.totalCostUsd, turns: acc.turns });
+          return;
+        }
+        if (acc.lastError) {
           resolve({
-            state: 'budget_exceeded',
-            sessionId: acc.sessionId,
-            summary: acc.lastResult ?? '',
-            transcriptPath: `${journalPath}.stdout`,
-            artifacts: [],
+            ...base,
+            state: 'failed',
+            failureReason: acc.lastError.class === 'other' ? 'internal' : acc.lastError.class,
             costUsd: acc.totalCostUsd,
             turns: acc.turns,
           });
           return;
         }
         if (code !== 0) {
-          resolve({
-            state: 'failed',
-            failureReason: 'runner_crashed',
-            sessionId: acc.sessionId,
-            summary: acc.lastResult ?? '',
-            transcriptPath: `${journalPath}.stdout`,
-            artifacts: [],
-            costUsd: acc.totalCostUsd,
-            turns: acc.turns,
-          });
+          resolve({ ...base, state: 'failed', failureReason: 'runner_crashed', costUsd: acc.totalCostUsd, turns: acc.turns });
           return;
         }
         writeJournal(journalPath, { at: now(), kind: 'done' });
@@ -338,10 +312,11 @@ export class ClaudeCliRunner implements AgentRunner {
     void sessionRef;
     if (this.live) {
       this.live.aborted = true;
+      this.live.abortReason = 'cancel';
       killGroup(this.live.pgid, 'SIGTERM');
       setTimeout(() => {
         if (this.live?.aborted) killGroup(this.live.pgid, 'SIGKILL');
-      }, GRACE_MS);
+      }, this.graceMs);
     }
   }
 }
