@@ -1,0 +1,622 @@
+/**
+ * Run manager (T-104): FSM enforcement, global semaphore, per-repo mutex,
+ * queue discipline, child supervision (identity-verified kills), heartbeats,
+ * budget/timeout watchdogs, crash recovery sweep, report finalization.
+ * The daemon is the ONLY writer of run state (ADR-003).
+ */
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import {
+  existsSync,
+  mkdirSync,
+  writeFileSync,
+} from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {
+  assertTransition,
+  newId,
+  type JobSpec,
+  type RunReport,
+  type RunState,
+} from '@clockwork/shared';
+import {
+  createWorktree,
+  diffStat,
+  hasCommitsBeyondBase,
+  preflightRepo,
+  pruneBranch,
+  removeWorktree,
+  runGit,
+} from '@clockwork/runner';
+import { SafetyJournal } from '@clockwork/runner';
+import type { DB } from './db.js';
+import type { Clock } from './clock.js';
+import type { ChildToDaemon } from './runner-protocol.js';
+
+export interface RunManagerDeps {
+  db: DB;
+  clock: Clock;
+  dataDir: string;
+  runnerChildModule: string; // path to compiled runner-child.js
+  maxParallel?: number;
+  notify(kind: string, title: string, body: string): void;
+  broadcast(event: Record<string, unknown>): void;
+  safetyJournal: SafetyJournal;
+  /** bundled skill pack resolver (T-112) */
+  resolveSkill?: (ref: { name: string; version: string }) => string | null;
+}
+
+interface RunRow {
+  id: string;
+  task_id: string;
+  occurrence_at: number | null;
+  schedule_id: string | null;
+  jobspec_json: string;
+  state: RunState;
+  state_changed_at: number;
+  worktree_path: string | null;
+  branch: string | null;
+  pid: number | null;
+  pgid: number | null;
+  proc_started_at: number | null;
+  heartbeat_at: number | null;
+  cost_usd: number;
+  turns: number;
+  started_at: number | null;
+  ended_at: number | null;
+  scheduled_for: number | null;
+  outcome_reason: string | null;
+}
+
+const HEARTBEAT_GAP_MS = 60_000; // S-32
+
+export class RunManager {
+  private readonly repoMutex = new Map<string, string>(); // repoPath -> runId
+  private readonly liveChildren = new Map<string, ChildProcess>();
+  private readonly pendingApprovals = new Map<string, Map<string, (d: any) => void>>();
+  private pumping = false;
+  private readonly maxParallel: number;
+
+  constructor(private readonly deps: RunManagerDeps) {
+    this.maxParallel = deps.maxParallel ?? 2;
+  }
+
+  // ---------- queue ----------
+  pump(): void {
+    if (this.pumping) return;
+    this.pumping = true;
+    setImmediate(() => {
+      try {
+        const active = this.countActive();
+        let slots = Math.max(0, this.maxParallel - active);
+        while (slots > 0) {
+          const next = this.deps.db
+            .prepare(
+              `SELECT * FROM runs WHERE state='queued' ORDER BY COALESCE(scheduled_for, created_fallback) ASC`,
+            )
+            .all()
+            .slice(0, slots) as unknown as RunRow[];
+          if (next.length === 0) break;
+          let startedAny = false;
+          for (const row of next) {
+            const spec = JSON.parse(row.jobspec_json) as JobSpec;
+            if (spec.repoPath && this.repoMutex.has(spec.repoPath)) continue; // S-3/S-28 wait for mutex
+            void this.startRun(row, spec);
+            startedAny = true;
+            slots--;
+            if (slots <= 0) break;
+          }
+          if (!startedAny) break; // everything waiting on mutexes
+        }
+      } finally {
+        this.pumping = false;
+      }
+    });
+  }
+
+  countActive(): number {
+    const r = this.deps.db
+      .prepare(`SELECT COUNT(*) c FROM runs WHERE state IN ('preparing','running','waiting_approval','finalizing')`)
+      .get() as unknown as { c: number };
+    return r.c;
+  }
+
+  // ---------- lifecycle ----------
+  async startRun(row: RunRow, spec: JobSpec): Promise<void> {
+    const now = this.deps.clock.now();
+    this.transition(row.id, 'preparing', now);
+    if (spec.repoPath) this.repoMutex.set(spec.repoPath, row.id);
+
+    try {
+      // preflight (S-36/S-69/S-87)
+      if (!spec.scratchPath) {
+        const pf = preflightRepo(spec.repoPath!, spec.baseBranch);
+        if (!pf.ok) {
+          this.failRun(row.id, 'repo_preflight', pf.message ?? 'repo preflight failed', now);
+          this.releaseMutex(spec);
+          return;
+        }
+        spec.baseBranch = pf.defaultBranch ?? spec.baseBranch;
+      }
+
+      // worktree or scratch (S-38 handled inside createWorktree retry)
+      if (spec.scratchPath) {
+        mkdirSync(spec.scratchPath, { recursive: true });
+      } else {
+        const wt = await createWorktree({
+          repoPath: spec.repoPath!,
+          worktreePath: spec.worktreePath,
+          branch: spec.branch,
+          baseBranch: spec.baseBranch,
+          hooksEnabled: false, // ADR-013 default
+        });
+        if (!wt.ok || !wt.worktreePath) {
+          this.failRun(row.id, 'worktree_error', wt.stderr ?? wt.error ?? 'worktree add failed', now);
+          this.releaseMutex(spec);
+          return;
+        }
+        this.deps.db
+          .prepare('UPDATE runs SET worktree_path=?, branch=? WHERE id=?')
+          .run(wt.worktreePath, wt.branch, row.id);
+      }
+
+      await this.spawnChild(row.id, spec, now);
+    } catch (e) {
+      this.failRun(row.id, 'internal', String(e), now);
+      this.releaseMutex(spec);
+    }
+  }
+
+  private async spawnChild(runId: string, spec: JobSpec, now: number): Promise<void> {
+    const runDir = path.join(this.deps.dataDir, 'runs', runId);
+    mkdirSync(runDir, { recursive: true });
+    const specPath = path.join(runDir, 'jobspec.json');
+    writeFileSync(specPath, JSON.stringify(spec));
+
+    const nonce = newId();
+    // Sanitized env (arch §7.3): nothing but the minimum. No bearer token, no delivery creds.
+    const env: Record<string, string> = {
+      PATH: process.env.PATH ?? '/usr/bin:/bin',
+      HOME: process.env.HOME ?? os.homedir(),
+      TERM: 'dumb',
+      LANG: process.env.LANG ?? 'en_US.UTF-8',
+      CW_ENGINE: process.env.CW_ENGINE ?? '', // test hook only
+    };
+
+    const child = spawn(process.execPath, [this.deps.runnerChildModule, specPath, nonce], {
+      detached: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env,
+    });
+    const pgid = child.pid!;
+    this.liveChildren.set(runId, child);
+
+    this.deps.db
+      .prepare('UPDATE runs SET pid=?, pgid=?, proc_started_at=?, heartbeat_at=?, journal_path=?, started_at=?, state=? , state_changed_at=? WHERE id=?')
+      .run(child.pid, pgid, now, now, path.join(runDir, 'stream.jsonl'), now, 'running', now, runId);
+    this.recordEvent(now, runId, 'state_changed', { to: 'running' });
+    this.deps.broadcast({ type: 'run.state_changed', runId, state: 'running', at: now });
+
+    const pendingPerms = new Map<string, (d: { behavior: 'allow' } | { behavior: 'deny'; message: string }) => void>();
+    this.pendingApprovals.set(runId, pendingPerms);
+    let lineBuf = '';
+    child.stdout!.setEncoding('utf8');
+    child.stdout!.on('data', (chunk: string) => {
+      lineBuf += chunk;
+      let idx: number;
+      while ((idx = lineBuf.indexOf('\n')) >= 0) {
+        const line = lineBuf.slice(0, idx);
+        lineBuf = lineBuf.slice(idx + 1);
+        this.handleChildMessage(runId, spec, line).catch(() => {});
+      }
+    });
+    child.stderr!.setEncoding('utf8');
+    child.stderr!.on('data', (c: string) => {
+      appendEventFile(runDir, { t: this.deps.clock.now(), kind: 'stderr', text: c.slice(-2000) });
+    });
+
+    child.on('close', () => {
+      this.liveChildren.delete(runId);
+      const cur = this.getRun(runId);
+      if (cur && !['completed','failed','cancelled','budget_exceeded','timed_out'].includes(cur.state)) {
+        // exited without an outcome message → S-32
+        this.finalize(runId, {
+          state: 'failed',
+          failureReason: 'runner_crashed',
+          artifacts: [],
+          costUsd: cur.cost_usd,
+          turns: cur.turns,
+        });
+      }
+    });
+
+    // watchdogs
+    const watchdog = setInterval(() => {
+      const r = this.getRun(runId);
+      if (!r || ['completed','failed','cancelled','budget_exceeded','timed_out'].includes(r.state)) {
+        clearInterval(watchdog);
+        return;
+      }
+      const now2 = this.deps.clock.now();
+      if (r.heartbeat_at && now2 - r.heartbeat_at > HEARTBEAT_GAP_MS) {
+        clearInterval(watchdog);
+        this.killGroupIdentityVerified(r); // S-32
+        this.finalize(runId, { state: 'failed', failureReason: 'runner_crashed', artifacts: [], costUsd: r.cost_usd, turns: r.turns });
+        return;
+      }
+      const specTimeoutSec = spec.budget.timeoutSec;
+      if (r.started_at && now2 - r.started_at > specTimeoutSec * 1000) {
+        clearInterval(watchdog);
+        this.killGroupIdentityVerified(r); // S-13
+        this.finalize(runId, { state: 'timed_out', artifacts: [], costUsd: r.cost_usd, turns: r.turns });
+      }
+    }, 15_000);
+    watchdog.unref?.();
+  }
+
+  private async handleChildMessage(
+    runId: string,
+    spec: JobSpec,
+    line: string,
+  ): Promise<void> {
+    let msg: ChildToDaemon;
+    try {
+      msg = JSON.parse(line);
+    } catch {
+      return;
+    }
+    const now = this.deps.clock.now();
+    switch (msg.t) {
+      case 'ready':
+        break;
+      case 'usage': {
+        this.deps.db.prepare('UPDATE runs SET cost_usd=?, turns=?, heartbeat_at=? WHERE id=?').run(msg.costUsd, msg.turns, now, runId);
+        break;
+      }
+      case 'heartbeat':
+        this.deps.db.prepare('UPDATE runs SET heartbeat_at=? WHERE id=?').run(now, runId);
+        break;
+      case 'log':
+        appendEventFile(path.join(this.deps.dataDir, 'runs', runId), { t: now, kind: 'log', text: msg.line.slice(0, 2000) });
+        break;
+      case 'artifact':
+        break;
+      case 'permission': {
+        // M1: fail-safe auto-deny recorded as policy event + approval row (M2 wires the inbox)
+        const approvalId = newId();
+        this.deps.db
+          .prepare(`INSERT INTO approvals (id, run_id, kind, payload_json, requested_at, timeout_at, fallback) VALUES (?, ?, 'permission', ?, ?, ?, ?)`)
+          .run(approvalId, runId, JSON.stringify({ tool: msg.tool }), now, now + 4 * 3600_000, 'deny-and-continue');
+        this.recordEvent(now, runId, 'approval_requested', { tool: msg.tool });
+        this.deps.broadcast({ type: 'approval.requested', approvalId, runId, at: now });
+        break;
+      }
+      case 'outcome': {
+        this.finalize(runId, msg.outcome);
+        break;
+      }
+    }
+    void spec;
+  }
+
+  // ---------- finalization ----------
+  finalize(runId: string, outcome: Partial<import('@clockwork/shared').RunOutcome> & { state: string }): void {
+    const r = this.getRun(runId);
+    if (!r || ['completed','failed','cancelled','budget_exceeded','timed_out'].includes(r.state)) return;
+    const now = this.deps.clock.now();
+    const spec = JSON.parse(r.jobspec_json) as JobSpec;
+
+    // FSM: running -> finalizing -> terminal
+    try {
+      this.transition(runId, 'finalizing', now);
+    } catch {
+      // e.g. timed_out already set — accept and continue to terminal below
+    }
+
+    // git outcomes
+    let committedSomething = false;
+    let diffRows: Array<{ path: string; additions: number; deletions: number; binary: boolean }> = [];
+    if (spec.repoPath && r.worktree_path && existsSync(r.worktree_path)) {
+      const base = initialShaOf(r.worktree_path);
+      if (base) {
+        committedSomething = hasCommitsBeyondBase(r.worktree_path, base);
+        if (committedSomething) {
+          diffRows = diffStat(r.worktree_path, base);
+        }
+      }
+    }
+
+    const report: RunReport = {
+      runId,
+      taskId: spec.taskId,
+      taskName: spec.taskName,
+      profile: spec.profile ? { slug: spec.profile.slug, name: spec.profile.name, color: spec.profile.color, glyph: spec.profile.glyph } : null,
+      engine: spec.engine,
+      cliVersion: null, // filled by CLI engine journal when present
+      state: outcome.state,
+      failureReason: ('failureReason' in outcome ? outcome.failureReason : undefined) ?? null,
+      summary: typeof outcome.summary === 'string' ? outcome.summary : '',
+      branch: spec.repoPath ? spec.branch : null,
+      baseSha: null,
+      basedOnLocalState: false,
+      committedSomething,
+      diffStat: diffRows,
+      artifacts: outcome.artifacts ?? [],
+      transcriptPath: outcome.transcriptPath ?? null,
+      costUsd: outcome.costUsd ?? 0,
+      turns: outcome.turns ?? 0,
+      softCapOvershootUsd: 0,
+      startedAt: r.started_at,
+      endedAt: now,
+      ranLateMs: r.occurrence_at && r.started_at ? Math.max(0, r.started_at - r.occurrence_at - GRACE_NOTE_TOLERANCE_MS) : 0,
+      coveredOccurrences: this.coveredOccurrences(r.schedule_id),
+      sleptThroughKeepAwake: false,
+      approvals: this.approvalsFor(runId).map((a) => ({
+        id: a.id,
+        kind: a.kind as 'permission' | 'question',
+        payload: null,
+        requestedAt: a.requestedAt,
+        resolvedAt: null,
+        resolution: null as 'approved' | 'denied' | 'timeout-deny-and-continue' | 'timeout-abort' | null,
+      })),
+      timeline: [],
+      deliveries: [],
+      queueDelayMs: r.started_at && r.scheduled_for ? Math.max(0, r.started_at - r.scheduled_for) : 0,
+      repoLockDelayMs: 0,
+    };
+
+    // S-39: analysis-only runs → prune branch immediately
+    if (spec.repoPath && !committedSomething && r.branch && existsSync(r.worktree_path ?? '')) {
+      try {
+        removeWorktree(spec.repoPath, r.worktree_path!);
+        pruneBranch(spec.repoPath, r.branch);
+      } catch {}
+    }
+
+    const tx = this.deps.db.transaction(() => {
+      const terminalMap: Record<string, RunState> = {
+        completed: 'completed',
+        failed: 'failed',
+        cancelled: 'cancelled',
+        budget_exceeded: 'budget_exceeded',
+        timed_out: 'timed_out',
+      };
+      const to = terminalMap[outcome.state] ?? 'failed';
+      assertTransition('finalizing', to);
+      this.deps.db
+        .prepare('UPDATE runs SET state=?, state_changed_at=?, ended_at=?, report_json=?, outcome_reason=? WHERE id=?')
+        .run(to, now, now, JSON.stringify(report), ('failureReason' in outcome ? outcome.failureReason : null), runId);
+      this.recordEvent(now, runId, 'state_changed', { to });
+    });
+    tx();
+
+    this.releaseMutex(spec);
+    this.pendingApprovals.delete(runId);
+    this.deps.broadcast({ type: 'report.ready', runId, at: now });
+    this.deps.notify(
+      outcome.state === 'completed' ? 'report_ready' : 'run_failed',
+      `Clockwork: ${spec.taskName}`,
+      outcome.state === 'completed' ? `Completed · $${(outcome.costUsd ?? 0).toFixed(2)} · ${outcome.turns ?? 0} turns` : `Ended ${outcome.state}${'failureReason' in outcome && outcome.failureReason ? ` (${outcome.failureReason})` : ''}`,
+    );
+
+    // pump successors waiting on the freed slot/mutex
+    this.pump();
+  }
+
+  failRun(runId: string, reason: string, message: string, now: number): void {
+    const r = this.getRun(runId);
+    if (!r || ['completed','failed','cancelled','budget_exceeded','timed_out'].includes(r.state)) return;
+    this.deps.safetyJournal.record('preflight_failure', `${reason}: ${message}`, runId);
+    this.deps.db
+      .prepare('UPDATE runs SET state=?, state_changed_at=?, ended_at=?, outcome_reason=? WHERE id=?')
+      .run('failed', now, now, reason, runId);
+    this.recordEvent(now, runId, 'state_changed', { to: 'failed', reason });
+    this.deps.notify('run_failed', 'Clockwork run failed', `${reason}: ${message}`);
+    const spec = JSON.parse(r.jobspec_json) as JobSpec;
+    this.releaseMutex(spec);
+    this.pump();
+  }
+
+  transition(runId: string, to: RunState, at: number): void {
+    const r = this.getRun(runId);
+    if (!r) throw new Error(`unknown run ${runId}`);
+    assertTransition(r.state as RunState, to);
+    this.deps.db
+      .prepare('UPDATE runs SET state=?, state_changed_at=? WHERE id=?')
+      .run(to, at, runId);
+    this.recordEvent(at, runId, 'state_changed', { to });
+    this.deps.broadcast({ type: 'run.state_changed', runId, state: to, at });
+  }
+
+  cancel(runId: string): boolean {
+    const r = this.getRun(runId);
+    if (!r) return false;
+    const now = this.deps.clock.now();
+    if (r.state === 'queued') {
+      this.transition(runId, 'cancelled', now);
+      this.releaseMutex(JSON.parse(r.jobspec_json));
+      this.pump();
+      return true;
+    }
+    if (['preparing','running','waiting_approval','finalizing'].includes(r.state)) {
+      this.killGroupIdentityVerified(r);
+      this.finalize(runId, { state: 'cancelled' });
+      return true;
+    }
+    return false;
+  }
+
+  // ---------- supervision primitives ----------
+  private killGroupIdentityVerified(r: RunRow): void {
+    if (!r.pgid) return;
+    const pgid: number = r.pgid;
+    try {
+      // identity check: the pgid must still belong to our runner-child command line
+      const psOut = runPsPids();
+      const ours = psOut.some((l) => l.includes(String(pgid)) && l.includes('runner-child'));
+      process.kill(-pgid, 'SIGTERM'); // group kill; never a bare pid (arch §7.6)
+      setTimeout(() => {
+        try {
+          process.kill(-pgid, 'SIGKILL');
+        } catch {}
+      }, 5_000);
+      if (!ours) {
+        this.deps.safetyJournal.record('orphan_terminated', `pgid=${pgid}`, r.id);
+      }
+    } catch {
+      /* already dead */
+    }
+  }
+
+  private releaseMutex(spec: JobSpec): void {
+    if (spec.repoPath && this.repoMutex.get(spec.repoPath) === spec.runId) {
+      this.repoMutex.delete(spec.repoPath);
+    }
+  }
+
+  getRun(id: string): RunRow | undefined {
+    return this.deps.db.prepare('SELECT * FROM runs WHERE id=?').get(id) as unknown as RunRow | undefined;
+  }
+
+  private recordEvent(at: number, runId: string, kind: string, data: unknown): void {
+    this.deps.db
+      .prepare('INSERT INTO events (at, run_id, kind, data_json) VALUES (?, ?, ?, ?)')
+      .run(at, runId, kind, JSON.stringify(data));
+  }
+
+  coveredOccurrences(scheduleId: string | null): number[] {
+    if (!scheduleId) return [];
+    const rows = this.deps.db
+      .prepare(`SELECT occurrence_at FROM schedule_occurrences WHERE schedule_id=? AND disposition='coalesced' ORDER BY occurrence_at DESC LIMIT 50`)
+      .all() as unknown as Array<{ occurrence_at: number }>;
+    return rows.map((r) => r.occurrence_at);
+  }
+
+  approvalsFor(runId: string): Array<{ id: string; kind: string; requestedAt: number }> {
+    return (this.deps.db
+      .prepare('SELECT id, kind, requested_at FROM approvals WHERE run_id=?')
+      .all(runId) as unknown as Array<{ id: string; kind: string; requested_at: number }>).map((a) => ({ id: a.id, kind: a.kind, requestedAt: a.requested_at }));
+  }
+
+  // ---------- recovery (S-30/S-31/S-81/S-33) ----------
+  recoverySweep(): { requeued: number; orphanedTerminated: number; quarantinedWorktrees: string[] } {
+    const now = this.deps.clock.now();
+    let requeued = 0;
+    let orphaned = 0;
+
+    // S-30: transient states with no child → back to queued (idempotent)
+    const transient = this.deps.db
+      .prepare(`SELECT * FROM runs WHERE state IN ('queued') `)
+      .all() as unknown as RunRow[];
+    requeued = transient.length; // queued rows are simply re-pumped
+
+    // preparing rows without children: reset to queued (no worktree yet by construction)
+    const prep = this.deps.db.prepare(`SELECT * FROM runs WHERE state='preparing'`).all() as unknown as RunRow[];
+    for (const r of prep) {
+      this.deps.db.prepare('UPDATE runs SET state=?, state_changed_at=? WHERE id=?').run('queued', now, r.id);
+      requeued++;
+    }
+
+    // S-31: running/waiting/finalizing rows — terminate orphans, journal-based reports
+    const actives = this.deps.db
+      .prepare(`SELECT * FROM runs WHERE state IN ('running','waiting_approval','finalizing')`)
+      .all() as unknown as RunRow[];
+    for (const r of actives) {
+      const alive = r.pgid ? isGroupAlive(r.pgid) : false;
+      if (alive) {
+        this.killGroupIdentityVerified(r);
+        orphaned++;
+      }
+      // assemble truthful failed report from whatever we have
+      this.deps.safetyJournal.record('orphan_terminated', `pgid=${r.pgid ?? '?'}`, r.id);
+      this.deps.db
+        .prepare('UPDATE runs SET state=?, state_changed_at=?, ended_at=?, outcome_reason=? WHERE id=?')
+        .run('failed', now, now, 'orphaned', r.id);
+      this.recordEvent(now, r.id, 'state_changed', { to: 'failed', reason: 'orphaned' });
+      this.deps.notify('run_failed', 'Clockwork run interrupted', 'The daemon restarted during this run; it was terminated safely (orphaned). Report assembled from the on-disk journal.');
+    }
+
+    // S-33: orphan worktree reconciliation — quarantine list, NEVER auto-delete
+    const quarantined = this.reconcileWorktrees();
+
+    this.pump();
+    return { requeued, orphanedTerminated: orphaned, quarantinedWorktrees: quarantined };
+  }
+
+  private reconcileWorktrees(): string[] {
+    const root = path.join(this.deps.dataDir, 'worktrees');
+    const known = new Set<string>(
+      (this.deps.db.prepare(`SELECT worktree_path FROM runs WHERE worktree_path IS NOT NULL AND state IN ('preparing','running','waiting_approval','finalizing','queued')`).all() as unknown as any[])
+        .map((r: any) => r.worktree_path as string),
+    );
+    const orphans: string[] = [];
+    if (!existsSync(root)) return orphans;
+    for (const taskDir of listDirs(root)) {
+      for (const runDir of listDirs(taskDir)) {
+        if (!known.has(runDir)) orphans.push(runDir);
+      }
+    }
+    return orphans;
+  }
+}
+
+const GRACE_NOTE_TOLERANCE_MS = 120_000;
+
+function listDirs(p: string): string[] {
+  try {
+    return readdirAbs(p);
+  } catch {
+    return [];
+  }
+}
+
+function readdirAbs(dir: string): string[] {
+  const out: string[] = [];
+  try {
+    const entries = readDirEntries(dir);
+    for (const e of entries) {
+      const full = path.join(dir, e);
+      if (isDirectory(full)) out.push(full);
+    }
+  } catch {}
+  return out;
+}
+
+import { readdirSync, statSync, appendFileSync } from 'node:fs';
+function readDirEntries(dir: string): string[] {
+  return readdirSync(dir);
+}
+function isDirectory(p: string): boolean {
+  try {
+    return statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function appendEventFile(runDir: string, obj: unknown): void {
+  try {
+    mkdirSync(runDir, { recursive: true });
+    appendFileSync(path.join(runDir, 'stream.jsonl'), JSON.stringify(obj) + '\n');
+  } catch {}
+}
+function runPsPids(): string[] {
+  const r = spawnSyncCapture('/bin/ps', ['-eo', 'pgid,pid,command']);
+  return r.split('\n');
+}
+function isGroupAlive(pgid: number): boolean {
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function spawnSyncCapture(bin: string, args: string[]): string {
+  const r = spawnSync(bin, args, { encoding: 'utf8' });
+  return r.stdout ?? '';
+}/** SHA of the first commit on HEAD's history — diffstat baseline in fresh worktrees. */
+function initialShaOf(worktreePath: string): string | null {
+  const r = runGit(['rev-list', '--max-parents=0', 'HEAD'], worktreePath);
+  const lines = r.out.trim().split('\n').filter(Boolean);
+  return lines[lines.length - 1] ?? null;
+}

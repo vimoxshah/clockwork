@@ -158,7 +158,7 @@ export function pruneBranch(repoPath: string, branch: string): void {
 }
 
 /** Diffstat for the report (FR-15): name-only + numstat vs merge-base. */
-export function diffStat(worktreePath: string, baseSha: string): Array<{ path: string; additions: number; deletions: number }> {
+export function diffStat(worktreePath: string, baseSha: string): Array<{ path: string; additions: number; deletions: number; binary: boolean }> {
   const r = runGit(['diff', '--numstat', baseSha], worktreePath);
   if (r.code !== 0) return [];
   return r.out

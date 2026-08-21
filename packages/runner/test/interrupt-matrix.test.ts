@@ -22,12 +22,6 @@ while [ $i -lt 100000 ]; do
 done
 `;
 
-function groupMembers(pgid: number): string[] {
-  const r = spawnSync('/bin/ps', ['-eo', 'pgid,pid,comm'], { encoding: 'utf8' });
-  if (r.status !== 0) return [];
-  return r.stdout.split('\n').filter((l) => l.trim().startsWith(`${pgid} `));
-}
-
 describe('T-002 interruption matrix', () => {
   let dir: string;
   let worktree: string;

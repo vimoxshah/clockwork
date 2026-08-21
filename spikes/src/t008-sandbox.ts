@@ -11,7 +11,6 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   generateSeatbeltProfile,
-  resolveReal,
 } from '../../packages/runner/src/sandbox.js';
 
 const OUT_DIR = path.resolve(import.meta.dirname, '../reports');

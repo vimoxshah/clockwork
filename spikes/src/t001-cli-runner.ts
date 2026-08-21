@@ -8,14 +8,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { spawn } from 'node:child_process';
-import {
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-  existsSync,
-  readFileSync,
-} from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fold, newAccumulator, parseStreamLine } from '../../packages/runner/src/stream-parser.js';

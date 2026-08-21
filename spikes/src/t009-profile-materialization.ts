@@ -4,7 +4,7 @@
  * Control run (no skill) vs treatment (skill loaded).
  * Output: spikes/reports/T009-profile-materialization.md
  */
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

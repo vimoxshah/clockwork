@@ -74,7 +74,17 @@ export function escapeForSeatbelt(s: string): string {
 
 export function generateSeatbeltProfile(spec: SandboxSpec): { profile: string; version: number } {
   const writeReal = [...new Set(spec.writePaths.map(resolveReal).filter((p): p is string => !!p))];
+  // Context roots are audited for credential collisions even though reads are
+  // platform-broad (ADR-023): a context root that IS a credential path is a
+  // misconfiguration worth refusing loudly.
   const readReal = [...new Set(spec.readPaths.map(resolveReal).filter((p): p is string => !!p))];
+  for (const r of readReal) {
+    for (const c of CREDENTIAL_PATHS) {
+      if (r === c || r.startsWith(c + path.sep)) {
+        throw new Error(`Refusing context root that resolves into a credential path: ${r}`);
+      }
+    }
+  }
 
   // A write path that resolves into a credential path is refused outright.
   for (const w of writeReal) {
