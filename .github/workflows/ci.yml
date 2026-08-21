@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  gauntlet:
+    runs-on: macos-14
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm lint
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Unit + scenario tests (runner, daemon)
+        run: pnpm test
+      - name: Build all packages
+        run: pnpm build
+      - name: Daemon boot smoke
+        run: |
+          node packages/daemon/dist/main.js &
+          sleep 3
+          curl -sf http://127.0.0.1:4747/health | grep -q '"ok":true'

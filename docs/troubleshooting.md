@@ -1,0 +1,60 @@
+# Troubleshooting
+
+## Daemon won't start / "single instance"
+
+Another clockworkd is running or the port is bound:
+
+```bash
+node packages/daemon/dist/cli.js doctor
+launchctl kickstart -k gui/$(id -u)/com.clockwork.daemon   # restart the service
+```
+
+A stale `~/.clockwork/daemon.lock` from a crashed daemon is detected and taken
+over automatically when the recorded pid is dead.
+
+## "Not logged in" / failed:auth
+
+Runs ride your Claude Code login. Open a terminal, run `claude`, log in once,
+then re-enable the task. After two consecutive auth failures Clockwork pauses
+the task and notifies you (S-40) — re-enable it after fixing auth.
+
+## A run didn't fire overnight
+
+The honest answer first: **runs execute only while the machine is awake.**
+Check the inbox for a missed-run report ("skipped — machine slept" or "ran Xm
+late"). Keep-awake arms when plugged in; closing the lid on battery defeats it.
+For true overnight jobs, use an always-on machine.
+
+## Run ended with budget_exceeded
+
+The USD soft cap is enforced between agent messages; the report shows where it
+stopped and the measured overshoot. Raise the task's budget or narrow the
+prompt. Turn caps are hard bounds — same report path.
+
+## Worktree left behind / unknown directories
+
+After crashes, startup reconciliation lists unknown worktrees in settings
+(quarantine) rather than deleting them. Verify, then remove manually:
+
+```bash
+git worktree list          # inside the affected repo
+rm -rf ~/.clockwork/worktrees/<task>/<run-id>
+```
+
+## Delivery to Telegram/webhook failed
+
+Delivery failures never affect run outcomes (S-43); they appear as receipts in
+the report footer after 3 retries. Check tokens (`CLOCKWORK_DELIVER_` env vars
+or `~/.clockwork/delivery-creds.json`) and network reachability.
+
+## UI shows "Connect to daemon"
+
+The UI needs the API token: `cat ~/.clockwork/api-token` and paste it into the
+connect screen. Tokens rotate if you delete the file and restart the daemon.
+
+## Reset everything (nuclear)
+
+```bash
+node packages/daemon/dist/cli.js uninstall
+rm -rf ~/.clockwork    # deletes tasks, reports, transcripts — export first!
+```

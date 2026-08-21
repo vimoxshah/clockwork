@@ -1,0 +1,60 @@
+# Functional Source License, v1.1 (FSL-1.1)
+
+# Acceptance
+
+By obtaining, using, modifying, or redistributing the Software, you accept and
+agree to be bound by the terms of this License.
+
+# 1. Definitions
+
+"Software" means Clockwork and its source code, documentation, and associated
+assets made available under this License.
+
+"Licensor" means the copyright holder identified below.
+
+"You" means any person or entity that exercises rights under this License.
+
+"Competing Use" means making the Software or its functionality available to
+third parties as a hosted, managed, embedded, or packaged product that competes
+with a Licensor product.
+
+"Trademark" means the names, logos, and brand features of the Licensor.
+
+# 2. Grant of Rights
+
+Subject to the terms of this License, the Licensor grants You a worldwide,
+royalty-free, non-exclusive, non-transferable license to use, copy, modify,
+contribute to, and redistribute the Software for any purpose other than a
+Competing Use.
+
+# 3. Competing Use Restriction
+
+You may not make the Software available to third parties as part of a Competing
+Use. If you are unsure whether a use is a Competing Use, contact the Licensor.
+
+# 4. Trademarks
+
+This License does not grant any right to use the Trademarks.
+
+# 5. Contributions
+
+Contributions submitted to the Licensor are licensed to the Licensor under the
+same terms as this License, plus a perpetual, irrevocable license for the
+Licensor to use them without restriction.
+
+# 6. Warranty; Liability
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+LICENSOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+# 7. Conversion
+
+On the second anniversary of the date a version of the Software is first made
+publicly available, that version automatically becomes subject to the MIT
+License (https://opensource.org/licenses/MIT).
+
+Copyright (c) 2026 vimoxshah
