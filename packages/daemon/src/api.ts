@@ -4,6 +4,7 @@
  * The UI is a pure client; anything scriptable here is scriptable by users.
  */
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
+import fastifyStatic from '@fastify/static';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
@@ -44,13 +45,19 @@ export function loadOrCreateToken(dataDir: string): string {
   return token;
 }
 
-export function buildServer(deps: ApiDeps): { app: FastifyInstance; token: string; sseClients: Set<FastifyRequest> } {
+export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance; token: string; sseClients: Set<FastifyRequest> }> {
   const app = Fastify({ logger: false });
   const tasks = new TaskRepo(deps.db);
   const profiles = new ProfileRepo(deps.db);
   const runs = new RunRepo(deps.db);
   const token = loadOrCreateToken(deps.dataDir);
   const sseClients = new Set<FastifyRequest>();
+
+  // serve the built UI when present (single-port product surface)
+  const uiDist = path.resolve(import.meta.dirname, '../../ui/dist');
+  if (existsSync(uiDist)) {
+    await app.register(fastifyStatic, { root: uiDist, prefix: '/' });
+  }
 
   let paused = false;
 

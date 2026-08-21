@@ -5,8 +5,14 @@
  * (earlier UTC instant). All storage is UTC epoch ms; zones are IANA strings.
  */
 import { DateTime } from 'luxon';
-import { RRule } from 'rrule';
-import { Cron } from 'croner';
+import * as cronerNs from 'croner';
+
+// rrule 2.8 ships CJS; Node ESM sees it as default-only. Resolve both shapes.
+import * as rruleNs from 'rrule';
+const RRule: typeof import('rrule').RRule =
+  (rruleNs as any).RRule ?? (rruleNs as any).default?.RRule;
+const Cron: typeof cronerNs.Cron =
+  (cronerNs as any).Cron ?? (cronerNs as any).default?.Cron;
 
 export interface ScheduleLike {
   kind: 'once' | 'rrule' | 'cron';

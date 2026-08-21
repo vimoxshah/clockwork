@@ -27,7 +27,7 @@ export async function main(argv: string[] = process.argv): Promise<number> {
   }
 
   const { db } = openDatabase(dataDir);
-  const migrationSql = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../../migrations/0001_init.sql'), 'utf8');
+  const migrationSql = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../migrations/0001_init.sql'), 'utf8');
   createMigrator(db, [{ id: '0001_init', sql: migrationSql }]).migrate();
 
   const profileRepo = new ProfileRepo(db);
@@ -66,7 +66,7 @@ export async function main(argv: string[] = process.argv): Promise<number> {
     },
   });
 
-  const { app, token } = buildServer({ db, dataDir, runManager, scheduler, version: DAEMON_VERSION });
+  const { app, token } = await buildServer({ db, dataDir, runManager, scheduler, version: DAEMON_VERSION });
 
   // startup sweep (S-14/S-30/S-31/S-81): same path as wake catch-up
   const recovery = runManager.recoverySweep();
@@ -94,3 +94,10 @@ export async function main(argv: string[] = process.argv): Promise<number> {
 }
 
 void buildJobSpec; // re-exported for tests
+
+/** CLI entrypoint when executed directly (node dist/main.js / clockworkd). */
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  void main().then((code) => {
+    if (code !== 0 && code !== undefined) process.exitCode = code;
+  });
+}

@@ -45,7 +45,7 @@ beforeAll(async () => {
     safetyJournal: new SafetyJournal(`${dir}/journal.jsonl`),
   });
   const scheduler = new Scheduler({ db, clock, enqueueRun: () => {}, notify: () => {} });
-  const built = buildServer({ db, dataDir: dir, runManager: rm, scheduler, version: 'test' });
+  const built = await buildServer({ db, dataDir: dir, runManager: rm, scheduler, version: 'test' });
   app = built.app;
   token = built.token;
   await app.ready();

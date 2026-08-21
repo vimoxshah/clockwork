@@ -216,7 +216,10 @@ export class RunManager {
       while ((idx = lineBuf.indexOf('\n')) >= 0) {
         const line = lineBuf.slice(0, idx);
         lineBuf = lineBuf.slice(idx + 1);
-        this.handleChildMessage(runId, spec, line).catch(() => {});
+        // one malformed message must never kill the daemon (S-32-adjacent)
+        this.handleChildMessage(runId, spec, line).catch((e) => {
+          this.recordEvent(this.deps.clock.now(), runId, 'ipc_error', { error: String(e) });
+        });
       }
     });
     child.stderr!.setEncoding('utf8');
@@ -512,7 +515,7 @@ export class RunManager {
     if (!scheduleId) return [];
     const rows = this.deps.db
       .prepare(`SELECT occurrence_at FROM schedule_occurrences WHERE schedule_id=? AND disposition='coalesced' ORDER BY occurrence_at DESC LIMIT 50`)
-      .all() as unknown as Array<{ occurrence_at: number }>;
+      .all(scheduleId) as unknown as Array<{ occurrence_at: number }>;
     return rows.map((r) => r.occurrence_at);
   }
 

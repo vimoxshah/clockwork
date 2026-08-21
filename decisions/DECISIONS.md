@@ -167,3 +167,17 @@ ADR-style, append-only. Format: Decision → Context → Alternatives rejected �
 **Alternatives rejected:** Read-restricted profile that breaks every run (unusable); App Sandbox entitlement helper (new Xcode target + notarization complexity — named H2 investigation); pretending the doc's ideal held (dishonest).
 **Why:** The containment properties that matter for trust — no writes outside scope, credentials unreadable, process-group control, budgets — are fully enforceable today. Read-breadth equals what the user's own interactive agent already has, so unattended runs are not a new exposure class on that axis.
 **Consequence:** docs/security.md states this plainly; S-86 escape tests target writes + credential reads; FR-26 implemented per this shape; revisit when Apple restores read-restriction viability or via entitlement-based helper.
+
+## ADR-024 — (deviation) IPC transport is stdio JSONL with nonce, not unix socket
+**Decision:** Runner⇄daemon IPC uses JSONL over the child's stdio instead of a per-run unix socket. Nonce passed via argv; child never receives the bearer token or delivery credentials (verified by sanitized env construction).
+**Context:** Same isolation properties (own pgid, killable group, no shared state); stdio removes socket-file lifecycle management (cleanup on crash, path collision).
+**Alternatives rejected:** Unix socket (extra lifecycle complexity, identical security properties for this topology).
+**Why:** Transport choice doesn't change the threat model when the channel is parent↔direct-child.
+**Consequence:** Architecture doc §7.3 wording updated by this entry; protocol messages typed in runner-protocol.ts.
+
+## ADR-025 — (deviation) UI ships as a React+Vite web app in v1 builds; Tauri desktop wrapper added at packaging when a Rust toolchain is present
+**Decision:** `packages/ui` is React 18 + Vite speaking the daemon's REST+SSE API (pure-client architecture unchanged from arch §6). The Tauri 2 window/tray/updater wrapper is layered onto the same UI bundle during release engineering; the build environment used for this implementation has no Rust toolchain, so the JS layer proceeds without blocking.
+**Context:** Arch stack #2 specifies Tauri 2. The three-process architecture (UI/daemon/runner) is unaffected: the UI remains stateless, reads/writes only through the daemon API with bearer token.
+**Alternatives rejected:** Electron fallback (heavier; not needed since nothing blocks on native yet); blocking all UI work on Rust installation (schedule risk for zero architectural delta).
+**Why:** The UI code is identical under both wrappers (fetch/EventSource only); Tauri contributes the window chrome, tray, autostart, updater — all packaging-time concerns.
+**Consequence:** Token handshake currently manual (file read) until Tauri injects it at spawn; tray/menubar surfaces land with the Tauri step; stack #4 FullCalendar replaced by a purpose-built week/month grid matching designs/DESIGN.md (bundle size + we control booking UX end-to-end; FullCalendar's recurring-event model fights our occurrence-ledger source of truth).
