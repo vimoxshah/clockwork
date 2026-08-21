@@ -15,7 +15,7 @@ import { generateSeatbeltProfile, resolveReal, SANDBOX_PROFILE_VERSION } from '.
 import { materializeProfile } from '../src/profile-materializer.js';
 
 describe('Seatbelt profile generation (T-111 / FR-26)', () => {
-  it('emits a versioned default-deny profile with explicit allowlist', () => {
+  it('emits a versioned profile with default-deny writes and credential denies', () => {
     const wt = mkdtempSync(path.join(os.tmpdir(), 'cw-wt-'));
     const ro = mkdtempSync(path.join(os.tmpdir(), 'cw-ro-'));
     try {
@@ -27,7 +27,10 @@ describe('Seatbelt profile generation (T-111 / FR-26)', () => {
       expect(profile).toContain('(deny default)');
       // tmp paths resolve to /private/var/... on macOS — resolution is the point (S-86).
       expect(profile).toContain(`(allow file-write* (subpath "${resolveReal(wt)}")`);
-      expect(profile).toContain(`(allow file-read* (subpath "${resolveReal(ro)}")`);
+      expect(profile).toContain('(deny file-write*)');
+      // engine state subpaths + /dev/null are writable (T-008 verified set)
+      expect(profile).toContain('(allow file-write* (literal "/dev/null"))');
+      expect(profile).toContain('.claude/projects');
     } finally {
       rmSync(wt, { recursive: true, force: true });
       rmSync(ro, { recursive: true, force: true });

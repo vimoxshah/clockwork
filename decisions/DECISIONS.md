@@ -135,3 +135,35 @@ ADR-style, append-only. Format: Decision → Context → Alternatives rejected �
 **Alternatives rejected:** UI-side search libs (can't reach on-disk transcripts, re-index per load); vector/semantic search now (H2 candidate, overkill for exact recall); widgets as full API clients (scope creep on the token surface).
 **Why:** FTS5 is already in our database — search-everywhere costs one virtual table; the snapshot endpoint keeps glanceable surfaces safe and dumb.
 **Consequence:** Index maintenance joins the finalize path; palette becomes the power-user front door; WidgetKit requires a native companion target (accepted post-v1).
+
+---
+
+*Entries below were appended 2026-08-21 during Phase 0 execution (engine contract verification).*
+
+## ADR-020 — (Phase 0 finding) CLI engine cannot do keep-alive HITL on 2.1.238: M1 ships fail-safe-on-permission; SDK engine promoted to M1 for HITL users; permission modes reduced to plan/acceptEdits
+**Decision:** (a) The `--permission-prompt-tool` MCP hook assumed by the architecture is ABSENT in Claude Code CLI 2.1.238 — the CLI engine ships M1 with **fail-safe on permission**: permission-blocked runs stop with a clear report (per the MVP cut-line's pre-authorized fallback), never hang. (b) `ClaudeSdkRunner` moves up from M2 to M1 as the HITL-capable engine for users who opt in with an API key. (c) Clockwork's composer offers only `plan` and `acceptEdits` for the CLI engine — the CLI 2.1.238 mode list (`acceptEdits|auto|bypassPermissions|manual|dontAsk|plan`) has no `default`, `manual`/`dontAsk` hang or over-ask headless, and `bypassPermissions` was already banned (ADR-012). (d) Turn caps are enforced exclusively by Clockwork's BudgetGuard (kill between messages from usage events); the `--max-turns` flag does not exist in this CLI.
+**Context:** T-007 contract matrix verified against the real binary on 2026-08-21 (`spikes/reports/T007-engine-contract-matrix.md`, T-001 real run evidence). Gate G0 pre-decided exactly this branch: "if the CLI can't support HITL, M1 ships CLI with fail-safe-on-permission and the SDK engine moves up to M1 for HITL users."
+**Alternatives rejected:** Emulating HITL by killing + resuming sessions on each permission event (turn-restart semantics make it dishonest); waiting for Anthropic to ship the hook (no date); shipping `manual` mode headless (hangs the run until timeout — worst possible unattended behavior).
+**Why:** Honest capability detection beats assuming the architecture doc's flags exist. The G0 gate anticipated this outcome and pre-authorized the redesign.
+**Consequence:** FR-12/HITL stays M2-flagged behind engine choice; contract matrix becomes a runtime input (UI hides approval affordances for CLI-engine tasks); re-run matrix on every observed CLI version change.
+
+## ADR-021 — Deviation: Node 24 runtime in this build environment (plan pins Node 22 LTS)
+**Decision:** Development proceeds on Node v24.13.1 (the machine's installed LTS-line runtime); `engines >=22` declared. No API surface used by the daemon/runner is 24-only.
+**Context:** Build environment has Node 24; installing a parallel 22 toolchain adds no correctness value for the code written here.
+**Alternatives rejected:** Pinning nvm to 22 (environment friction with zero behavioral delta for our APIs).
+**Why:** The plan's Node 22 pin targets LTS stability of child-process/IPC semantics, which are unchanged in 24 for our usage.
+**Consequence:** CI should pin both 22 and 24 when it lands; release packaging bundles its own Node anyway (arch stack #6).
+
+## ADR-022 — Deviation: Drizzle used as migration runner only; queries are typed repositories over better-sqlite3 prepared statements
+**Decision:** Schema DDL lives verbatim in forward-only SQL migrations executed through Drizzle's migrator; all queries are hand-written repository functions using better-sqlite3 prepared statements (single writer = daemon, per ADR-003).
+**Context:** Architecture §1 specifies "SQLite (WAL) + Drizzle" with the normative DDL given inline. Drizzle's query DSL would force re-expressing that DDL in TS schema objects — a translation layer between the normative doc and reality.
+**Alternatives rejected:** Full Drizzle schema DSL (DDL drift risk vs the normative arch doc); raw fs-based migration script (loses transactional bookkeeping).
+**Why:** The DDL in `02-architecture.md` is the contract; executing it verbatim removes an entire class of transcription bugs. Drizzle still owns ordering/bookkeeping.
+**Consequence:** Migration files are plain SQL reviewable against arch §1 line-by-line; no ORM row-lifecycle magic; type-safety comes from repository-layer interfaces instead.
+
+## ADR-023 — (Phase 0 finding) Seatbelt profile enforces default-deny WRITES + credential-path read denies; full read-default-deny is infeasible on macOS 26
+**Decision:** The per-run containment profile denies all writes outside the run scope and explicitly denies reads of credential paths (`~/.ssh`, `~/.aws`, keychains, browser profiles). File READS remain same-user-broad (system + home), matching an interactive `claude` session. The architecture's "repo (ro where feasible)" is honestly resolved as NOT enforced by Seatbelt on macOS 26; the repo-ro claim is withdrawn from marketing/docs until a feasible mechanism exists.
+**Context:** T-008 empirical bisect (crash reports in `~/Library/Logs/DiagnosticReports`): under `(deny default)` with read-restricted subpath allows, dyld4's `CacheFinder` aborts (`__abort_with_payload`, SIGABRT) before `main()` for every toolchain binary — /bin/echo, git, node, claude alike — regardless of which system paths were allowlisted (Preboot, dyld caches, /System, /private/var, etc.). Only unrestricted `file-read*` produces functioning processes. Verified on macOS 26.6.
+**Alternatives rejected:** Read-restricted profile that breaks every run (unusable); App Sandbox entitlement helper (new Xcode target + notarization complexity — named H2 investigation); pretending the doc's ideal held (dishonest).
+**Why:** The containment properties that matter for trust — no writes outside scope, credentials unreadable, process-group control, budgets — are fully enforceable today. Read-breadth equals what the user's own interactive agent already has, so unattended runs are not a new exposure class on that axis.
+**Consequence:** docs/security.md states this plainly; S-86 escape tests target writes + credential reads; FR-26 implemented per this shape; revisit when Apple restores read-restriction viability or via entitlement-based helper.
