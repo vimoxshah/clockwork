@@ -38,6 +38,8 @@ export interface RunManagerDeps {
   clock: Clock;
   dataDir: string;
   runnerChildModule: string; // path to compiled runner-child.js
+  /** test hook: prefix command (e.g. ['tsx']) before node+module */
+  childCommandPrefix?: string[];
   maxParallel?: number;
   notify(kind: string, title: string, body: string): void;
   broadcast(event: Record<string, unknown>): void;
@@ -92,7 +94,7 @@ export class RunManager {
         while (slots > 0) {
           const next = this.deps.db
             .prepare(
-              `SELECT * FROM runs WHERE state='queued' ORDER BY COALESCE(scheduled_for, created_fallback) ASC`,
+              `SELECT * FROM runs WHERE state='queued' ORDER BY scheduled_for ASC`,
             )
             .all()
             .slice(0, slots) as unknown as RunRow[];
@@ -183,7 +185,14 @@ export class RunManager {
       CW_ENGINE: process.env.CW_ENGINE ?? '', // test hook only
     };
 
-    const child = spawn(process.execPath, [this.deps.runnerChildModule, specPath, nonce], {
+    const prefix = this.deps.childCommandPrefix ?? [];
+    // With a prefix (e.g. tsx), the module is the first arg; otherwise node runs it.
+    const bin = prefix.length > 0 ? prefix[0]! : process.execPath;
+    const rest =
+      prefix.length > 0
+        ? [...prefix.slice(1), this.deps.runnerChildModule, specPath, nonce]
+        : [this.deps.runnerChildModule, specPath, nonce];
+    const child = spawn(bin, rest, {
       detached: true,
       stdio: ['pipe', 'pipe', 'pipe'],
       env,

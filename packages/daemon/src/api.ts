@@ -1,0 +1,446 @@
+/**
+ * Daemon API (T-107, arch §6): loopback-only Fastify + SSE, bearer token
+ * (generated at install, stored 0600), optimistic task versioning (S-82).
+ * The UI is a pure client; anything scriptable here is scriptable by users.
+ */
+import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
+import path from 'node:path';
+import { randomBytes } from 'node:crypto';
+import {
+  TaskCreate,
+  TaskPatch,
+  ProfileCreate,
+  ProfilePatch,
+  API_VERSION,
+  newId,
+  slugify,
+  branchFor,
+} from '@clockwork/shared';
+import type { DB } from './db.js';
+import { TaskRepo, ProfileRepo, RunRepo, indexTask } from './repo.js';
+import type { RunManager } from './run-manager.js';
+import type { Scheduler } from './scheduler.js';
+import { nextOccurrenceAfter } from './recurrence.js';
+import { preflightRepo, isGitRepo } from '@clockwork/runner';
+
+export interface ApiDeps {
+  db: DB;
+  dataDir: string;
+  runManager: RunManager;
+  scheduler: Scheduler;
+  version: string;
+}
+
+export function loadOrCreateToken(dataDir: string): string {
+  mkdirSync(dataDir, { recursive: true });
+  const tokenPath = path.join(dataDir, 'api-token');
+  if (existsSync(tokenPath)) {
+    return readFileSync(tokenPath, 'utf8').trim();
+  }
+  const token = randomBytes(32).toString('base64url');
+  writeFileSync(tokenPath, token, { mode: 0o600 });
+  return token;
+}
+
+export function buildServer(deps: ApiDeps): { app: FastifyInstance; token: string; sseClients: Set<FastifyRequest> } {
+  const app = Fastify({ logger: false });
+  const tasks = new TaskRepo(deps.db);
+  const profiles = new ProfileRepo(deps.db);
+  const runs = new RunRepo(deps.db);
+  const token = loadOrCreateToken(deps.dataDir);
+  const sseClients = new Set<FastifyRequest>();
+
+  let paused = false;
+
+  // ---- auth hook: bearer token, loopback only ----
+  app.addHook('onRequest', async (req, reply) => {
+    if (req.raw.url === '/health') return; // health is unauthenticated for doctor
+    // SSE handled below via query param (EventSource cannot set headers)
+    const url = req.raw.url ?? '';
+    const isSse = url.startsWith('/events');
+    const header = req.headers.authorization;
+    const qpToken = isSse ? new URL(url, 'http://x').searchParams.get('token') : null;
+    if (header !== `Bearer ${token}` && qpToken !== token) {
+      await reply.code(401).send({ error: 'unauthorized' });
+    }
+  });
+
+  const broadcast = (event: Record<string, unknown>): void => {
+    const payload = `data: ${JSON.stringify(event)}\n\n`;
+    for (const client of sseClients) {
+      try {
+        (client as any).raw.res.write(payload);
+      } catch {}
+    }
+  };
+
+  // wire manager broadcasts to SSE
+  const origBroadcast = deps.runManager['deps'].broadcast;
+  deps.runManager['deps'].broadcast = (e) => {
+    origBroadcast(e);
+    broadcast(e);
+  };
+
+  // ---- health (S-61 handshake) ----
+  app.get('/health', async () => {
+    const active = deps.runManager.countActive();
+    const queued = (deps.db.prepare("SELECT COUNT(*) c FROM runs WHERE state='queued'").get() as any).c;
+    const nextFire = (
+      deps.db.prepare('SELECT MIN(next_fire) nf FROM schedules WHERE enabled=1 AND next_fire IS NOT NULL').get() as any
+    ).nf;
+    return {
+      ok: true,
+      apiVersion: API_VERSION,
+      daemonVersion: deps.version,
+      paused,
+      activeRuns: active,
+      queuedRuns: queued,
+      nextFire,
+    };
+  });
+
+  // ---- tasks ----
+  const validateAndMaterialize = (input: TaskCreate): { ok: true; nextFire: number | null; profileId: string | null } | { ok: false; error: string } => {
+    // @mention resolution (FR-28)
+    let profileId: string | null = input.profileId ?? null;
+    if (!profileId && input.profileSlugMention) {
+      const p = profiles.bySlug(input.profileSlugMention.replace(/^@/, ''));
+      if (!p) return { ok: false, error: `unknown profile @${input.profileSlugMention}` };
+      profileId = p.id;
+    }
+    // repo validation at save (S-36/S-69)
+    if (input.repoPath) {
+      if (!isGitRepo(input.repoPath)) {
+        return { ok: false, error: `repo_path is not a git repository: ${input.repoPath}` };
+      }
+    }
+    // schedule validation + materialization (S-23/S-26)
+    let nextFire: number | null = null;
+    if (input.schedule.kind === 'once') {
+      if ((input.schedule.runAt ?? 0) < Date.now()) {
+        return { ok: false, error: 'schedule is in the past — pick a future time or use run-now' };
+      }
+      nextFire = input.schedule.runAt ?? null;
+    } else if (input.schedule.kind === 'rrule' || input.schedule.kind === 'cron') {
+      try {
+        nextFire = nextOccurrenceAfter(
+          {
+            kind: input.schedule.kind === 'rrule' ? 'rrule' : 'cron',
+            rrule: input.schedule.rrule,
+            cron: input.schedule.cron,
+            tz: input.schedule.tz,
+          },
+          Date.now(),
+          7, // save-time horizon check: must have a fire within a week? no — full horizon but bounded work
+        );
+        if (nextFire == null && input.schedule.kind === 'rrule') {
+          return { ok: false, error: 'RRULE has no future occurrences' };
+        }
+      } catch (e) {
+        return { ok: false, error: `invalid recurrence: ${String(e)}` };
+      }
+    }
+    return { ok: true, nextFire, profileId };
+  };
+
+  app.post('/tasks', async (req, reply) => {
+    const parsed = TaskCreate.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(422).send({ error: 'validation', details: parsed.error.flatten() });
+    }
+    const v = validateAndMaterialize(parsed.data);
+    if (!v.ok) return reply.code(422).send({ error: v.error });
+    const row = tasks.create(parsed.data, v.profileId, v.nextFire);
+    indexTask(deps.db, row.id, row.name, row.prompt);
+    broadcast({ type: 'task.changed', taskId: row.id, at: Date.now() });
+    return reply.code(201).send(view(row, v.nextFire));
+  });
+
+  app.get('/tasks', async () => {
+    return tasks.list().map((row) => {
+      const s = tasks.scheduleFor(row.id);
+      return view(row, s?.next_fire ?? null);
+    });
+  });
+
+  app.get('/tasks/:id', async (req, reply) => {
+    const row = tasks.get((req.params as any).id);
+    if (!row) return reply.code(404).send({ error: 'not_found' });
+    const s = tasks.scheduleFor(row.id);
+    return view(row, s?.next_fire ?? null);
+  });
+
+  app.patch('/tasks/:id', async (req, reply) => {
+    const parsed = TaskPatch.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(422).send({ error: 'validation', details: parsed.error.flatten() });
+    }
+    let nextFire: number | null | undefined;
+    if (parsed.data.schedule) {
+      const probe = validateAndMaterialize({
+        ...(parsed.data as any),
+        name: parsed.data.name ?? 'probe',
+        prompt: parsed.data.prompt ?? 'probe',
+        budget: parsed.data.budget ?? { maxUsd: 2, maxTurns: 50, timeoutSec: 3600 },
+        schedule: parsed.data.schedule,
+      } as TaskCreate);
+      if (!probe.ok) return reply.code(422).send({ error: probe.error });
+      nextFire = probe.nextFire;
+    }
+    const res = tasks.patch((req.params as any).id, parsed.data, (req.body as any)?.version, nextFire ?? null);
+    if (res === 'not_found') return reply.code(404).send({ error: 'not_found' });
+    if (res === 'version_conflict') return reply.code(409).send({ error: 'version_conflict' }); // S-82
+    broadcast({ type: 'task.changed', taskId: res.id, at: Date.now() });
+    const s = tasks.scheduleFor(res.id);
+    return view(res, s?.next_fire ?? null);
+  });
+
+  app.delete('/tasks/:id', async (req, reply) => {
+    const ok = tasks.softDelete((req.params as any).id);
+    if (!ok) return reply.code(404).send({ error: 'not_found' });
+    return { deleted: true }; // S-6: soft delete; in-flight run completes, history retained
+  });
+
+  app.post('/tasks/:id/run-now', async (req, reply) => {
+    const row = tasks.get((req.params as any).id);
+    if (!row) return reply.code(404).send({ error: 'not_found' });
+    const runId = enqueueRunNow(deps.db, row);
+    deps.runManager.pump();
+    return reply.code(202).send({ runId });
+  });
+
+  // ---- runs ----
+  app.get('/runs', async (req) => {
+    const q = req.query as any;
+    return runs.list({
+      state: q.state,
+      taskId: q.taskId,
+      limit: q.limit ? parseInt(String(q.limit), 10) : undefined,
+    });
+  });
+
+  app.get('/runs/:id/report', async (req, reply) => {
+    const r = runs.report((req.params as any).id);
+    if (!r) return reply.code(404).send({ error: 'not_found' });
+    return { run: r.run, report: r.reportJson ? JSON.parse(r.reportJson) : null };
+  });
+
+  app.post('/runs/:id/cancel', async (req, reply) => {
+    const ok = deps.runManager.cancel((req.params as any).id);
+    return ok ? reply.code(202).send({ cancelling: true }) : reply.code(409).send({ error: 'not_cancellable' });
+  });
+
+  // ---- approvals (rows exist from M1 fail-safe; responses land M2 UI) ----
+  app.get('/approvals', async () => {
+    return deps.db.prepare('SELECT * FROM approvals WHERE responded_at IS NULL ORDER BY requested_at ASC').all();
+  });
+
+  app.post('/approvals/:id/respond', async (req, reply) => {
+    const id = (req.params as any).id;
+    const body = req.body as any;
+    const now = Date.now();
+    // CAS on responded_at (S-57): first writer wins
+    const r = deps.db
+      .prepare(`UPDATE approvals SET responded_at=?, response_json=? WHERE id=? AND responded_at IS NULL`)
+      .run(now, JSON.stringify(body ?? {}), id);
+    if (r.changes === 0) return reply.code(409).send({ error: 'already_resolved' });
+    return { resolved: true };
+  });
+
+  // ---- profiles ----
+  app.get('/profiles', async () => profiles.list());
+
+  app.post('/profiles', async (req, reply) => {
+    const parsed = ProfileCreate.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(422).send({ error: 'validation', details: parsed.error.flatten() });
+    }
+    const d = parsed.data;
+    if (profiles.bySlug(d.slug)) return reply.code(409).send({ error: 'slug_exists' });
+    const id = newId();
+    profiles.upsert({
+      id,
+      slug: d.slug,
+      name: d.name,
+      color: d.color ?? null,
+      avatar: d.glyph ?? null,
+      engine: d.engine,
+      model: d.model ?? null,
+      permission_mode: d.permissionMode,
+      budget_usd: d.budget.maxUsd,
+      max_turns: d.budget.maxTurns,
+      timeout_sec: d.budget.timeoutSec,
+      skills_json: JSON.stringify(d.skills),
+      mcp_allow_json: JSON.stringify(d.mcpAllow),
+      context_roots_json: JSON.stringify(d.contextRoots),
+      system_prompt_extra: d.systemPromptExtra ?? null,
+      delivery_json: JSON.stringify(d.delivery),
+      builtin: 0,
+    });
+    return reply.code(201).send(profiles.get(id));
+  });
+
+  app.patch('/profiles/:id', async (req, reply) => {
+    const existing = profiles.get((req.params as any).id);
+    if (!existing) return reply.code(404).send({ error: 'not_found' });
+    const parsed = ProfilePatch.safeParse(req.body);
+    if (!parsed.success) return reply.code(422).send({ error: 'validation', details: parsed.error.flatten() });
+    const d = parsed.data;
+    profiles.upsert({
+      ...existing,
+      name: d.name ?? existing.name,
+      color: d.color ?? existing.color,
+      avatar: d.glyph ?? existing.avatar,
+      engine: d.engine ?? existing.engine,
+      model: d.model ?? existing.model,
+      permission_mode: d.permissionMode ?? existing.permission_mode,
+      budget_usd: d.budget?.maxUsd ?? existing.budget_usd,
+      max_turns: d.budget?.maxTurns ?? existing.max_turns,
+      timeout_sec: d.budget?.timeoutSec ?? existing.timeout_sec,
+      skills_json: d.skills ? JSON.stringify(d.skills) : existing.skills_json,
+      mcp_allow_json: d.mcpAllow ? JSON.stringify(d.mcpAllow) : existing.mcp_allow_json,
+      context_roots_json: d.contextRoots ? JSON.stringify(d.contextRoots) : existing.context_roots_json,
+      system_prompt_extra: d.systemPromptExtra ?? existing.system_prompt_extra,
+    });
+    return profiles.get(existing.id);
+  });
+
+  // ---- search (FR-29-lite) ----
+  app.get('/search', async (req) => {
+    const q = String((req.query as any).q ?? '').trim();
+    if (q.length === 0) return [];
+    const kindFilter = (req.query as any).kind;
+    const ftsQuery = q.split(/\s+/).map((w) => `${w}*`).join(' ');
+    const sql = kindFilter
+      ? `SELECT kind, ref_id, title, snippet(search_idx, 3, '[', ']', '…', 12) AS snip FROM search_idx WHERE search_idx MATCH ? AND kind=? ORDER BY rank LIMIT 50`
+      : `SELECT kind, ref_id, title, snippet(search_idx, 3, '[', ']', '…', 12) AS snip FROM search_idx WHERE search_idx MATCH ? ORDER BY rank LIMIT 50`;
+    const rows = kindFilter
+      ? deps.db.prepare(sql).all(ftsQuery, kindFilter)
+      : deps.db.prepare(sql).all(ftsQuery);
+    return rows;
+  });
+
+  // ---- widget snapshot (read-only scope, ADR-019) ----
+  app.get('/widget/snapshot', async () => {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const runsToday = (
+      deps.db.prepare('SELECT COUNT(*) c FROM runs WHERE scheduled_for >= ?').get(todayStart.getTime()) as any
+    ).c;
+    const needsYou = (
+      deps.db.prepare(`SELECT COUNT(*) c FROM approvals WHERE responded_at IS NULL`).get() as any
+    ).c;
+    const unread = (
+      deps.db.prepare(`SELECT COUNT(*) c FROM runs WHERE report_json IS NOT NULL AND ended_at > ?`).get(Date.now() - 24 * 3600_000) as any
+    ).c;
+    const next = deps.db
+      .prepare('SELECT next_fire, t.name FROM schedules s JOIN tasks t ON t.id=s.task_id WHERE s.enabled=1 AND s.next_fire IS NOT NULL ORDER BY next_fire LIMIT 1')
+      .get() as any;
+    return { runsToday, needsYou, recentReports: unread, nextRun: next ?? null, paused };
+  });
+
+  // ---- pause-all / resume ----
+  app.post('/pause-all', async () => {
+    paused = true;
+    deps.scheduler.stop();
+    broadcast({ type: 'daemon.health', data: { paused }, at: Date.now() });
+    return { paused: true };
+  });
+
+  app.post('/resume', async () => {
+    paused = false;
+    deps.scheduler.start();
+    broadcast({ type: 'daemon.health', data: { paused: false }, at: Date.now() });
+    return { paused: false };
+  });
+
+  // ---- SSE ----
+  app.get('/events', (req, reply) => {
+    sseClients.add(req);
+    req.raw.on('close', () => sseClients.delete(req));
+    (req as any).raw.res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+    (req as any).raw.res.write(`data: ${JSON.stringify({ type: 'daemon.health', connected: true })}\n\n`);
+    return reply;
+  });
+
+  return { app, token, sseClients };
+}
+
+/** FR-5: manual run-now — ad-hoc runs recorded like scheduled ones. */
+export function enqueueRunNow(db: DB, taskRow: any): string {
+  const now = Date.now();
+  const spec = jobSpecForTask(db, taskRow, now);
+  db.prepare(
+    `INSERT INTO runs (id, task_id, jobspec_json, state, state_changed_at, scheduled_for) VALUES (?, ?, ?, 'queued', ?, ?)`,
+  ).run(spec.runId, taskRow.id, JSON.stringify(spec), now, now);
+  db.prepare('INSERT INTO events (at, run_id, kind, data_json) VALUES (?, ?, ?, ?)').run(now, spec.runId, 'state_changed', JSON.stringify({ to: 'queued', via: 'run-now' }));
+  return spec.runId;
+}
+
+function jobSpecForTask(db: DB, taskRow: any, now: number) {
+  const profile = taskRow.profile_id ? (db.prepare('SELECT * FROM profiles WHERE id=?').get(taskRow.profile_id) as any) : null;
+  const slug = slugify(taskRow.name);
+  const runId = newId();
+  return {
+    runId,
+    taskId: taskRow.id,
+    taskName: taskRow.name,
+    taskSlug: slug,
+    prompt: taskRow.prompt,
+    engine: (profile?.engine ?? 'cli') as 'cli' | 'sdk',
+    model: taskRow.model ?? profile?.model ?? null,
+    permissionMode: taskRow.permission_mode,
+    budget: { maxUsd: taskRow.budget_usd, maxTurns: taskRow.max_turns, timeoutSec: taskRow.timeout_sec },
+    repoPath: taskRow.repo_path ?? null,
+    baseBranch: taskRow.base_branch ?? null,
+    worktreePath: `${process.env.HOME ?? '~'}/.clockwork/worktrees/${slug}/${runId}`,
+    branch: branchFor(slug, runId),
+    scratchPath: taskRow.repo_path ? null : `${process.env.HOME ?? '~'}/.clockwork/scratch/${runId}`,
+    profile: profile
+      ? {
+          id: profile.id,
+          slug: profile.slug,
+          name: profile.name,
+          color: profile.color ?? null,
+          glyph: profile.avatar ?? null,
+          systemPromptExtra: profile.system_prompt_extra ?? null,
+          skills: JSON.parse(profile.skills_json ?? '[]'),
+          contextRoots: JSON.parse(profile.context_roots_json ?? '[]'),
+          mcpAllow: JSON.parse(profile.mcp_allow_json ?? '[]'),
+        }
+      : null,
+    contextFiles: JSON.parse(taskRow.context_json ?? '[]'),
+    occurrenceAt: null,
+    scheduledFor: now,
+    createdAt: now,
+  };
+}
+
+function view(row: any, nextFire: number | null = null): unknown {
+  return {
+    id: row.id,
+    name: row.name,
+    prompt: row.prompt,
+    profileId: row.profile_id ?? null,
+    repoPath: row.repo_path ?? null,
+    baseBranch: row.base_branch ?? null,
+    model: row.model ?? null,
+    permissionMode: row.permission_mode,
+    budget: { maxUsd: row.budget_usd, maxTurns: row.max_turns, timeoutSec: row.timeout_sec },
+    missedPolicy: row.missed_policy,
+    missedWindowSec: row.missed_window_sec,
+    overlapPolicy: row.overlap_policy,
+    retryOnTransient: Boolean(row.retry_on_transient),
+    enabled: Boolean(row.enabled),
+    version: row.version,
+    nextFire,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
