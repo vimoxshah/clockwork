@@ -1,0 +1,27 @@
+{
+  "name": "clockwork",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The calendar where your agents show up for work.",
+  "packageManager": "pnpm@11.22.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "lint": "eslint 'packages/*/src/**/*.ts?(x)' 'packages/*/test/**/*.ts' 'spikes/src/**/*.ts'",
+    "typecheck": "tsc -b packages/shared packages/runner packages/daemon",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "pnpm -r --filter './packages/*' build",
+    "daemon:dev": "pnpm --filter @clockwork/daemon dev"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@typescript-eslint/eslint-plugin": "^8.18.0",
+    "@typescript-eslint/parser": "^8.18.0",
+    "@vitest/coverage-v8": "^2.1.8",
+    "eslint": "^9.17.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

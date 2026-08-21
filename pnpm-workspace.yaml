@@ -1,0 +1,16 @@
+packages:
+  - packages/*
+  - spikes
+
+onlyBuiltDependencies:
+  - esbuild
+  - better-sqlite3
+  - '@swc/core'
+  - workerd
+allowBuilds:
+  esbuild: true
+  better-sqlite3: true
+  '@swc/core': true
+minimumReleaseAgeExclude:
+  - '@rollup/rollup-linux-s390x-gnu@4.62.5'
+  - '@rollup/rollup-openbsd-x64@4.62.5'
