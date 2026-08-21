@@ -211,9 +211,14 @@ function InboxView(): JSX.Element {
   const [selected, setSelected] = useState<string | null>(null);
   const [detail, setDetail] = useState<{ run: RunRowT; report: any } | null>(null);
   const [q, setQ] = useState('');
+  const [approvals, setApprovals] = useState<any[]>([]);
 
   useEffect(() => {
     void api.runs({ limit: 200 }).then(setRuns).catch(() => {});
+    void fetch('/approvals', { headers: { authorization: `Bearer ${getToken()}` } })
+      .then((r) => r.json())
+      .then(setApprovals)
+      .catch(() => {});
   }, []);
   useEffect(() => {
     if (selected) void api.report(selected).then(setDetail).catch(() => {});
@@ -236,7 +241,25 @@ function InboxView(): JSX.Element {
           onChange={(e) => setQ(e.target.value)}
           data-testid="inbox-search"
         />
-        {visible.length === 0 && <div className="empty">No runs yet. Book one from the calendar.</div>}
+        {approvals.length > 0 && (
+          <div style={{ marginBottom: 10 }}>
+            <div className="chip needs-you" style={{ display: 'inline-block', marginBottom: 6 }}>
+              NEEDS YOU — {approvals.length} approval{approvals.length > 1 ? 's' : ''}
+            </div>
+            {approvals.map((a) => {
+              const payload = typeof a.payload_json === 'string' ? safeJson(a.payload_json) : a.payload_json;
+              return (
+                <div key={a.id} className="inbox-row" style={{ border: '1px solid var(--brass)' }}>
+                  <strong>Permission request</strong>
+                  <div className="meta mono">{String(payload?.tool ?? '').slice(0, 80)}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {visible.length === 0 && approvals.length === 0 && (
+          <div className="empty">No runs yet. Book one from the calendar.</div>
+        )}
         {visible.map((r) => {
           const spec = safeJson(r.jobspec_json);
           return (

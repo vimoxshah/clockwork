@@ -44,6 +44,7 @@ export interface RunManagerDeps {
   notify(kind: string, title: string, body: string): void;
   broadcast(event: Record<string, unknown>): void;
   safetyJournal: SafetyJournal;
+  keepAwake?: { arm(key: string, durationSec: number): boolean; release(key: string): void };
   /** bundled skill pack resolver (T-112) */
   resolveSkill?: (ref: { name: string; version: string }) => string | null;
 }
@@ -128,6 +129,8 @@ export class RunManager {
     const now = this.deps.clock.now();
     this.transition(row.id, 'preparing', now);
     if (spec.repoPath) this.repoMutex.set(spec.repoPath, row.id);
+    // FR-25/S-15: arm keep-awake across the run's wall-clock budget
+    this.deps.keepAwake?.arm(row.id, spec.budget.timeoutSec + 300);
 
     try {
       // preflight (S-36/S-69/S-87)
@@ -404,6 +407,7 @@ export class RunManager {
 
     this.releaseMutex(spec);
     this.pendingApprovals.delete(runId);
+    this.deps.keepAwake?.release(runId);
 
     // S-40/S-41: consecutive auth failures auto-pause the task after 2
     const failureReason = ('failureReason' in outcome ? outcome.failureReason : undefined) ?? null;
@@ -417,6 +421,30 @@ export class RunManager {
     } else if (outcome.state === 'completed') {
       const { clearFailureStreak } = await import('./policies.js');
       clearFailureStreak(this.deps.db, spec.taskId);
+    }
+
+    // FR-18/S-43: delivery after persistence; failures become receipts only
+    try {
+      const { deliverReport } = await import('./delivery-dispatch.js');
+      const receipts = await deliverReport(this.deps.dataDir, spec.taskId, taskDeliveryJsonOf(this.deps.db, spec.taskId), {
+        runId,
+        taskName: spec.taskName,
+        state: outcome.state,
+        failureReason,
+        summary: report.summary,
+        branch: report.branch,
+        costUsd: report.costUsd,
+        turns: report.turns,
+        ranLateMs: report.ranLateMs,
+        coveredOccurrences: report.coveredOccurrences,
+        profile: report.profile ? { name: report.profile.name, slug: report.profile.slug } : null,
+      });
+      if (receipts.length > 0) {
+        report.deliveries = receipts;
+        this.deps.db.prepare('UPDATE runs SET report_json=? WHERE id=?').run(JSON.stringify(report), runId);
+      }
+    } catch (e) {
+      this.recordEvent(now, runId, 'note', { deliveryError: String(e) }); // never fail the run (S-43)
     }
 
     this.deps.broadcast({ type: 'report.ready', runId, at: now });
@@ -588,6 +616,11 @@ export class RunManager {
 }
 
 const GRACE_NOTE_TOLERANCE_MS = 120_000;
+
+function taskDeliveryJsonOf(db: DB, taskId: string): string {
+  const r = db.prepare('SELECT delivery_json FROM tasks WHERE id=?').get(taskId) as any;
+  return r?.delivery_json ?? '{}';
+}
 
 function listDirs(p: string): string[] {
   try {

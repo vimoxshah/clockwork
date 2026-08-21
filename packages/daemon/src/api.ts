@@ -61,14 +61,18 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
 
   let paused = false;
 
-  // ---- auth hook: bearer token, loopback only ----
+  // ---- auth hook: bearer token on data routes; static UI + health open ----
   app.addHook('onRequest', async (req, reply) => {
-    if (req.raw.url === '/health') return; // health is unauthenticated for doctor
-    // SSE handled below via query param (EventSource cannot set headers)
-    const url = req.raw.url ?? '';
-    const isSse = url.startsWith('/events');
+    const url = (req.raw.url ?? '').split('?')[0]!;
+    const needsAuth =
+      /^\/(tasks|runs|approvals|profiles|search|widget|pause-all|resume|capacity)/.test(url) ||
+      url.startsWith('/events');
+    if (!needsAuth) return; // /health + static UI assets carry no user data
+    // SSE handled via query param (EventSource cannot set headers)
     const header = req.headers.authorization;
-    const qpToken = isSse ? new URL(url, 'http://x').searchParams.get('token') : null;
+    const qpToken = url.startsWith('/events')
+      ? new URL(req.raw.url ?? '', 'http://x').searchParams.get('token')
+      : null;
     if (header !== `Bearer ${token}` && qpToken !== token) {
       await reply.code(401).send({ error: 'unauthorized' });
     }
@@ -184,6 +188,12 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     if (!parsed.success) {
       return reply.code(422).send({ error: 'validation', details: parsed.error.flatten() });
     }
+    // S-72: chain validation at save — linear only, cycles rejected
+    if ('chainAfter' in (req.body as any)) {
+      const { validateChain } = await import('./templates.js');
+      const err = validateChain(deps.db, (req.params as any).id, (req.body as any).chainAfter ?? null);
+      if (err) return reply.code(422).send({ error: err });
+    }
     let nextFire: number | null | undefined;
     if (parsed.data.schedule) {
       const probe = validateAndMaterialize({
@@ -216,6 +226,68 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     const runId = enqueueRunNow(deps.db, row);
     deps.runManager.pump();
     return reply.code(202).send({ runId });
+  });
+
+  // ---- templates (T-203) ----
+  const { securityPreview, validateTemplateApply } = await import('./templates.js');
+
+  /** S-74: preview WITHOUT importing — full prompt/permissions/budget diff vs defaults. */
+  app.post('/templates/preview', async (req, reply) => {
+    const tpl = req.body as any;
+    if (!tpl || tpl.schema !== 'clockwork.template.v1') {
+      return reply.code(422).send({ error: 'invalid template schema' });
+    }
+    return { preview: securityPreview(tpl), template: tpl };
+  });
+
+  app.post('/templates/import', async (req, reply) => {
+    const tpl = req.body as any;
+    if (!tpl || tpl.schema !== 'clockwork.template.v1') {
+      return reply.code(422).send({ error: 'invalid template schema' });
+    }
+    const preview = securityPreview(tpl);
+    if (preview.flags.some((f) => f.level === 'red')) {
+      return reply.code(422).send({ error: 'template rejected by security preview', flags: preview.flags });
+    }
+    const created = tasks.create(
+      {
+        name: String(tpl.name ?? 'Imported template').slice(0, 120),
+        prompt: String(tpl.prompt ?? ''),
+        profileId: undefined,
+        repoPath: undefined, // S-75: user re-picks at apply
+        permissionMode: tpl.permissionMode === 'plan' ? 'plan' : 'acceptEdits',
+        budget: { maxUsd: 2, maxTurns: 50, timeoutSec: 3600 },
+        schedule: { kind: 'queue', tz: 'UTC' }, // imported = not scheduled until reviewed
+        missedPolicy: 'run-late',
+        missedWindowSec: 21_600,
+        overlapPolicy: 'skip',
+        retryOnTransient: false,
+        context: { files: [] },
+        delivery: { osNotify: true },
+      },
+      null,
+      null,
+    );
+    // S-74: arrives DISABLED regardless of payload intent
+    deps.db.prepare('UPDATE tasks SET enabled=0 WHERE id=?').run(created.id);
+    broadcast({ type: 'task.changed', taskId: created.id, at: Date.now() });
+    return reply.code(201).send({ task: view(created), flags: preview.flags });
+  });
+
+  /** S-75: apply with variable fill + validation. */
+  app.post('/tasks/:id/apply-template-vars', async (req, reply) => {
+    const row = tasks.get((req.params as any).id);
+    if (!row) return reply.code(404).send({ error: 'not_found' });
+    const vars = (req.body as any)?.vars ?? {};
+    const tpl: any = { schema: 'clockwork.template.v1', name: row.name, prompt: row.prompt };
+    const check = validateTemplateApply(tpl, vars);
+    if (!check.ok) return reply.code(422).send({ error: check.error });
+    let prompt = row.prompt;
+    for (const [k, v] of Object.entries(vars)) {
+      prompt = prompt.replaceAll(`{{${k}}}`, String(v));
+    }
+    deps.db.prepare('UPDATE tasks SET prompt=?, version=version+1, updated_at=? WHERE id=?').run(prompt, Date.now(), row.id);
+    return { applied: true };
   });
 
   // ---- runs ----
