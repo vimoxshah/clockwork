@@ -4,7 +4,7 @@
  * from architecture §1 verbatim (ADR-022).
  */
 import Database from 'better-sqlite3';
-import { mkdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 
 export type DB = Database.Database;
@@ -24,8 +24,8 @@ export interface Migrator {
   migrate(): void;
 }
 
-/** Forward-only migrations with drizzle-style bookkeeping table. */
-export function createMigrator(db: DB, migrations: ReadonlyArray<{ id: string; sql: string }>): Migrator {
+/** Forward-only migrations with drizzle-style bookkeeping + backup-on-migrate (S-61/T-204). */
+export function createMigrator(db: DB, migrations: ReadonlyArray<{ id: string; sql: string }>, dbFile?: string): Migrator {
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
     id TEXT PRIMARY KEY,
     applied_at INTEGER NOT NULL
@@ -35,8 +35,16 @@ export function createMigrator(db: DB, migrations: ReadonlyArray<{ id: string; s
   return {
     migrate(): void {
       const applied = new Set(appliedStmt.all().map((r: any) => r.id as string));
-      for (const m of migrations) {
-        if (applied.has(m.id)) continue;
+      const pending = migrations.filter((m) => !applied.has(m.id));
+      if (pending.length === 0) return;
+      // Backup before the first schema change of this session (T-204).
+      if (dbFile && existsSync(dbFile)) {
+        try {
+          db.pragma('wal_checkpoint(TRUNCATE)');
+          copyFileSync(dbFile, `${dbFile}.pre-migrate-${stamp()}`);
+        } catch {}
+      }
+      for (const m of pending) {
         const tx = db.transaction(() => {
           db.exec(m.sql);
           recordStmt.run(m.id, Date.now());
@@ -45,6 +53,10 @@ export function createMigrator(db: DB, migrations: ReadonlyArray<{ id: string; s
       }
     },
   };
+}
+
+function stamp(): string {
+  return new Date().toISOString().replace(/[:.]/g, '-');
 }
 
 /** Crash-mid-write probe (S-34 partial): WAL survives abrupt close. */

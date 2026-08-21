@@ -26,9 +26,9 @@ export async function main(argv: string[] = process.argv): Promise<number> {
     return 0;
   }
 
-  const { db } = openDatabase(dataDir);
+  const { db, file } = openDatabase(dataDir);
   const migrationSql = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../migrations/0001_init.sql'), 'utf8');
-  createMigrator(db, [{ id: '0001_init', sql: migrationSql }]).migrate();
+  createMigrator(db, [{ id: '0001_init', sql: migrationSql }], file).migrate();
 
   const profileRepo = new ProfileRepo(db);
   seedBuiltinProfiles(profileRepo);

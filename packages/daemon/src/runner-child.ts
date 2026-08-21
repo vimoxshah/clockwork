@@ -54,6 +54,20 @@ process.on('SIGTERM', () => abortController.abort());
 async function main(): Promise<void> {
   const runner = process.env.CW_ENGINE === 'mock' ? new MockRunner() : new ClaudeCliRunner();
 
+  // FR-2a: live-reference file attachments resolved at execution time.
+  let effectiveJob: JobSpec = job;
+  if (job.contextFiles?.length) {
+    const { assembleContext } = await import('@clockwork/runner');
+    const ctxResult = assembleContext(job.contextFiles);
+    if (ctxResult.refused.length > 0) {
+      send({ t: 'log', line: `[context] refused attachments: ${ctxResult.refused.join('; ')}` });
+    }
+    if (ctxResult.included.length > 0) {
+      effectiveJob = { ...job, prompt: `${job.prompt}\n${ctxResult.block}` };
+      send({ t: 'log', line: `[context] attached ${ctxResult.included.length} file(s)` });
+    }
+  }
+
   const io = {
     onUsage: (u: { costUsd: number; turns: number }) => send({ t: 'usage', costUsd: u.costUsd, turns: u.turns }),
     onHeartbeat: () => send({ t: 'heartbeat' }),
@@ -95,7 +109,7 @@ async function main(): Promise<void> {
 
   let outcome: RunOutcome;
   try {
-    outcome = await runner.start(job as any, ctx as any);
+    outcome = await runner.start(effectiveJob as any, ctx as any);
   } catch (e) {
     outcome = {
       state: 'failed',

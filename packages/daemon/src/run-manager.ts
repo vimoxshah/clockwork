@@ -27,6 +27,7 @@ import {
   pruneBranch,
   removeWorktree,
   runGit,
+  maskSecrets,
 } from '@clockwork/runner';
 import { SafetyJournal } from '@clockwork/runner';
 import type { DB } from './db.js';
@@ -350,7 +351,8 @@ export class RunManager {
       cliVersion: null, // filled by CLI engine journal when present
       state: outcome.state,
       failureReason: ('failureReason' in outcome ? outcome.failureReason : undefined) ?? null,
-      summary: typeof outcome.summary === 'string' ? outcome.summary : '',
+      // S-68: best-effort credential masking — documented as such, transcripts stay local
+      summary: maskSecrets(typeof outcome.summary === 'string' ? outcome.summary : ''),
       branch: spec.repoPath ? spec.branch : null,
       baseSha: null,
       basedOnLocalState: false,
