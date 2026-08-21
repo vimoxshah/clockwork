@@ -1,0 +1,19 @@
+{
+  "engine": "cli",
+  "cliVersion": "2.1.238 (Claude Code)",
+  "sessionId": "3d004f08-135b-4191-9f5b-1424aef728bd",
+  "summary": "Done. Added a JSDoc block to `add` in `calc.ts:1-7` and committed it as `6a0134b docs: jsdoc for add` on `clockwork/spike/t001`. Working tree is clean.\n\n```ts\n/**\n * Returns the sum of two numbers.\n *\n * @param a - First addend.\n * @param b - Second addend.\n * @returns The sum of `a` and `b`.\n */\nexport function add(a: number, b: number) {\n```\n\nOne note unrelated to the task: several claude.ai MCP connectors (Datadog, Figma, Notion, Gmail, etc.) are unauthorized in this non-interactive session — they'd need authorizing via claude.ai connector settings before those tools are usable.",
+  "costUsd": 0.916249,
+  "turns": 10,
+  "wallMs": 48783,
+  "exitCode": 0,
+  "committedSomething": true,
+  "commits": "6a0134b docs: jsdoc for add",
+  "diffNumstat": "7\t0\tcalc.ts",
+  "usageEventCount": 10,
+  "rawEventTypes": [
+    "system",
+    "nonjson",
+    "rate_limit_event"
+  ]
+}

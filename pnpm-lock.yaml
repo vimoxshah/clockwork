@@ -105,6 +105,19 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.1)(supports-color@7.2.0)
 
+  spikes:
+    dependencies:
+      '@clockwork/runner':
+        specifier: workspace:*
+        version: link:../packages/runner
+      '@clockwork/shared':
+        specifier: workspace:*
+        version: link:../packages/shared
+    devDependencies:
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.12
+
 packages:
 
   '@ampproject/remapping@2.3.0':

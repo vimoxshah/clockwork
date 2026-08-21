@@ -1,0 +1,20 @@
+{
+  "name": "@clockwork/spikes",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "t001": "tsx src/t001-cli-runner.ts",
+    "t002": "tsx src/t002-interruptions.ts",
+    "t004": "tsx src/t004-auth-probes.ts",
+    "t008": "tsx src/t008-sandbox.ts",
+    "t009": "tsx src/t009-profile-materialization.ts"
+  },
+  "dependencies": {
+    "@clockwork/runner": "workspace:*",
+    "@clockwork/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2"
+  }
+}
