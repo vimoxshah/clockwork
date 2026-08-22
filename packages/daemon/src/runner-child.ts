@@ -52,7 +52,13 @@ const abortController = new AbortController();
 process.on('SIGTERM', () => abortController.abort());
 
 async function main(): Promise<void> {
-  const runner = process.env.CW_ENGINE === 'mock' ? new MockRunner() : new ClaudeCliRunner();
+  // CW_MOCK_STEP_MS makes the deterministic mock observable on fast machines
+  // (full-loop tests sample intermediate states).
+  const stepMs = Number(process.env.CW_MOCK_STEP_MS ?? '0');
+  const runner =
+    process.env.CW_ENGINE === 'mock'
+      ? new MockRunner(stepMs > 0 ? { steps: [{ delayMs: stepMs }] } : {})
+      : new ClaudeCliRunner();
 
   // FR-2a: live-reference file attachments resolved at execution time.
   let effectiveJob: JobSpec = job;

@@ -91,6 +91,11 @@ export class RunManager {
     if (this.pumping) return;
     this.pumping = true;
     setImmediate(() => {
+      // A pump scheduled before shutdown can fire after db.close(); never crash.
+      if ((this.deps.db as unknown as { open?: boolean }).open === false) {
+        this.pumping = false;
+        return;
+      }
       try {
         const active = this.countActive();
         let slots = Math.max(0, this.maxParallel - active);
@@ -112,6 +117,15 @@ export class RunManager {
             if (slots <= 0) break;
           }
           if (!startedAny) break; // everything waiting on mutexes
+        }
+      } catch (e) {
+        // DB closed mid-flight or transient IO — safe to drop this tick
+        if (!/not open/i.test(String(e))) {
+          try {
+            this.deps.db
+              .prepare('INSERT INTO events (at, kind, data_json) VALUES (?, ?, ?)')
+              .run(Date.now(), 'pump_error', JSON.stringify({ error: String(e).slice(0, 200) }));
+          } catch {}
         }
       } finally {
         this.pumping = false;
@@ -190,6 +204,7 @@ export class RunManager {
       TERM: 'dumb',
       LANG: process.env.LANG ?? 'en_US.UTF-8',
       CW_ENGINE: process.env.CW_ENGINE ?? '', // test hook only
+      ...(process.env.CW_MOCK_STEP_MS ? { CW_MOCK_STEP_MS: process.env.CW_MOCK_STEP_MS } : {}), // test hook
       ...(process.env.USER ? { USER: process.env.USER } : {}),
       ...(process.env.LOGNAME ? { LOGNAME: process.env.LOGNAME } : {}),
     };

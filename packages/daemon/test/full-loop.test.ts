@@ -152,19 +152,32 @@ describe('full loop through child process (MockRunner engine)', () => {
 
   it('S-3/S-28: same-repo runs serialize on the mutex — second waits until first finishes', async () => {
     process.env.CW_ENGINE = 'mock';
+    // Make r1 slow enough that its lifetime is observable (instant mock would
+    // flip queued→completed between 200ms samples on fast CI machines).
     const t1 = seedTask('mutex-a').id;
-    const t2 = seedTask('mutex-b').id;
     const r1 = enqueue(t1);
+    process.env.CW_MOCK_STEP_MS = '1500';
+    rm.pump();
+    await waitFor(() => stateOf(r1) === 'running');
+
+    // While r1 is alive, enqueue r2 in the SAME repo: mutex must hold it.
+    process.env.CW_MOCK_STEP_MS = '0';
+    const t2 = seedTask('mutex-b').id;
     const r2 = enqueue(t2);
 
-    rm.pump(); // starts r1 (or both? no: same repo mutex forces serialization)
-    await waitFor(() => ['running'].includes(stateOf(r1)) || stateOf(r1) === 'completed');
-    // r2 must still be queued while r1 active
-    expect(['queued']).toContain(stateOf(r2));
-
-    await waitFor(() => stateOf(r1) === 'completed');
-    rm.pump();
+    // Invariant sampling across r1's remaining life: r2 never runs concurrently.
+    // finalize() pumps r2 the instant r1 turns terminal — that immediate
+    // hand-off is correct behavior, so nothing is asserted after the loop;
+    // the loop itself is the serialization proof.
+    let samples = 0;
+    while (!isTerminal(stateOf(r1))) {
+      expect(['queued', 'preparing']).toContain(stateOf(r2));
+      samples++;
+      await new Promise((res) => setTimeout(res, 120));
+    }
+    expect(samples).toBeGreaterThan(2); // we actually observed the overlap window
     await waitFor(() => stateOf(r2) === 'completed');
+    delete process.env.CW_MOCK_STEP_MS;
     delete process.env.CW_ENGINE;
   }, 90_000);
 
@@ -186,6 +199,8 @@ describe('full loop through child process (MockRunner engine)', () => {
       seedTask('par-c', { repo_path: repoDir }).id, // shares repo with par-a → waits on mutex anyway
     ];
     const runs = ids.map((id) => enqueue(id));
+    // small per-step delay so states are observable on fast machines
+    process.env.CW_MOCK_STEP_MS = '250';
     rm.pump();
     await new Promise((r) => setTimeout(r, 1500));
     // at most 2 active
@@ -193,21 +208,22 @@ describe('full loop through child process (MockRunner engine)', () => {
     const activeCount = states.filter((s) => ['preparing', 'running'].includes(s)).length;
     expect(activeCount).toBeLessThanOrEqual(2);
     await waitFor(() => runs.every((r) => isTerminal(stateOf(r))), 60_000);
+    delete process.env.CW_MOCK_STEP_MS;
     delete process.env.CW_ENGINE;
   }, 120_000);
 
   it('cancel of a running run terminates the child group and marks cancelled', async () => {
     process.env.CW_ENGINE = 'mock';
+    process.env.CW_MOCK_STEP_MS = '1200'; // keep it running long enough to cancel
     const id = seedTask('cancel-run').id;
     const runId = enqueue(id);
     rm.pump();
-    await waitFor(() => stateOf(runId) === 'running' || stateOf(runId) === 'completed');
-    if (stateOf(runId) === 'running') {
-      const row = db.prepare('SELECT pgid FROM runs WHERE id=?').get(runId) as any;
-      expect(row.pgid).toBeGreaterThan(0);
-      rm.cancel(runId);
-      await waitFor(() => stateOf(runId) === 'cancelled');
-    }
+    await waitFor(() => stateOf(runId) === 'running');
+    const row = db.prepare('SELECT pgid FROM runs WHERE id=?').get(runId) as any;
+    expect(row.pgid).toBeGreaterThan(0);
+    rm.cancel(runId);
+    await waitFor(() => stateOf(runId) === 'cancelled');
+    delete process.env.CW_MOCK_STEP_MS;
     delete process.env.CW_ENGINE;
   }, 60_000);
 });
