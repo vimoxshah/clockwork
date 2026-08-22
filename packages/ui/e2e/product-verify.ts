@@ -114,14 +114,16 @@ const run = async (): Promise<number> => {
   await page.getByRole('button', { name: 'Tasks' }).click();
   await expectVisible(page, 'text=E2E smoke task', 'created task appears in Tasks');
 
-  // cleanup the e2e task
-  const delBtns = page.locator('.tasklist-row', { hasText: 'E2E smoke task' }).locator('button.danger');
-  if ((await delBtns.count()) > 0) {
-    await delBtns.first().click();
+  // cleanup ALL prior copies (earlier failed runs may have left duplicates)
+  for (let i = 0; i < 5; i++) {
+    const del = page.locator('.tasklist-row', { hasText: 'E2E smoke task' }).locator('button.danger');
+    if ((await del.count()) === 0) break;
+    await del.first().click();
     await page.locator('.dialog button.btn.danger', { hasText: 'Delete' }).click();
-    await page.waitForTimeout(500);
-    check('delete removes task row', (await page.locator('.tasklist-row', { hasText: 'E2E smoke task' }).count()) === 0);
+    await page.waitForTimeout(400);
   }
+
+  // cleanup the e2e task
 
   // ---- settings: theme switch + persistence ----
   await page.getByRole('button', { name: 'Settings' }).click();

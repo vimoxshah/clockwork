@@ -15,6 +15,8 @@ export interface ParsedEvent {
   isError?: boolean;
   errorClass?: 'auth' | 'rate_limited' | 'capacity' | 'offline' | 'model_unknown' | 'other';
   errorMessage?: string;
+  /** Claude rate_limit_event telemetry (five-hour / weekly windows) */
+  rateLimitInfo?: Record<string, unknown>;
 }
 
 export interface StreamParseAccumulator {
@@ -99,6 +101,13 @@ export function parseStreamLine(line: string): ParsedEvent | null {
         const msg = String(obj.result ?? obj.error ?? 'execution error');
         ev.errorMessage = msg;
         ev.errorClass = classifyError(msg);
+      }
+      break;
+    }
+    case 'rate_limit_event': {
+      // Claude telemetry: {status, resetsAt, rateLimitType: five_hour|seven_day, overageStatus, ...}
+      if (obj.rate_limit_info && typeof obj.rate_limit_info === 'object') {
+        ev.rateLimitInfo = obj.rate_limit_info as Record<string, unknown>;
       }
       break;
     }

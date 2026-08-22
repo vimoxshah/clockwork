@@ -91,14 +91,37 @@ export default function InboxView({ version }: { version: number }): JSX.Element
   return (
     <div className="inbox-layout">
       <div className="inbox-list">
-        <input
-          className="inbox-search"
-          placeholder="Search runs (full-text)…"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          data-testid="inbox-search"
-          aria-label="Search runs"
-        />
+        <div className="relative mb-2">
+          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-dim">🔍</span>
+          <input
+            className="inbox-search !pl-9 !pr-16"
+            placeholder="Search everything…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            data-testid="inbox-search"
+            aria-label="Search runs"
+            id="inbox-search-input"
+          />
+          {q && (
+            <button
+              onClick={() => setQ('')}
+              aria-label="Clear search"
+              className="absolute right-12 top-1/2 -translate-y-1/2 rounded px-1 text-xs text-dim hover:text-fg"
+            >
+              ✕
+            </button>
+          )}
+          <kbd className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded border border-border px-1.5 py-0.5 text-[10px] text-dim">
+            ⌘K
+          </kbd>
+        </div>
+        <script dangerouslySetInnerHTML={{ __html: '' }} />
+        <KeyFocus />
+        {q.trim() && (
+          <p className="mb-2 text-xs text-dim">
+            {visibleRuns.length} result{visibleRuns.length === 1 ? '' : 's'} for “{q.trim()}” (full-text)
+          </p>
+        )}
         <div className="filter-chips" role="tablist" aria-label="Filter by outcome">
           {(['all', 'completed', 'failed', 'active', 'needsyou'] as OutcomeFilter[]).map((f) => (
             <button key={f} className={filter === f ? 'on' : ''} onClick={() => setFilter(f)}>
@@ -255,6 +278,7 @@ function ReportDetail({ runId, version }: { runId: string; version: number }): J
       ) : (
         <div className="empty">Report not finalized yet — check back once the run completes.</div>
       )}
+      <FailureBanner reason={run.outcome_reason} />
 
       {report?.diffStat?.length > 0 && (
         <table className="diffstat-table mono">
@@ -308,4 +332,57 @@ function safeJson(s: string): any {
   } catch {
     return {};
   }
+}
+
+/** ⌘K focuses the inbox search from anywhere. */
+function KeyFocus(): null {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        document.getElementById('inbox-search-input')?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+  return null;
+}
+
+/** Humanized failure guidance — honest next-steps per failure class. */
+const FAILURE_GUIDANCE: Record<string, { title: string; next: string }> = {
+  capacity: {
+    title: 'Provider limit reached',
+    next: 'Your plan’s usage window is exhausted. Wait for the reset shown below, or book the next run on a different provider in the composer.',
+  },
+  auth: {
+    title: 'Not signed in',
+    next: 'Open your provider CLI once to re-login, then press “Run now” on the task.',
+  },
+  max_turns: {
+    title: 'Stopped at the turn cap',
+    next: 'The agent needed more steps than allowed. Raise “Max turns” on the task, or narrow the prompt.',
+  },
+  timed_out: {
+    title: 'Ran past its timeout',
+    next: 'Increase “Timeout s” if the job genuinely needs longer.',
+  },
+  budget_exceeded: {
+    title: 'Spent past the budget cap',
+    next: 'Raise the USD soft cap, or narrow scope so fewer tokens are needed.',
+  },
+  repo_preflight: {
+    title: 'Repository problem',
+    next: 'Check that the path exists, has commits, and the base branch resolves.',
+  },
+};
+
+function FailureBanner({ reason }: { reason: string | null }): JSX.Element | null {
+  const g = reason ? FAILURE_GUIDANCE[reason] : undefined;
+  if (!g) return null;
+  return (
+    <div className="error-banner" role="alert">
+      <strong>{g.title}.</strong> {g.next}
+    </div>
+  );
 }

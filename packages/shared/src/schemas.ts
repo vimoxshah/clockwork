@@ -11,10 +11,17 @@ export const permissionModes = ['plan', 'acceptEdits', 'default'] as const;
 export const PermissionMode = z.enum(permissionModes);
 export type PermissionMode = (typeof permissionModes)[number];
 
-// ---- Engines (ADR-016)
-export const engines = ['cli', 'sdk'] as const;
+// ---- Engines/providers (ADR-016 + ADR-026): claude CLI default; codex & opencode CLIs opt-in.
+export const engines = ['cli', 'sdk', 'codex', 'opencode'] as const;
 export const Engine = z.enum(engines);
 export type Engine = (typeof engines)[number];
+
+/** Runtime provider metadata the daemon detects (ADR-026). */
+export const PROVIDERS = [
+  { id: 'cli', label: 'Claude Code', bin: 'claude' },
+  { id: 'codex', label: 'Codex CLI', bin: 'codex' },
+  { id: 'opencode', label: 'OpenCode', bin: 'opencode' },
+] as const;
 
 // ---- Scheduling (FR-4)
 export const scheduleKinds = ['once', 'rrule', 'cron', 'queue'] as const;
@@ -121,6 +128,7 @@ export const TaskCreate = z.object({
   repoPath: z.string().optional(), // absent/empty => scratch (no-repo) task
   baseBranch: z.string().optional(),
   model: z.string().optional(),
+  engine: Engine.optional(), // per-task provider override (ADR-026); default = profile/cli
   permissionMode: PermissionMode.default('acceptEdits'),
   budget: Budget.default({ maxUsd: 2.0, maxTurns: 50, timeoutSec: 3600 }),
   schedule: ScheduleSpec,
@@ -134,6 +142,7 @@ export const TaskCreate = z.object({
 export type TaskCreate = z.infer<typeof TaskCreate>;
 
 export const TaskPatch = z.object({
+  engine: Engine.optional(),
   name: z.string().min(1).max(120).optional(),
   prompt: z.string().min(1).max(32_000).optional(),
   profileId: z.string().nullable().optional(),

@@ -7,7 +7,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
-import { ClaudeCliRunner, MockRunner, evaluateCommand, evaluatePathRead } from '@clockwork/runner';
+import { ClaudeCliRunner, MockRunner, CodexRunner, OpenCodeRunner, evaluateCommand, evaluatePathRead } from '@clockwork/runner';
 import type { ChildToDaemon, DaemonToChild } from './runner-protocol.js';
 import type { JobSpec, RunOutcome } from '@clockwork/shared';
 
@@ -58,7 +58,11 @@ async function main(): Promise<void> {
   const runner =
     process.env.CW_ENGINE === 'mock'
       ? new MockRunner(stepMs > 0 ? { steps: [{ delayMs: stepMs }] } : {})
-      : new ClaudeCliRunner();
+      : job.engine === 'codex'
+        ? new CodexRunner()
+        : job.engine === 'opencode'
+          ? new OpenCodeRunner()
+          : new ClaudeCliRunner();
 
   // FR-2a: live-reference file attachments resolved at execution time.
   let effectiveJob: JobSpec = job;
@@ -76,6 +80,7 @@ async function main(): Promise<void> {
 
   const io = {
     onUsage: (u: { costUsd: number; turns: number }) => send({ t: 'usage', costUsd: u.costUsd, turns: u.turns }),
+    onRateLimit: (info: Record<string, unknown>) => send({ t: 'rateLimit', info }),
     onHeartbeat: () => send({ t: 'heartbeat' }),
     onLog: (line: string) => send({ t: 'log', line }),
     onArtifact: (path: string) => send({ t: 'artifact', path }),

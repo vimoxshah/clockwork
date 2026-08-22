@@ -8,8 +8,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DateTime } from 'luxon';
-import { openDatabase, createMigrator, type DB } from '../src/db.js';
-import { readFileSync } from 'node:fs';
+import { openDatabase, createMigrator, loadMigrationsFrom, type DB } from '../src/db.js';
 import { Scheduler, GRACE_MS, buildJobSpec } from '../src/scheduler.js';
 import { FakeClock } from '../src/clock.js';
 
@@ -20,10 +19,7 @@ let enqueued: Array<{ runId: string; spec: any }>;
 let notifications: Array<{ kind: string; taskName: string; detail: string }>;
 let scheduler: Scheduler;
 
-const MIGRATION = {
-  id: '0001_init',
-  sql: readFileSync(path.resolve(import.meta.dirname, '../migrations/0001_init.sql'), 'utf8'),
-};
+const MIGRATIONS = loadMigrationsFrom(path.resolve(import.meta.dirname, '../migrations'));
 
 function seedTask(over: Partial<Record<string, unknown>> = {}): { taskId: string; scheduleId: string } {
   const now = clock.now();
@@ -63,7 +59,7 @@ beforeEach(() => {
   dir = mkdtempSync(path.join(os.tmpdir(), 'cw-sched-'));
   const opened = openDatabase(dir);
   db = opened.db;
-  createMigrator(db, [MIGRATION]).migrate();
+  createMigrator(db, MIGRATIONS).migrate();
   // fake clock anchored at a safe instant
   clock = new FakeClock(DateTime.fromObject({ year: 2026, month: 3, day: 7, hour: 12 }, { zone: 'utc' }).toMillis());
   enqueued = [];

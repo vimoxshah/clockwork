@@ -34,6 +34,7 @@ export const TaskView = z.object({
   baseBranch: z.string().nullable(),
   model: z.string().nullable(),
   permissionMode: z.string(),
+  engine: z.string().nullable(),
   budget: z.object({ maxUsd: z.number(), maxTurns: z.number(), timeoutSec: z.number() }),
   schedule: z.unknown(),
   overlapPolicy: z.string(),

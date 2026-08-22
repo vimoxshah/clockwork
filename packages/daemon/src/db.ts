@@ -4,7 +4,7 @@
  * from architecture §1 verbatim (ADR-022).
  */
 import Database from 'better-sqlite3';
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 export type DB = Database.Database;
@@ -63,4 +63,12 @@ function stamp(): string {
 export function integrityCheck(db: DB): boolean {
   const r = db.pragma('integrity_check', { simple: true });
   return r === 'ok';
+}
+
+/** Load all forward-only migrations from a directory, filename-sorted. */
+export function loadMigrationsFrom(dir: string): Array<{ id: string; sql: string }> {
+  return readdirSync(dir)
+    .filter((f) => f.endsWith('.sql'))
+    .sort()
+    .map((f) => ({ id: f.replace(/\.sql$/, ''), sql: readFileSync(path.join(dir, f), 'utf8') }));
 }

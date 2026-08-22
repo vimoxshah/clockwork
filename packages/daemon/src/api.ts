@@ -4,6 +4,7 @@
  * The UI is a pure client; anything scriptable here is scriptable by users.
  */
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
+import { z } from 'zod';
 import fastifyStatic from '@fastify/static';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdirSync } from 'node:fs';
@@ -16,6 +17,7 @@ import {
   ProfilePatch,
   API_VERSION,
   newId,
+  type JobSpec,
   slugify,
   branchFor,
 } from '@clockwork/shared';
@@ -622,6 +624,138 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     };
   });
 
+  // ---- user preferences (notification sound/volume) ----
+  app.get('/prefs', async () => readPrefs(deps.dataDir));
+
+  app.put('/prefs', async (req, reply) => {
+    const PrefsSchema = z.object({
+      soundMode: z.enum(['chime', 'system', 'none']).default('chime'),
+      volumePct: z.number().int().min(0).max(100).default(60),
+    });
+    const parsed = PrefsSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(422).send({ error: 'validation' });
+    writeFileSync(`${deps.dataDir}/prefs.json`, JSON.stringify(parsed.data, null, 2));
+    return readPrefs(deps.dataDir);
+  });
+
+  // ---- providers (ADR-026): detect installed CLIs + versions ----
+  app.get('/providers', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const { PROVIDERS } = await import('@clockwork/shared');
+    const { resolveOnAugmentedPath, augmentedPath } = await import('@clockwork/runner');
+    const out = [];
+    for (const p of PROVIDERS) {
+      const bin = resolveOnAugmentedPath(p.bin);
+      let detected = false;
+      let version: string | null = null;
+      if (bin) {
+        try {
+          version = execFileSync(bin, ['--version'], {
+            encoding: 'utf8',
+            timeout: 8000,
+            env: { ...process.env, PATH: augmentedPath(process.env.PATH) },
+          }).trim().split('\n')[0] ?? null;
+          detected = true;
+        } catch {
+          detected = false;
+        }
+      }
+      out.push({ id: p.id, label: p.label, bin: p.bin, detected, version, path: bin });
+    }
+    return out;
+  });
+
+  // ---- filesystem browse (repo picker; read-only, home-scoped) ----
+  app.get('/fs/browse', async (req, reply) => {
+    const { readdirSync, statSync } = await import('node:fs');
+    const home = process.env.HOME ?? '/';
+    let dir = String((req.query as any).path ?? '').trim() || home;
+    try {
+      dir = (await import('node:fs')).realpathSync(dir);
+    } catch {
+      return reply.code(422).send({ error: 'path not found' });
+    }
+    // Safety: stay under $HOME and never list credential dirs.
+    if (!(dir === home || dir.startsWith(home + '/'))) {
+      return reply.code(403).send({ error: 'outside home directory' });
+    }
+    for (const deny of ['.ssh', '.aws', '.gnupg', 'Library/Keychains']) {
+      if (dir.includes(deny)) return reply.code(403).send({ error: 'credential directory' });
+    }
+    let entries: Array<{ name: string; type: 'dir' | 'file'; isGit: boolean }> = [];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+        .slice(0, 500)
+        .map((e) => {
+          let isGit = false;
+          try {
+            isGit = statSync(`${dir}/${e.name}/.git`).isDirectory();
+          } catch {}
+          return { name: e.name, type: 'dir' as const, isGit };
+        })
+        .sort((a, b) => a.name.localeCompare(b.name));
+    } catch (e) {
+      return reply.code(500).send({ error: `unreadable: ${String(e).slice(0, 60)}` });
+    }
+    return { path: dir, parent: dir !== home ? home + dir.slice(home.length).replace(/\/[^/]+$/, '') || '/' : null, entries };
+  });
+
+  // ---- clone a git repo locally so it can be scheduled (FR extension) ----
+  app.post('/repos/clone', async (req, reply) => {
+    const url = String((req.body as any)?.url ?? '').trim();
+    if (!/^https:\/\/[^\s]+|git@[^\s:]+:[^\s]+$/.test(url)) {
+      return reply.code(422).send({ error: 'provide an https or ssh git URL' });
+    }
+    const slug =
+      url
+        .replace(/\.git$/, '')
+        .split(/[/:]/)
+        .filter(Boolean)
+        .at(-1)!
+        .replace(/[^a-zA-Z0-9-_]/g, '-') || 'repo';
+    const target = `${process.env.HOME}/.clockwork/repos/${slug}`;
+    const { existsSync, mkdirSync } = await import('node:fs');
+    if (existsSync(`${target}/.git`)) {
+      return { ok: true, alreadyCloned: true, path: target, slug };
+    }
+    mkdirSync(`${process.env.HOME}/.clockwork/repos`, { recursive: true });
+    const { spawnSync } = await import('node:child_process');
+    const r = spawnSync(
+      'git',
+      ['clone', '--depth', '1', url, target],
+      { encoding: 'utf8', timeout: 180_000, env: { ...process.env } },
+    );
+    if (r.status !== 0) {
+      return reply.code(422).send({
+        error: `clone failed: ${(r.stderr ?? '').trim().split('\n').at(-1) ?? 'git error'}`,
+      });
+    }
+    return { ok: true, path: target, slug };
+  });
+
+  // ---- usage & limits (capacity samples from live runs; estimate-grade FR-7) ----
+  app.get('/usage/status', async () => {
+    const rows = deps.db
+      .prepare(
+        `SELECT at, window_kind, used_pct, source FROM capacity_samples ORDER BY at DESC LIMIT 24`,
+      )
+      .all() as unknown as Array<{ at: number; window_kind: string | null; used_pct: number | null; source: string }>;
+    const byWindow = new Map<string, { at: number; usedPct: number | null; source: string; resetsAt: number | null }>();
+    for (const r of rows) {
+      const key = r.window_kind ?? 'unknown';
+      if (!byWindow.has(key)) {
+        byWindow.set(key, {
+          at: r.at,
+          usedPct: r.used_pct,
+          source: r.source,
+          resetsAt: null,
+        });
+      }
+    }
+    return { windows: [...byWindow.entries()].map(([kind, v]) => ({ kind, ...v })) };
+  });
+
   // ---- SSE (Fastify v5: hijack the reply; the raw response lives on reply.raw) ----
   app.get('/events', (req, reply) => {
     const res = reply.raw;
@@ -660,7 +794,7 @@ function jobSpecForTask(db: DB, taskRow: any, now: number) {
     taskName: taskRow.name,
     taskSlug: slug,
     prompt: taskRow.prompt,
-    engine: (profile?.engine ?? 'cli') as 'cli' | 'sdk',
+    engine: ((taskRow.engine ?? profile?.engine ?? 'cli') as JobSpec['engine']),
     model: taskRow.model ?? profile?.model ?? null,
     permissionMode: taskRow.permission_mode,
     budget: { maxUsd: taskRow.budget_usd, maxTurns: taskRow.max_turns, timeoutSec: taskRow.timeout_sec },
@@ -699,6 +833,7 @@ function view(row: any, nextFire: number | null = null): unknown {
     baseBranch: row.base_branch ?? null,
     model: row.model ?? null,
     permissionMode: row.permission_mode,
+    engine: row.engine ?? null,
     budget: { maxUsd: row.budget_usd, maxTurns: row.max_turns, timeoutSec: row.timeout_sec },
     missedPolicy: row.missed_policy,
     missedWindowSec: row.missed_window_sec,
@@ -710,4 +845,16 @@ function view(row: any, nextFire: number | null = null): unknown {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+/** ~/.clockwork/prefs.json — notification sound/volume (validated). */
+export function readPrefs(dataDir: string): { soundMode: 'chime' | 'system' | 'none'; volumePct: number } {
+  try {
+    const raw = JSON.parse(readFileSync(`${dataDir}/prefs.json`, 'utf8'));
+    const mode = ['chime', 'system', 'none'].includes(raw?.soundMode) ? raw.soundMode : 'chime';
+    const vol = Number.isInteger(raw?.volumePct) ? Math.max(0, Math.min(100, raw.volumePct)) : 60;
+    return { soundMode: mode, volumePct: vol };
+  } catch {
+    return { soundMode: 'chime', volumePct: 60 };
+  }
 }

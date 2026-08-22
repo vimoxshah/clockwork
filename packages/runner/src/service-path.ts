@@ -12,6 +12,7 @@ const WELL_KNOWN_USER_BINS = [
   '/usr/local/bin',
   '/usr/local/sbin',
   `${homedir()}/.local/bin`,
+  `${homedir()}/.opencode/bin`,
   `${homedir()}/bin`,
 ];
 

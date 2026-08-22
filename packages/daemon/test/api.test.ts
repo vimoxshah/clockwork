@@ -8,8 +8,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { openDatabase, createMigrator, type DB } from '../src/db.js';
-import { readFileSync } from 'node:fs';
+import { openDatabase, createMigrator, loadMigrationsFrom, type DB } from '../src/db.js';
 import { RunManager } from '../src/run-manager.js';
 import { Scheduler } from '../src/scheduler.js';
 import { FakeClock } from '../src/clock.js';
@@ -23,16 +22,13 @@ let app: FastifyInstance;
 let token: string;
 let clock: FakeClock;
 
-const MIGRATION = {
-  id: '0001_init',
-  sql: readFileSync(path.resolve(import.meta.dirname, '../migrations/0001_init.sql'), 'utf8'),
-};
+const MIGRATIONS = loadMigrationsFrom(path.resolve(import.meta.dirname, '../migrations'));
 
 beforeAll(async () => {
   dir = mkdtempSync(path.join(os.tmpdir(), 'cw-api-'));
   const opened = openDatabase(dir);
   db = opened.db;
-  createMigrator(db, [MIGRATION]).migrate();
+  createMigrator(db, MIGRATIONS).migrate();
   clock = new FakeClock(Date.now());
 
   const rm = new RunManager({

@@ -1,0 +1,31 @@
+import { chromium } from 'playwright';
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+const TOKEN = readFileSync(homedir() + '/.clockwork/api-token', 'utf8').trim();
+const run = async (): Promise<void> => {
+  const browser = await chromium.launch();
+  const page = await (await browser.newContext()).newPage();
+  page.on('pageerror', (e) => console.log('PAGEERROR:', e.message.slice(0, 150)));
+  page.on('console', (m) => m.type() === 'error' && console.log('CONSOLE:', m.text().slice(0, 150)));
+  await page.addInitScript((t) => localStorage.setItem('clockwork.token', t), TOKEN);
+  await page.goto('http://127.0.0.1:4747', { waitUntil: 'networkidle' });
+  await page.getByRole('button', { name: '+ New task' }).click();
+  await page.waitForTimeout(400);
+  await page.fill('#c-name', 'E2E smoke task');
+  await page.fill('#c-prompt', 'Reply with exactly: E2E-OK');
+  await page.fill('#c-usd', '1');
+  await page.getByRole('tab', { name: 'ASAP' }).last().click();
+  await page.getByRole('button', { name: 'Book it' }).click();
+  await page.waitForTimeout(1200);
+  // what does the page show?
+  const banner = await page.locator('.error-banner').count();
+  if (banner) console.log('ERROR-BANNER:', (await page.locator('.error-banner').first().innerText()).slice(0, 160));
+  const url = page.url();
+  console.log('URL after book:', url);
+  await page.getByRole('button', { name: 'Tasks' }).click();
+  await page.waitForTimeout(800);
+  const rows = await page.locator('.tasklist-row').allInnerTexts();
+  console.log('TASK ROWS:', rows.map((r) => r.split('\n')[0]).slice(0, 6));
+  await browser.close();
+};
+void run();

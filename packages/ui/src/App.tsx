@@ -6,14 +6,15 @@ import { Component, useEffect, useState, type ReactNode } from 'react';
 import { api, openEventStream, setToken } from './api';
 import { ThemeProvider } from './theme';
 import CalendarView from './components/CalendarView';
+import AgentsView from './components/AgentsView';
 import InboxView from './components/InboxView';
 import TasksView from './components/TasksView';
 import ComposerView from './components/ComposerView';
 import SettingsView from './components/SettingsView';
 import type { Health } from './api';
 
-type Tab = 'calendar' | 'inbox' | 'tasks' | 'new' | 'settings';
-const TABS: Tab[] = ['calendar', 'inbox', 'tasks', 'new', 'settings'];
+type Tab = 'calendar' | 'inbox' | 'agents' | 'tasks' | 'new' | 'settings';
+const TABS: Tab[] = ['calendar', 'inbox', 'agents', 'tasks', 'new', 'settings'];
 
 function tabFromHash(): Tab {
   const h = window.location.hash.replace('#/', '').replace('#', '') as Tab;
@@ -66,11 +67,21 @@ export default function App(): JSX.Element {
   }, []);
 
   // live refresh over SSE — every state change bumps dataVersion so views refetch
+  const [toasts, setToasts] = useState<Array<{ id: number; title: string; body: string; target: Tab }>>([]);
   useEffect(() => {
     if (unauthorized || !localStorage.getItem('clockwork.token')) return;
     const es = openEventStream((e) => {
       if (e.type === 'daemon.health' && e.data) {
         setHealth((h) => (h ? { ...h, ...e.data } : h));
+      }
+      // toast center: click navigates to the relevant surface (FR: app-grade notifications)
+      let toast: { title: string; body: string; target: Tab } | null = null;
+      if (e.type === 'report.ready') toast = { title: 'Run report ready', body: 'Open the inbox to review.', target: 'inbox' };
+      else if (e.type === 'approval.requested') toast = { title: 'Needs your approval', body: 'A run is asking for permission.', target: 'inbox' };
+      if (toast) {
+        const id = Date.now() + Math.random();
+        setToasts((ts) => [...ts.slice(-3), { id, ...toast! }]);
+        setTimeout(() => setToasts((ts) => ts.filter((x) => x.id !== id)), 6000);
       }
       setDataVersion((v) => v + 1);
     });
@@ -145,6 +156,7 @@ export default function App(): JSX.Element {
                 />
               )}
               {tab === 'inbox' && <InboxView version={dataVersion} />}
+              {tab === 'agents' && <AgentsView version={dataVersion} />}
               {tab === 'tasks' && <TasksView version={dataVersion} />}
               {tab === 'new' && (
                 <ComposerView
@@ -157,6 +169,22 @@ export default function App(): JSX.Element {
               )}
               {tab === 'settings' && <SettingsView version={dataVersion} />}
             </main>
+            {/* toast center — top-right so it never covers form actions; auto-dismiss */}
+            <div className="fixed right-4 top-14 z-40 flex flex-col gap-2">
+              {toasts.map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => {
+                    setTab(t.target);
+                    setToasts((ts) => ts.filter((x) => x.id !== t.id));
+                  }}
+                  className="w-72 rounded-xl border border-strong bg-surface p-3 text-left shadow-2xl transition-transform hover:scale-[1.02]"
+                >
+                  <div className="text-[13px] font-semibold text-fg">🔔 {t.title}</div>
+                  <div className="mt-0.5 text-xs text-muted">{t.body}</div>
+                </button>
+              ))}
+            </div>
           </>
         )}
       </ErrorBoundary>

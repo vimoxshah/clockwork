@@ -71,6 +71,7 @@ export interface TaskViewT {
   name: string;
   prompt: string;
   profileId: string | null;
+  engine?: string | null;
   repoPath: string | null;
   permissionMode: string;
   budget: { maxUsd: number; maxTurns: number; timeoutSec: number };
@@ -160,6 +161,29 @@ export const api = {
   snapshot: () => req<any>('GET', '/widget/snapshot'),
   pauseAll: () => req<{ paused: boolean }>('POST', '/pause-all'),
   resume: () => req<{ paused: boolean }>('POST', '/resume'),
+  providers: () =>
+    req<Array<{ id: string; label: string; bin: string; detected: boolean; version: string | null }>>(
+      'GET',
+      '/providers',
+    ),
+  browseFs: (path: string) =>
+    req<{ path: string; parent: string | null; entries: Array<{ name: string; type: 'dir' | 'file'; isGit: boolean }> }>(
+      'GET',
+      `/fs/browse?path=${encodeURIComponent(path)}`,
+    ),
+  cloneRepo: (url: string) =>
+    req<{ ok: true; alreadyCloned?: boolean; path: string; slug: string }>(
+      'POST',
+      '/repos/clone',
+      { url },
+    ),
+  usageStatus: () =>
+    req<{ windows: Array<{ kind: string; at: number; usedPct: number | null; source: string; resetsAt: number | null }> }>(
+      'GET',
+      '/usage/status',
+    ),
+  getPrefs: () => req<{ soundMode: 'chime' | 'system' | 'none'; volumePct: number }>('GET', '/prefs'),
+  putPrefs: (p: { soundMode: string; volumePct: number }) => req<unknown>('PUT', '/prefs', p),
 };
 
 export function openEventStream(onEvent: (e: any) => void): EventSource {

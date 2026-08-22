@@ -317,6 +317,25 @@ export class RunManager {
         break;
       case 'artifact':
         break;
+      case 'rateLimit': {
+        // Capacity telemetry (FR-7): persist + broadcast; UI renders estimate.
+        const rlMsg = msg as unknown as { info?: Record<string, unknown> };
+        const info = rlMsg.info ?? {};
+        const kind = String(info.rateLimitType ?? 'unknown');
+        const usedPct =
+          typeof (info as any).utilization === 'number'
+            ? (info as any).utilization
+            : typeof (info as any).used_pct === 'number'
+              ? (info as any).used_pct
+              : null;
+        try {
+          this.deps.db
+            .prepare('INSERT INTO capacity_samples (at, window_kind, used_pct, source) VALUES (?, ?, ?, ?)')
+            .run(now, kind, usedPct, JSON.stringify(info));
+        } catch {}
+        this.deps.broadcast({ type: 'usage.updated', window: kind, at: now });
+        break;
+      }
       case 'permission': {
         // Record the request; the child holds its callback open for ~2 min.
         // A human decision (POST /approvals/:id/respond → respondToChild)

@@ -247,7 +247,7 @@ export function buildJobSpec(runId: string, task: TaskRow, now: number, occurren
     taskName: task.name,
     taskSlug: slug,
     prompt: task.prompt,
-    engine: (profile?.engine ?? 'cli') as 'cli' | 'sdk',
+    engine: ((task as any).engine ?? profile?.engine ?? 'cli') as JobSpec['engine'],
     model: task.model ?? profile?.model ?? null,
     permissionMode: task.permission_mode as JobSpec['permissionMode'],
     budget: { maxUsd: task.budget_usd, maxTurns: task.max_turns, timeoutSec: task.timeout_sec },

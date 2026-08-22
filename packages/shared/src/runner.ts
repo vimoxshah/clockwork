@@ -31,6 +31,8 @@ export interface RunnerIO {
   onPermissionRequest(p: PermissionRequest): Promise<DecisionOrEscalate>;
   onHeartbeat(): void;
   onArtifact(path: string): void;
+  /** Claude rate_limit_event telemetry → capacity model (FR-7, estimate-grade). */
+  onRateLimit?(info: Record<string, unknown>): void;
   onLog(line: string): void;
 }
 
@@ -53,7 +55,7 @@ export interface JobContext {
 }
 
 export interface AgentRunner {
-  readonly engine: 'cli' | 'sdk' | 'mock';
+  readonly engine: 'cli' | 'sdk' | 'codex' | 'opencode' | 'mock';
   start(job: JobSpecLike, ctx: JobContext): Promise<RunOutcome>;
   /** Fallback path only (ADR-014): restarts a turn with the decision injected. */
   resume(sessionRef: string, job: JobSpecLike, ctx: JobContext): Promise<RunOutcome>;

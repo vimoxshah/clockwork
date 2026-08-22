@@ -12,8 +12,10 @@ import { Card, CardContent } from './ui/card';
 import { Segmented } from './ui/segmented';
 import { DateTimePicker } from './ui/datetime-picker';
 import { Badge } from './ui/card';
-import { Zap, FolderGit2, Bot, Wallet, CalendarClock, AlertCircle } from 'lucide-react';
+import { Zap, FolderGit2, Bot, Wallet, CalendarClock, AlertCircle, GitBranch } from 'lucide-react';
 import { cn } from '../lib/cn';
+import { FolderBrowserDialog } from './FolderBrowserDialog';
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from './ui/dialog';
 
 
 function defaultSlot(): Date {
@@ -73,11 +75,13 @@ export default function ComposerView({
   prefill: ComposerPrefill | null;
 }): JSX.Element {
   const [profiles, setProfiles] = useState<ProfileRow[]>([]);
+  const [providers, setProviders] = useState<Array<{ id: string; label: string; detected: boolean; version: string | null }>>([]);
   const [form, setForm] = useState(() => ({
     name: '',
     prompt: '',
     repoPath: '',
     profileId: '',
+    providerId: 'claude',
     permissionMode: 'acceptEdits' as 'plan' | 'acceptEdits',
     maxUsd: '2',
     maxTurns: '50',
@@ -92,9 +96,14 @@ export default function ComposerView({
   }));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [browsing, setBrowsing] = useState(false);
+  const [cloneOpen, setCloneOpen] = useState(false);
+  const [cloneUrl, setCloneUrl] = useState('');
+  const [cloneBusy, setCloneBusy] = useState(false);
 
   useEffect(() => {
     void api.profiles().then(setProfiles).catch(() => {});
+    void api.providers().then(setProviders).catch(() => {});
   }, []);
 
   // Calendar "Book a run this day" prefill arrives after mount.
@@ -105,6 +114,20 @@ export default function ComposerView({
   }, [prefill]);
 
   const selectedProfile = profiles.find((p) => p.id === form.profileId) ?? null;
+  const detectedProviders = providers.filter((p) => p.detected);
+  const providerOptions = [
+    ...(detectedProviders.length > 0
+      ? detectedProviders
+      : providers
+    ).map((p) => ({
+      value: p.id === 'cli' ? 'claude' : p.id,
+      label: p.label,
+      title: p.version ?? 'not installed',
+    })),
+  ];
+  const activeProvider = providers.find(
+    (p) => (p.id === 'cli' ? 'claude' : p.id) === form.providerId,
+  );
 
   const submit = async (): Promise<void> => {
     setError(null);
@@ -138,6 +161,7 @@ export default function ComposerView({
 
     setBusy(true);
     try {
+      const engine = form.providerId === 'claude' ? 'cli' : form.providerId;
       await api.createTask({
         name: form.name.trim() || 'Untitled task',
         prompt: form.prompt,
@@ -151,6 +175,7 @@ export default function ComposerView({
         context: { files: [] },
         delivery: { osNotify: true },
         schedule,
+        engine: engine as 'cli',
       });
       onDone();
     } catch (e) {
@@ -160,9 +185,57 @@ export default function ComposerView({
     }
   };
 
+  const doClone = async (): Promise<void> => {
+    setCloneBusy(true);
+    setError(null);
+    try {
+      const r = await api.cloneRepo(cloneUrl.trim());
+      setForm((f) => ({ ...f, repoPath: r.path }));
+      setCloneOpen(false);
+      setCloneUrl('');
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    } finally {
+      setCloneBusy(false);
+    }
+  };
+
   return (
     <div className="mx-auto max-w-3xl pb-8">
       <Card>
+        {browsing && (
+          <FolderBrowserDialog
+            open={browsing}
+            onClose={() => setBrowsing(false)}
+            onPick={(p) => setForm((f) => ({ ...f, repoPath: p }))}
+          />
+        )}
+        <Dialog open={cloneOpen} onOpenChange={(o) => !o && setCloneOpen(false)}>
+          <DialogContent>
+            <DialogTitle>Clone a git repository</DialogTitle>
+            <DialogDescription>
+              Shallow-cloned into ~/.clockwork/repos/ and selected for this task.
+            </DialogDescription>
+            <div className="mt-3 space-y-2">
+              <Input
+                placeholder="https://github.com/you/repo.git"
+                value={cloneUrl}
+                onChange={(e) => setCloneUrl(e.target.value)}
+                className="mono"
+                onKeyDown={(e) => e.key === 'Enter' && void doClone()}
+              />
+              {error?.includes('clone') && <div className="error-banner">{error}</div>}
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setCloneOpen(false)}>
+                Cancel
+              </Button>
+              <Button disabled={!cloneUrl.trim() || cloneBusy} onClick={() => void doClone()}>
+                {cloneBusy ? 'Cloning…' : 'Clone'}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
         <div className="border-b border-border px-5 py-4">
           <div className="flex items-center gap-2">
             <Zap className="h-4 w-4 text-accent" />
@@ -199,15 +272,41 @@ export default function ComposerView({
 
             <Section icon={<FolderGit2 />} title="Repository">
               <Label htmlFor="c-repo">Repo path</Label>
-              <Input
-                id="c-repo"
-                placeholder="/Users/you/dev/my-repo"
-                value={form.repoPath}
-                onChange={(e) => setForm({ ...form, repoPath: e.target.value })}
+              <div className="flex gap-2">
+                <Input
+                  id="c-repo"
+                  placeholder="/Users/you/dev/my-repo"
+                  value={form.repoPath}
+                  onChange={(e) => setForm({ ...form, repoPath: e.target.value })}
+                />
+                <Button variant="outline" onClick={() => setBrowsing(true)} title="Browse folders">
+                  Browse
+                </Button>
+                <Button variant="outline" onClick={() => setCloneOpen(true)} title="Clone from a git URL">
+                  <GitBranch /> Clone URL
+                </Button>
+              </div>
+              {form.repoPath && form.repoPath.startsWith(`${process.env.HOME ?? '~'}/.clockwork/repos/`) && (
+                <p className="mt-1 text-xs text-info">✓ cloned & managed by Clockwork</p>
+              )}
+              {!form.repoPath && <p className="mt-1 text-xs text-dim">Empty = scratch task (no git isolation).</p>}
+            </Section>
+
+            <Section icon={<Bot />} title="Provider">
+              <Segmented
+                aria-label="Provider"
+                className="w-full"
+                value={form.providerId}
+                onChange={(v) => setForm({ ...form, providerId: v })}
+                options={providerOptions}
               />
-              <p className="mt-1 text-xs text-dim">
-                Empty = scratch task (no git isolation needed).
-              </p>
+              {activeProvider && (
+                <p className="mt-1 text-xs text-dim">
+                  {activeProvider.detected
+                    ? `${activeProvider.label} · ${activeProvider.version}`
+                    : `${activeProvider.label} not installed`}
+                </p>
+              )}
             </Section>
 
             <Section icon={<Wallet />} title="Budget & limits">

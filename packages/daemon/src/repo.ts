@@ -69,11 +69,11 @@ export class TaskRepo {
     const tx = this.db.transaction(() => {
       this.db
         .prepare(
-          `INSERT INTO tasks (id, name, prompt, profile_id, repo_path, model, permission_mode,
+          `INSERT INTO tasks (id, name, prompt, profile_id, repo_path, model, engine, permission_mode,
             budget_usd, max_turns, timeout_sec, base_branch, context_json, delivery_json,
             missed_policy, missed_window_sec, overlap_policy, retry_on_transient, enabled, version,
             created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)`,
         )
         .run(
           id,
@@ -82,6 +82,7 @@ export class TaskRepo {
           resolvedProfileId,
           input.repoPath ?? null,
           input.model ?? null,
+          input.engine ?? null,
           input.permissionMode,
           input.budget.maxUsd,
           input.budget.maxTurns,
@@ -147,6 +148,7 @@ export class TaskRepo {
         ['overlapPolicy', 'overlap_policy', (v) => v],
         ['retryOnTransient', 'retry_on_transient', (v) => (v ? 1 : 0)],
         ['enabled', 'enabled', (v) => (v ? 1 : 0)],
+        ['engine', 'engine', (v) => v],
       ];
       for (const [k, col, cast] of map) {
         if (input[k] !== undefined) {

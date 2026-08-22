@@ -5,7 +5,7 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDatabase, createMigrator } from './db.js';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { SystemClock } from './clock.js';
 import { Scheduler, buildJobSpec } from './scheduler.js';
 import { RunManager } from './run-manager.js';
@@ -14,6 +14,7 @@ import { buildServer } from './api.js';
 import { TaskRepo, ProfileRepo } from './repo.js';
 import { seedBuiltinProfiles, makeSkillResolver } from './profiles.js';
 import { Notifier } from './notifier.js';
+import { readPrefs } from './api.js';
 
 const DAEMON_VERSION = '0.1.0';
 
@@ -27,15 +28,24 @@ export async function main(argv: string[] = process.argv): Promise<number> {
   }
 
   const { db, file } = openDatabase(dataDir);
-  const migrationSql = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../migrations/0001_init.sql'), 'utf8');
-  createMigrator(db, [{ id: '0001_init', sql: migrationSql }], file).migrate();
+  // Load ALL forward-only migrations in filename order (0001_*, 0002_*, …).
+  const migrationsDir = resolve(dirname(fileURLToPath(import.meta.url)), '../migrations');
+  const migrations = readdirSync(migrationsDir)
+    .filter((f) => f.endsWith('.sql'))
+    .sort()
+    .map((f) => ({ id: f.replace(/\.sql$/, ''), sql: readFileSync(resolve(migrationsDir, f), 'utf8') }));
+  createMigrator(db, migrations, file).migrate();
 
   const profileRepo = new ProfileRepo(db);
   seedBuiltinProfiles(profileRepo);
   const skillResolver = makeSkillResolver(resolve(dirname(fileURLToPath(import.meta.url)), '../../../resources/skill-pack'));
 
   const journal = new SafetyJournal(`${dataDir}/safety-journal.jsonl`);
-  const notifier = new Notifier();
+  const notifier = new Notifier({
+    dataDir,
+    soundMode: readPrefs(dataDir).soundMode,
+    volumePct: readPrefs(dataDir).volumePct,
+  });
 
   const clock = new SystemClock();
   const taskRepo = new TaskRepo(db);

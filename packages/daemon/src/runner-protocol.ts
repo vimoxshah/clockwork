@@ -13,6 +13,7 @@ export type ChildToDaemon =
   | { t: 'heartbeat' }
   | { t: 'log'; line: string }
   | { t: 'artifact'; path: string }
+  | { t: 'rateLimit'; info: Record<string, unknown> }
   | { t: 'permission'; reqId: string; tool: string; input: unknown }
   | { t: 'outcome'; outcome: RunOutcome };
 

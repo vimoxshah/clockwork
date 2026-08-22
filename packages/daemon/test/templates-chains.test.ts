@@ -5,8 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { openDatabase, createMigrator, type DB } from '../src/db.js';
-import { readFileSync } from 'node:fs';
+import { openDatabase, createMigrator, loadMigrationsFrom, type DB } from '../src/db.js';
 import {
   securityPreview,
   validateTemplateApply,
@@ -17,10 +16,7 @@ import {
 function freshDb(): { db: DB; dir: string } {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'cw-tpl-'));
   const db = openDatabase(dir).db;
-  createMigrator(db, [{
-    id: '0001_init',
-    sql: readFileSync(path.resolve(import.meta.dirname, '../migrations/0001_init.sql'), 'utf8'),
-  }]).migrate();
+  createMigrator(db, loadMigrationsFrom(path.resolve(import.meta.dirname, '../migrations'))).migrate();
   return { db, dir };
 }
 

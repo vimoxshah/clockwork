@@ -9,8 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { execFileSync } from 'node:child_process';
-import { openDatabase, createMigrator, type DB } from '../src/db.js';
-import { readFileSync } from 'node:fs';
+import { openDatabase, createMigrator, loadMigrationsFrom, type DB } from '../src/db.js';
 import { RunManager } from '../src/run-manager.js';
 import { FakeClock } from '../src/clock.js';
 import { SafetyJournal } from '@clockwork/runner';
@@ -19,10 +18,7 @@ let db: DB;
 let dir: string;
 let repoDir: string;
 
-const MIGRATION = {
-  id: '0001_init',
-  sql: readFileSync(path.resolve(import.meta.dirname, '../migrations/0001_init.sql'), 'utf8'),
-};
+const MIGRATIONS = loadMigrationsFrom(path.resolve(import.meta.dirname, '../migrations'));
 
 function makeManager(): RunManager {
   return new RunManager({
@@ -64,7 +60,7 @@ function seedRunningRow(pgid: number | null): string {
 describe('S-30: transient states re-queue idempotently', () => {
   it('preparing rows without children reset to queued on startup sweep', () => {
     db = openDatabase(path.join(dir, `s30-${Date.now()}`)).db;
-    createMigrator(db, [MIGRATION]).migrate();
+    createMigrator(db, MIGRATIONS).migrate();
     const now = Date.now();
     db.prepare(`INSERT INTO tasks (id, name, prompt, created_at, updated_at) VALUES ('t', 't', 'p', ?, ?)`).run(now, now);
     const id = `r-${Math.random().toString(36).slice(2, 10)}`;
@@ -83,7 +79,7 @@ describe('S-30: transient states re-queue idempotently', () => {
 describe('S-31: orphaned runner terminated + failed/orphaned with notification', () => {
   it('live foreign process in a running row is killed by group and row marked failed/orphaned', async () => {
     db = openDatabase(path.join(dir, `s31-${Date.now()}`)).db;
-    createMigrator(db, [MIGRATION]).migrate();
+    createMigrator(db, MIGRATIONS).migrate();
 
     // spawn a real long-lived detached process to act as the "orphan"
     const child = spawn('/bin/sleep', ['120'], { detached: true, stdio: 'ignore' });
@@ -124,7 +120,7 @@ describe('S-31: orphaned runner terminated + failed/orphaned with notification',
 describe('S-81: reboot sweep finds dead-identity rows', () => {
   it('running rows with dead pgids go through the orphan path without killing anything live', () => {
     db = openDatabase(path.join(dir, `s81-${Date.now()}`)).db;
-    createMigrator(db, [MIGRATION]).migrate();
+    createMigrator(db, MIGRATIONS).migrate();
     const runId = seedRunningRow(999_999_999); // certainly-dead group
     const rm = makeManager();
     const res = rm.recoverySweep();

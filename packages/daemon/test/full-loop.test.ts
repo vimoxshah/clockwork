@@ -6,10 +6,10 @@
  */
 import { beforeAll, afterAll, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { openDatabase, createMigrator, type DB } from '../src/db.js';
+import { openDatabase, createMigrator, loadMigrationsFrom, type DB } from '../src/db.js';
 import { RunManager } from '../src/run-manager.js';
 import { FakeClock } from '../src/clock.js';
 import { SafetyJournal } from '@clockwork/runner';
@@ -80,10 +80,7 @@ beforeAll(() => {
 
   const opened = openDatabase(path.join(dir, 'data'));
   db = opened.db;
-  createMigrator(db, [{
-    id: '0001_init',
-    sql: readFileSync(path.resolve(import.meta.dirname, '../migrations/0001_init.sql'), 'utf8'),
-  }]).migrate();
+  createMigrator(db, loadMigrationsFrom(path.resolve(import.meta.dirname, '../migrations'))).migrate();
   clock = new FakeClock(Date.now());
   rm = new RunManager({
     db,

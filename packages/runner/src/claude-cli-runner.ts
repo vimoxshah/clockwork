@@ -207,6 +207,7 @@ export class ClaudeCliRunner implements AgentRunner {
         appendFileSync(journalPath, JSON.stringify({ at: now(), kind: 'line', line: line.slice(0, 2000) }) + '\n');
         const ev = parseStreamLine(line);
         if (!ev) return;
+        if (ev.rateLimitInfo) ctx.io.onRateLimit?.(ev.rateLimitInfo);
         const usageDelta = fold(acc, ev);
         if (usageDelta) {
           ctx.io.onUsage(usageDelta);
