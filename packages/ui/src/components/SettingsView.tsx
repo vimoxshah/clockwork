@@ -2,6 +2,7 @@
  * Settings (T-125): theme picker (light/dark/system, persisted), pause state
  * loaded from the server (not guessed), snapshot stats, engine statement.
  */
+import { useState } from 'react';
 import { useTheme } from '../theme';
 import { api } from '../api';
 import { useAsync } from '../useAsync';

@@ -3,7 +3,7 @@
  * (generated at install, stored 0600), optimistic task versioning (S-82).
  * The UI is a pure client; anything scriptable here is scriptable by users.
  */
-import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdirSync } from 'node:fs';
@@ -45,13 +45,13 @@ export function loadOrCreateToken(dataDir: string): string {
   return token;
 }
 
-export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance; token: string; sseClients: Set<FastifyRequest> }> {
+export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance; token: string; sseClients: Set<FastifyReply> }> {
   const app = Fastify({ logger: false });
   const tasks = new TaskRepo(deps.db);
   const profiles = new ProfileRepo(deps.db);
   const runs = new RunRepo(deps.db);
   const token = loadOrCreateToken(deps.dataDir);
-  const sseClients = new Set<FastifyRequest>();
+  const sseClients = new Set<FastifyReply>();
 
   // serve the built UI when present (single-port product surface)
   const uiDist = path.resolve(import.meta.dirname, '../../ui/dist');
@@ -82,8 +82,10 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     const payload = `data: ${JSON.stringify(event)}\n\n`;
     for (const client of sseClients) {
       try {
-        (client as any).raw.res.write(payload);
-      } catch {}
+        client.raw.write(payload);
+      } catch {
+        sseClients.delete(client);
+      }
     }
   };
 
@@ -620,17 +622,18 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     };
   });
 
-  // ---- SSE ----
+  // ---- SSE (Fastify v5: hijack the reply; the raw response lives on reply.raw) ----
   app.get('/events', (req, reply) => {
-    sseClients.add(req);
-    req.raw.on('close', () => sseClients.delete(req));
-    (req as any).raw.res.writeHead(200, {
+    const res = reply.raw;
+    reply.hijack();
+    res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive',
     });
-    (req as any).raw.res.write(`data: ${JSON.stringify({ type: 'daemon.health', connected: true })}\n\n`);
-    return reply;
+    res.write(`data: ${JSON.stringify({ type: 'daemon.health', connected: true })}\n\n`);
+    sseClients.add(reply);
+    req.raw.on('close', () => sseClients.delete(reply));
   });
 
   return { app, token, sseClients };
