@@ -311,6 +311,42 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     return ok ? reply.code(202).send({ cancelling: true }) : reply.code(409).send({ error: 'not_cancellable' });
   });
 
+  /** Transcript tail (S-68: masked best-effort) for the report viewer. */
+  app.get('/runs/:id/transcript', async (req, reply) => {
+    const run = deps.db
+      .prepare('SELECT transcript_path, journal_path FROM runs WHERE id=?')
+      .get((req.params as any).id) as any;
+    if (!run) return reply.code(404).send({ error: 'not_found' });
+    const p = run.transcript_path ?? null;
+    const fallback = run.journal_path ?? null;
+    const source =
+      (p && existsSync(p) ? { path: p, kind: 'raw' as const } : null) ??
+      (fallback && existsSync(fallback) ? { path: fallback, kind: 'journal' as const } : null);
+    if (!source) return { available: false, lines: [] };
+    try {
+      const raw = await import('node:fs').then((fs) => fs.readFileSync(source.path, 'utf8'));
+      const { maskSecrets } = await import('@clockwork/runner');
+      const allLines = raw.split('\n').filter((l) => l.trim().length > 0);
+      const render = (l: string): string => {
+        try {
+          const o = JSON.parse(l);
+          // journal wrapper → unwrap inner engine line
+          if (source.kind === 'journal' && typeof o?.line === 'string') return render(o.line);
+          if (o.type === 'assistant' && o.message?.content) {
+            const texts = (o.message.content as any[]).filter((c) => c.type === 'text').map((c) => c.text);
+            if (texts.length) return `▸ ${maskSecrets(texts.join(' ').slice(0, 400))}`;
+          }
+          if (o.type === 'result') return `■ result: ${maskSecrets(String(o.result ?? '').slice(0, 400))}`;
+        } catch {}
+        return maskSecrets(l.slice(0, 300));
+      };
+      const tail = allLines.slice(-400).map(render);
+      return { available: true, totalLines: allLines.length, lines: tail };
+    } catch (e) {
+      return reply.code(500).send({ error: `unreadable: ${String(e).slice(0, 80)}` });
+    }
+  });
+
   // ---- approvals (rows exist from M1 fail-safe; responses land M2 UI) ----
   app.get('/approvals', async () => {
     return deps.db.prepare('SELECT * FROM approvals WHERE responded_at IS NULL ORDER BY requested_at ASC').all();
@@ -325,11 +361,86 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       .prepare(`UPDATE approvals SET responded_at=?, response_json=? WHERE id=? AND responded_at IS NULL`)
       .run(now, JSON.stringify(body ?? {}), id);
     if (r.changes === 0) return reply.code(409).send({ error: 'already_resolved' });
-    return { resolved: true };
+    // Forward into the live run when the child's decision window is still open.
+    let forwarded = false;
+    try {
+      const row = deps.db.prepare('SELECT run_id, payload_json FROM approvals WHERE id=?').get(id) as any;
+      if (row) {
+        const payload = typeof row.payload_json === 'string' ? JSON.parse(row.payload_json) : row.payload_json ?? {};
+        const decision = body?.decision === 'approved';
+        if (payload.reqId) {
+          forwarded = deps.runManager.respondToChild(row.run_id, String(payload.reqId), decision);
+        }
+      }
+    } catch {
+      /* forwarding best-effort; the CAS record stands either way */
+    }
+    deps.runManager.pump();
+    return { resolved: true, forwarded };
   });
 
   // ---- profiles ----
   app.get('/profiles', async () => profiles.list());
+
+  // ---- calendar range (month/week views): runs + expanded occurrences ----
+  app.get('/calendar', async (req, reply) => {
+    const q = req.query as any;
+    const to = q.to ? parseInt(String(q.to), 10) : Date.now() + 31 * 86_400_000;
+    const from = q.from ? parseInt(String(q.from), 10) : to - 62 * 86_400_000;
+    if (!(from > 0 && to > from)) return reply.code(422).send({ error: 'invalid range' });
+
+    const { occurrencesBetween } = await import('./recurrence.js');
+
+    // Runs whose scheduled_for OR started/ended fall in range.
+    const runRows = deps.db
+      .prepare(
+        `SELECT id, task_id, state, outcome_reason, scheduled_for, started_at, ended_at, cost_usd, turns, jobspec_json
+         FROM runs
+         WHERE (scheduled_for BETWEEN ? AND ?)
+            OR (started_at BETWEEN ? AND ?)
+            OR (ended_at BETWEEN ? AND ?)
+         ORDER BY COALESCE(scheduled_for, started_at, ended_at) ASC`,
+      )
+      .all(from, to, from, to, from, to) as unknown as Array<Record<string, unknown>>;
+
+    // Bookings: expand every enabled schedule into the visible window.
+    const bookings: Array<{ taskId: string; name: string; at: number; kind: 'booking' }> = [];
+    const scheds = deps.db
+      .prepare(
+        `SELECT s.id, s.task_id, s.kind, s.rrule, s.cron, s.run_at, s.tz, s.next_fire,
+                t.name AS task_name
+         FROM schedules s JOIN tasks t ON t.id = s.task_id
+         WHERE s.enabled = 1 AND t.enabled = 1 AND t.deleted_at IS NULL`,
+      )
+      .all() as unknown as Array<{
+      id: string; task_id: string; kind: string; rrule: string | null; cron: string | null;
+      run_at: number | null; tz: string; next_fire: number | null; task_name: string;
+    }>;
+    for (const s of scheds) {
+      try {
+        if (s.kind === 'queue') continue;
+        let ats: number[] = [];
+        if (s.kind === 'once') {
+          ats = s.run_at != null && s.run_at >= from && s.run_at <= to && s.next_fire != null ? [s.run_at] : [];
+        } else {
+          ats = occurrencesBetween(
+            { kind: s.kind as 'rrule' | 'cron', rrule: s.rrule, cron: s.cron, runAt: s.run_at, tz: s.tz },
+            Math.max(from, Date.now() - 1000),
+            to,
+            62,
+          );
+        }
+        for (const at of ats) {
+          bookings.push({ taskId: s.task_id, name: s.task_name, at, kind: 'booking' });
+        }
+      } catch {
+        /* one bad schedule must not break the calendar */
+      }
+    }
+    bookings.sort((a, b) => a.at - b.at);
+
+    return { from, to, runs: runRows, bookings };
+  });
 
   app.post('/profiles', async (req, reply) => {
     const parsed = ProfileCreate.safeParse(req.body);
@@ -472,10 +583,17 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
   app.get('/onboarding/status', async () => {
     const { existsSync } = await import('node:fs');
     const { execFileSync } = await import('node:child_process');
+    const { augmentedPath, resolveOnAugmentedPath } = await import('@clockwork/runner');
     const home = process.env.HOME ?? '';
+    // Service context: probe binaries on the AUGMENTED path (launchd PATH is minimal).
+    const claudeBin = resolveOnAugmentedPath('claude');
     const claudeOk = (() => {
       try {
-        execFileSync('claude', ['--version'], { encoding: 'utf8', timeout: 8000 });
+        execFileSync(claudeBin ?? 'claude', ['--version'], {
+          encoding: 'utf8',
+          timeout: 8000,
+          env: { ...process.env, PATH: augmentedPath(process.env.PATH) },
+        });
         return true;
       } catch {
         return false;

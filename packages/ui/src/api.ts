@@ -1,8 +1,10 @@
 /**
- * Daemon API client — pure client (arch §6): everything goes through
- * REST + SSE with the bearer token. No direct DB writes for run state.
+ * Daemon API client — pure client (arch §6). Errors propagate as ApiError so
+ * views can render real error states; 401 clears the stored token and raises
+ * the global unauthorized flag (fixes the silent-blank-page class of bug).
  */
 const TOKEN_KEY = 'clockwork.token';
+const UNAUTHORIZED_EVENT = 'clockwork:unauthorized';
 
 export function setToken(t: string): void {
   localStorage.setItem(TOKEN_KEY, t);
@@ -12,18 +14,44 @@ export function getToken(): string {
   return localStorage.getItem(TOKEN_KEY) ?? '';
 }
 
+export function clearToken(): void {
+  localStorage.removeItem(TOKEN_KEY);
+}
+
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+    public details?: unknown,
+  ) {
+    super(message);
+  }
+}
+
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(path, {
-    method,
-    headers: {
-      authorization: `Bearer ${getToken()}`,
-      ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
-    },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      method,
+      headers: {
+        authorization: `Bearer ${getToken()}`,
+        ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    throw new ApiError(0, 'daemon unreachable — is clockworkd running?');
+  }
+  if (res.status === 401) {
+    clearToken();
+    window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
+    throw new ApiError(401, 'unauthorized — token invalid or rotated');
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error((err as any).error ?? `${res.status}`);
+    const msg = (err as any).error ?? `${res.status}`;
+    const details = (err as any).details;
+    throw new ApiError(res.status, typeof msg === 'string' ? msg : JSON.stringify(msg), details);
   }
   return res.json() as Promise<T>;
 }
@@ -69,6 +97,17 @@ export interface RunRowT {
   jobspec_json: string;
 }
 
+export interface CalendarEvent {
+  kind: 'run' | 'booking';
+  id: string;
+  taskId: string;
+  name: string;
+  at: number;
+  state?: string;
+  costUsd?: number;
+  outcomeReason?: string | null;
+}
+
 export const api = {
   health: () => req<Health>('GET', '/health'),
   tasks: () => req<TaskViewT[]>('GET', '/tasks'),
@@ -76,6 +115,11 @@ export const api = {
   patchTask: (id: string, p: unknown) => req<TaskViewT>('PATCH', `/tasks/${id}`, p),
   deleteTask: (id: string) => req<{ deleted: boolean }>('DELETE', `/tasks/${id}`),
   runNow: (id: string) => req<{ runId: string }>('POST', `/tasks/${id}/run-now`),
+  calendar: (from: number, to: number) =>
+    req<{ from: number; to: number; runs: RunRowT[]; bookings: Array<{ taskId: string; name: string; at: number; kind: 'booking' }> }>(
+      'GET',
+      `/calendar?from=${from}&to=${to}`,
+    ),
   queue: () =>
     req<Array<{ runId: string; taskId: string; name: string; position: number; reason: string }>>(
       'GET',
@@ -97,9 +141,16 @@ export const api = {
     if (filter.limit) qs.set('limit', String(filter.limit));
     return req<RunRowT[]>('GET', `/runs?${qs}`);
   },
-  report: (runId: string) =>
-    req<{ run: RunRowT; report: any }>('GET', `/runs/${runId}/report`),
+  report: (runId: string) => req<{ run: RunRowT; report: any }>('GET', `/runs/${runId}/report`),
+  transcript: (runId: string) =>
+    req<{ available: boolean; totalLines?: number; lines: string[] }>(
+      'GET',
+      `/runs/${runId}/transcript`,
+    ),
   cancelRun: (id: string) => req<unknown>('POST', `/runs/${id}/cancel`),
+  approvals: () => req<any[]>('GET', '/approvals'),
+  respondApproval: (id: string, decision: 'approved' | 'denied') =>
+    req<{ resolved: boolean }>('POST', `/approvals/${id}/respond`, { decision }),
   profiles: () => req<any[]>('GET', '/profiles'),
   search: (q: string, kind?: string) =>
     req<Array<{ kind: string; ref_id: string; title: string; snip: string }>>(

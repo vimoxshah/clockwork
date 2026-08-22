@@ -8,3 +8,4 @@ export * from './budget-guard.js';
 export * from './mock-runner.js';
 export * from './claude-cli-runner.js';
 export * from './context.js';
+export * from './service-path.js';

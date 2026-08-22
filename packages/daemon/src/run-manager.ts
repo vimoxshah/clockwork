@@ -29,7 +29,8 @@ import {
   runGit,
   maskSecrets,
 } from '@clockwork/runner';
-import { SafetyJournal } from '@clockwork/runner';
+import { SafetyJournal, augmentedPath } from '@clockwork/runner';
+import { indexRun } from './repo.js';
 import type { DB } from './db.js';
 import type { Clock } from './clock.js';
 import type { ChildToDaemon } from './runner-protocol.js';
@@ -184,7 +185,7 @@ export class RunManager {
     // Sanitized env (arch §7.3): nothing but the minimum. No bearer token, no delivery creds.
     // USER/LOGNAME required for macOS keychain ACL identification (verified 2026-08-21).
     const env: Record<string, string> = {
-      PATH: process.env.PATH ?? '/usr/bin:/bin',
+      PATH: augmentedPath(process.env.PATH ?? '/usr/bin:/bin'),
       HOME: process.env.HOME ?? os.homedir(),
       TERM: 'dumb',
       LANG: process.env.LANG ?? 'en_US.UTF-8',
@@ -302,12 +303,16 @@ export class RunManager {
       case 'artifact':
         break;
       case 'permission': {
-        // M1: fail-safe auto-deny recorded as policy event + approval row (M2 wires the inbox)
+        // Record the request; the child holds its callback open for ~2 min.
+        // A human decision (POST /approvals/:id/respond → respondToChild)
+        // reaches the live run; otherwise the child fail-safe auto-denies
+        // (M1 unattended mode, ADR-020) and finalize resolves the row.
         const approvalId = newId();
+        const reqId = (msg as { reqId?: string }).reqId ?? null;
         this.deps.db
           .prepare(`INSERT INTO approvals (id, run_id, kind, payload_json, requested_at, timeout_at, fallback) VALUES (?, ?, 'permission', ?, ?, ?, ?)`)
-          .run(approvalId, runId, JSON.stringify({ tool: msg.tool }), now, now + 4 * 3600_000, 'deny-and-continue');
-        this.recordEvent(now, runId, 'approval_requested', { tool: msg.tool });
+          .run(approvalId, runId, JSON.stringify({ tool: msg.tool, reqId }), now, now + 120_000, 'deny-and-continue');
+        this.recordEvent(now, runId, 'approval_requested', { tool: msg.tool, reqId });
         this.deps.broadcast({ type: 'approval.requested', approvalId, runId, at: now });
         break;
       }
@@ -405,9 +410,27 @@ export class RunManager {
       const to = terminalMap[outcome.state] ?? 'failed';
       assertTransition('finalizing', to);
       this.deps.db
-        .prepare('UPDATE runs SET state=?, state_changed_at=?, ended_at=?, report_json=?, outcome_reason=? WHERE id=?')
-        .run(to, now, now, JSON.stringify(report), ('failureReason' in outcome ? outcome.failureReason : null), runId);
+        .prepare('UPDATE runs SET state=?, state_changed_at=?, ended_at=?, report_json=?, outcome_reason=?, transcript_path=? WHERE id=?')
+        .run(
+          to,
+          now,
+          now,
+          JSON.stringify(report),
+          ('failureReason' in outcome ? outcome.failureReason : null),
+          ('transcriptPath' in outcome ? (outcome as { transcriptPath?: string | null }).transcriptPath : null) ?? null,
+          runId,
+        );
       this.recordEvent(now, runId, 'state_changed', { to });
+      // FR-29: index the report into FTS at finalize.
+      indexRun(this.deps.db, runId, spec.taskName, `${report.summary}\n${report.failureReason ?? ''}`);
+      // Unresolved approvals die with the run — never leave stale needs-you items.
+      // M1 CLI engine is fail-safe (ADR-020): requests were auto-denied by the
+      // child after its grace window; record that resolution honestly.
+      this.deps.db
+        .prepare(
+          `UPDATE approvals SET responded_at=?, response_json=? WHERE run_id=? AND responded_at IS NULL`,
+        )
+        .run(now, JSON.stringify({ resolvedBy: 'run-finalized', behavior: 'deny', note: 'fail-safe auto-deny (M1 unattended mode)' }), runId);
     });
     tx();
 
@@ -505,6 +528,24 @@ export class RunManager {
       return true;
     }
     return false;
+  }
+
+  /**
+   * Forward a human decision into the LIVE run's child process (S-51/S-52).
+   * Returns false when the run is gone or the child's decision window closed.
+   */
+  respondToChild(runId: string, reqId: string, allow: boolean): boolean {
+    const child = this.liveChildren.get(runId);
+    if (!child || !child.stdin?.writable) return false;
+    try {
+      const msg = allow
+        ? { t: 'decision', reqId, behavior: 'allow' }
+        : { t: 'decision', reqId, behavior: 'deny', message: 'Denied by operator from the inbox.' };
+      child.stdin.write(JSON.stringify(msg) + '\n');
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   // ---------- supervision primitives ----------

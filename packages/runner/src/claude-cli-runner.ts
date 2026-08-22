@@ -28,6 +28,7 @@ import type {
 import { BudgetGuard } from './budget-guard.js';
 import { fold, newAccumulator, parseStreamLine } from './stream-parser.js';
 import { generateSeatbeltProfile, wrapWithSandbox, type SandboxSpec } from './sandbox.js';
+import { augmentedPath } from './service-path.js';
 
 const GRACE_MS = 30_000;
 const DEFAULT_DISK_FLOOR_BYTES = 2 * 1024 * 1024 * 1024; // S-88
@@ -130,7 +131,7 @@ export class ClaudeCliRunner implements AgentRunner {
     // verified empirically: without them the engine cannot read its own
     // OAuth item ("Not logged in"), with them auth succeeds.
     const env: Record<string, string> = {
-      PATH: process.env.PATH ?? '/usr/bin:/bin:/usr/local/bin',
+      PATH: augmentedPath(process.env.PATH ?? '/usr/bin:/bin:/usr/local/bin'),
       HOME: process.env.HOME ?? os.homedir(),
       TERM: 'dumb',
       NO_COLOR: '1',
