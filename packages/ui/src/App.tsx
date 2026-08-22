@@ -94,19 +94,28 @@ export default function App(): JSX.Element {
           />
         ) : (
           <>
-            <header className="topbar">
-              <div className="wordmark">
+            <header className="flex h-12 items-center gap-4 border-b border-border bg-surface px-4">
+              <div className="wordmark text-[13px]">
                 CLOCK<b>WORK</b>
               </div>
-              <nav className="tabs" aria-label="Sections">
+              <nav className="tabs flex gap-1" aria-label="Sections">
                 {TABS.map((t) => (
-                  <button key={t} className={tab === t ? 'active' : ''} onClick={() => setTab(t)}>
+                  <button
+                    key={t}
+                    className={
+                      'rounded-lg px-3 py-1.5 text-[13px] transition-colors ' +
+                      (tab === t
+                        ? 'bg-surface-active font-medium text-fg'
+                        : 'text-muted hover:bg-surface-hover hover:text-fg')
+                    }
+                    onClick={() => setTab(t)}
+                  >
                     {t === 'new' ? '+ New task' : t[0].toUpperCase() + t.slice(1)}
                   </button>
                 ))}
               </nav>
-              <div className="spacer" />
-              <div className="health mono" data-testid="health">
+              <div style={{ flex: 1 }} />
+              <div className="health mono flex items-center gap-3.5 text-xs text-dim" data-testid="health">
                 <span>
                   <span className={`dot ${health?.ok ? '' : 'down'}`} />
                   {health ? `daemon ${health.daemonVersion}` : 'daemon down'}
@@ -116,7 +125,9 @@ export default function App(): JSX.Element {
                     <span>{health.activeRuns} running</span>
                     <span>{health.queuedRuns} queued</span>
                     {health.paused && <span className="chip needs-you">PAUSED</span>}
-                    {health.nextFire && <span>next {new Date(health.nextFire).toLocaleTimeString()}</span>}
+                    {health.nextFire && (
+                      <span>next {new Date(health.nextFire).toLocaleTimeString()}</span>
+                    )}
                   </>
                 )}
               </div>

@@ -35,7 +35,16 @@ export function classifyError(msg: string): ParsedEvent['errorClass'] {
   const m = msg.toLowerCase();
   if (m.includes('unauthorized') || m.includes('invalid api key') || m.includes('not logged in') || m.includes('authentication') || m.includes('oauth token')) return 'auth';
   if (m.includes('rate limit') || m.includes('429') || m.includes('too many requests')) return 'rate_limited';
-  if (m.includes('529') || m.includes('overloaded') || m.includes('capacity') || m.includes('usage limit') || m.includes('limit reached')) return 'capacity';
+  if (
+    m.includes('529') ||
+    m.includes('overloaded') ||
+    m.includes('capacity') ||
+    m.includes('spend limit') ||
+    m.includes('weekly limit') ||
+    m.includes('usage limit') ||
+    m.includes('limit reached')
+  )
+    return 'capacity';
   if (m.includes('enotfound') || m.includes('econnrefused') || m.includes('fetch failed') || m.includes('network') || m.includes('etimedout')) return 'offline';
   if (m.includes('model') && (m.includes('not found') || m.includes('unknown') || m.includes('deprecat'))) return 'model_unknown';
   return 'other';

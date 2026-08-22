@@ -4,6 +4,7 @@
  */
 import { useState } from 'react';
 import { useTheme } from '../theme';
+import { Switch } from './ui/switch';
 import { api } from '../api';
 import { useAsync } from '../useAsync';
 
@@ -65,9 +66,15 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
             <strong>{paused ? 'PAUSED' : 'running'}</strong>.
           </div>
         </div>
-        <button className={`btn ${paused ? 'primary' : 'danger'}`} disabled={busy || health.loading} onClick={() => void togglePause()}>
-          {paused ? 'Resume' : 'Pause all'}
-        </button>
+        <label className="flex items-center gap-2 text-xs text-muted">
+          <Switch
+            checked={paused}
+            disabled={busy || health.loading}
+            onCheckedChange={() => void togglePause()}
+            aria-label="Pause all scheduling"
+          />
+          {paused ? 'Paused' : 'Active'}
+        </label>
       </div>
       {err && <div className="error-banner">{err}</div>}
 

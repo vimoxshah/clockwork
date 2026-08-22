@@ -94,20 +94,21 @@ const run = async (): Promise<number> => {
   }
   check('filter chips present', (await page.locator('.filter-chips button').count()) >= 5);
 
-  // ---- composer via UI form (REAL create) ----
+  // ---- composer via UI form (REAL create, ASAP queue mode) ----
   await page.getByRole('button', { name: '+ New task' }).click();
   await page.fill('#c-name', 'E2E smoke task');
   await page.fill('#c-prompt', 'Reply with exactly: E2E-OK');
   await page.fill('#c-usd', '1');
-  await page.selectOption('#c-kind', 'once');
-  {
-    const d = new Date(Date.now() + 90_000);
-    const p = (n: number): string => String(n).padStart(2, '0');
-    await page.fill(
-      '#c-when',
-      `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`,
-    );
-  }
+  // DateTimePicker: open the popover and confirm the themed grid renders
+  await page.locator('#c-when').click();
+  await expectVisible(page, '[role="dialog"] table', 'themed date-picker popover renders');
+  check(
+    'picker shows day cells',
+    (await page.locator("[role='dialog'] table td button").count()) >= 28,
+  );
+  await page.keyboard.press('Escape');
+  // switch to ASAP queue mode via segmented control (no native selects anymore)
+  await page.getByRole('tab', { name: 'ASAP' }).last().click();
   await page.getByRole('button', { name: 'Book it' }).click();
   await page.waitForTimeout(800);
   await page.getByRole('button', { name: 'Tasks' }).click();

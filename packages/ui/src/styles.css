@@ -1,3 +1,7 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 /* ============================================================
    Clockwork design tokens — horology identity (designs/DESIGN.md),
    expressed as SEMANTIC variables so light + dark both work.

@@ -77,3 +77,19 @@ describe('accumulator folding', () => {
     expect(acc.lastError?.class).toBe('auth');
   });
 });
+
+describe('T-004 regression: subscription spend-limit errors', () => {
+  it('classifies weekly spend-limit exhaustion as capacity (S-47), not internal', () => {
+    const acc = newAccumulator();
+    const e = parseStreamLine(
+      JSON.stringify({
+        type: 'result',
+        subtype: 'error_during_execution',
+        is_error: true,
+        result: "You've hit your individual spend limit · your weekly limit resets Aug 27",
+      }),
+    );
+    fold(acc, e!);
+    expect(acc.lastError?.class).toBe('capacity');
+  });
+});
