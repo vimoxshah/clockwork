@@ -176,3 +176,25 @@ function safeVersion(bin: string, args: string[]): { ok: boolean; out: string } 
     return { ok: probe.status === 0, out: probe.stdout?.split('\n')[0] ?? 'not found' };
   }
 }
+
+/** CLI entrypoint: clockworkd install|uninstall|doctor */
+const argv = process.argv.slice(2);
+const cmd = argv[0];
+const entryArg = argv[1] ?? './main.js';
+
+if (cmd === 'install') {
+  install(entryArg);
+} else if (cmd === 'uninstall') {
+  uninstall();
+} else if (cmd === 'doctor') {
+  doctor().then((findings) => {
+    for (const f of findings) {
+      console.log(`${f.ok ? '✓' : '✗'} ${f.check}: ${f.detail}${!f.ok && f.fix ? `\n   fix: ${f.fix}` : ''}`);
+    }
+    const bad = findings.filter((f) => !f.ok).length;
+    console.log(bad === 0 ? '\nall checks passed' : `\n${bad} check(s) need attention`);
+  });
+} else if (cmd) {
+  console.error('usage: clockworkd <install|uninstall|doctor> [daemon-entry]');
+  process.exit(2);
+}
