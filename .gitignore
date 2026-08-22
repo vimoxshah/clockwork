@@ -49,3 +49,7 @@ src-tauri/gen/
 # Spike throwaway artifacts (Phase 0 keeps reports, not scratch repos)
 spikes/scratch/
 spikes/out/*.local/
+
+# Tauri build artifacts
+src-tauri/target/
+src-tauri/app-icon.png.orig/

@@ -176,6 +176,8 @@ ADR-style, append-only. Format: Decision → Context → Alternatives rejected �
 **Consequence:** Architecture doc §7.3 wording updated by this entry; protocol messages typed in runner-protocol.ts.
 
 ## ADR-025 — (deviation) UI ships as a React+Vite web app in v1 builds; Tauri desktop wrapper added at packaging when a Rust toolchain is present
+
+> **UPDATE 2026-08-22:** Rust toolchain installed; Tauri 2 shell implemented (window onto daemon-served UI + autolaunch hook). Unsigned DMG built: Clockwork_0.1.0_aarch64.dmg (2.7MB). Signing/notarization remain external-blocked.
 **Decision:** `packages/ui` is React 18 + Vite speaking the daemon's REST+SSE API (pure-client architecture unchanged from arch §6). The Tauri 2 window/tray/updater wrapper is layered onto the same UI bundle during release engineering; the build environment used for this implementation has no Rust toolchain, so the JS layer proceeds without blocking.
 **Context:** Arch stack #2 specifies Tauri 2. The three-process architecture (UI/daemon/runner) is unaffected: the UI remains stateless, reads/writes only through the daemon API with bearer token.
 **Alternatives rejected:** Electron fallback (heavier; not needed since nothing blocks on native yet); blocking all UI work on Rust installation (schedule risk for zero architectural delta).

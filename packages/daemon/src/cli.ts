@@ -44,6 +44,16 @@ export function install(daemonEntry: string): void {
   mkdirSync(logDir, { recursive: true });
   const xml = plistXml(process.execPath, resolve_(daemonEntry), path.join(logDir, 'daemon.log'));
   writeFileSync(PLIST_PATH, xml);
+
+  // Stable launcher hook for the desktop shell's autolaunch (T-121).
+  const binDir = `${logDir}/bin`;
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(
+    `${binDir}/start-daemon.sh`,
+    `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(resolve_(daemonEntry))}\n`,
+    { mode: 0o755 },
+  );
+
   try {
     execFileSync('/bin/launchctl', ['bootout', `gui/${uid()}`, PLIST_PATH], { stdio: 'ignore' });
   } catch {}

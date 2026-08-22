@@ -70,7 +70,7 @@ Shell note: React+Vite web app served by the daemon; Tauri wrapper deferred to p
 | T-202 | PARTIAL | Linear chain validation (cycles rejected at save, S-72), {{previous.report}} binding w/ honest truncation (S-73), upstream-failure semantics in schema. Calendar ghost rendering for skipped successors missing. |
 | T-203 | PARTIAL | Security preview (red/yellow/info flags), import arrives DISABLED (S-74), apply-time variable validation (S-75). Export-as-JSON missing. |
 | T-204 | PARTIAL | Orphan terminate+journal-report done (real-process tests), reboot sweep done. Disk-full pause-all suggestion, DB backup-on-migrate, updater drain: missing. |
-| T-205 | BLOCKED(external) | Signed DMG + notarization require Apple Developer account/certs ($99/yr) and updater hosting. Packaging pipeline (build all packages) verified. |
+| T-205 | PARTIAL | **UNSIGNED DMG BUILT** (2026-08-22): `src-tauri/target/release/bundle/dmg/Clockwork_0.1.0_aarch64.dmg` (2.7MB) + Clockwork.app via Tauri 2 shell — Rust toolchain installed in-session, mount-tested. Signing + notarization remain BLOCKED(external): Apple Developer cert ($99/yr). |
 | T-206 | MISSING | Beta telemetry + crash reporting + one-click incident report. Safety journal (the local substrate) ships already. |
 | T-207 | PARTIAL | Docs suite v1 shipped (security/scheduling/architecture/install/privacy/troubleshooting/contributing + README). 5 canonical template files not yet authored. |
 | T-208 | DONE | FSL-1.1 LICENSE + CONTRIBUTING.md w/ security disclosure policy (ADR-009 closed). |
