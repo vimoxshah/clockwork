@@ -11,24 +11,45 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+
+      # No `version:` input here — pnpm/action-setup reads packageManager
+      # from package.json; specifying both causes ERR_PNPM_BAD_PM_VERSION.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 11
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
       - name: Lint
         run: pnpm lint
+
       - name: Typecheck
         run: pnpm typecheck
-      - name: Unit + scenario tests (runner, daemon)
+
+      - name: Unit + scenario tests
         run: pnpm test
+
+      - name: UI calendar-grid tests
+        run: pnpm --filter @clockwork/ui test
+
       - name: Build all packages
         run: pnpm build
+
       - name: Daemon boot smoke
         run: |
           node packages/daemon/dist/main.js &
-          sleep 3
-          curl -sf http://127.0.0.1:4747/health | grep -q '"ok":true'
+          DAEMON_PID=$!
+          for i in $(seq 1 20); do
+            if curl -sf http://127.0.0.1:4747/health | grep -q '"ok":true'; then
+              echo "daemon healthy"
+              kill $DAEMON_PID 2>/dev/null
+              exit 0
+            fi
+            sleep 0.5
+          done
+          echo "daemon failed to become healthy"
+          exit 1

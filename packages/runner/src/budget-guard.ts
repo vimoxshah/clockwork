@@ -29,12 +29,13 @@ export class BudgetGuard {
     return this.state;
   }
 
-  /** Returns true if the run must stop now. */
+  /** Returns true if the run must stop now. Counters FREEZE at the
+   * enforcement point — trailing events during kill-grace must not inflate
+   * the reported bound (S-45 honesty). */
   observe(costUsd: number, turns: number): boolean {
+    if (this.state.stopped) return true;
     this.state.costUsd = Math.max(this.state.costUsd, costUsd);
     this.state.turns = Math.max(this.state.turns, turns);
-    if (this.state.stopped) return true;
-
     if (this.state.turns >= this.limits.maxTurns) {
       this.state.stopped = 'max_turns';
       this.io?.onLog(`[budget] max_turns ${this.limits.maxTurns} reached — hard stop`);
