@@ -7,6 +7,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { ProfileRepo, ProfileRow } from './repo.js';
 import { newId } from '@clockwork/shared';
+import { EXTRA_PROFILES } from './profile-library.js';
 
 export interface BundledProfile {
   slug: string;
@@ -48,7 +49,7 @@ export const BUNDLED_PROFILES: BundledProfile[] = [
 ];
 
 export function seedBuiltinProfiles(repo: ProfileRepo): void {
-  for (const bp of BUNDLED_PROFILES) {
+  for (const bp of [...BUNDLED_PROFILES, ...EXTRA_PROFILES]) {
     if (repo.bySlug(bp.slug)) continue; // never clobber (possibly edited) rows
     const row: ProfileRow = {
       id: newId(),
