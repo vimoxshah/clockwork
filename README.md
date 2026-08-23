@@ -1,61 +1,279 @@
-# Clockwork
+<div align="center">
 
-> **The calendar where your agents show up for work.**
+# ⏰ CLOCKWORK
 
-Clockwork is a local-first desktop app that turns AI agents into a schedulable workforce. You don't watch agents — you **book** them: pick a calendar slot, attach a prompt + context + budget, and at exactly that time a Claude agent runs the job in isolation and files a structured report to your inbox. Recurring jobs, human-in-the-loop approvals, and budget bounds make unattended agent work trustworthy.
+### The calendar where your AI agents show up for work.
 
-**Scope for v1: Claude agents only** — executed through your own installed Claude Code, headless (`claude -p`, subscription login, **no API key required**), with the Agent SDK as an opt-in engine. The runner is an interface, not a hardcoding — other agent CLIs come later.
+**Book → Run → Review → Repeat**
 
-## Status
+Schedule recurring AI agent jobs on a real calendar. Clockwork executes them
+unattended in isolated, sandboxed worktrees — and files a report you can
+actually read.
 
-| | |
+[Website](https://vimoxshah.github.io/clockwork/) · [Download](#-installation) · [Agent Library](#-agent-profile-library) · [Providers](#-providers) · [Security](#%EF%B8%8F-security-model)
+
+![platform](https://img.shields.io/badge/platform-macOS-black) ![license](https://img.shields.io/badge/license-FSL--1.1-blue) ![tests](https://img.shields.io/badge/tests-108%20passing-brightgreen) [![pages](https://img.shields.io/badge/docs-GitHub%20Pages-orange)](https://vimoxshah.github.io/clockwork/)
+
+</div>
+
+---
+
+## Why
+
+You already pay for a coding agent. It idles 18+ hours a day.
+
+Recurring agent work today lives in crontabs, shell scripts, CI pipelines, and
+sticky notes. Clockwork gives that work a home on a **real calendar**:
+
+| Without Clockwork | With Clockwork |
 |---|---|
-| Stage | **M1 core implemented** — daemon + scheduler + runner + sandbox + API + UI; Phase-0 engine proofs complete |
-| Verified on | macOS 26 (Apple Silicon), Node 24, Claude Code CLI 2.1.238 |
-| Engine evidence | Real headless `claude -p` runs on subscription login (`spikes/reports/T001…T009`) |
-| Containment | Seatbelt escape suite **13/13 green** — writes default-denied, credentials unreadable, engine functional inside profile (`spikes/reports/T008-sandbox.md`) |
-| Test gauntlet | 88+ tests: fake-clock scheduler fixtures, double-fire attacks, DST ×4 zones, crash recovery w/ real orphan kills, full-loop child-process integration, API contracts |
+| Cron + terminal tabs | Month calendar with every job visible |
+| Hope the script worked | Report with branch, diffstat, cost, transcript |
+| Unbounded token spend | Hard USD / turn / wall-clock caps |
+| Agent has your whole disk | Per-run OS-sandboxed git worktree |
+| Find last Tuesday's run: scrollback | Full-text search across all history |
 
-## Quick start
+## Screenshots
 
-```bash
-pnpm install && pnpm build
-node packages/daemon/dist/main.js
-# open http://127.0.0.1:4747 — token: cat ~/.clockwork/api-token
+| Month calendar — the default view | Task composer |
+|---|---|
+| ![Calendar](landing-page/screens/01-calendar-month.png) | ![Composer](landing-page/screens/02-task-composer.png) |
+
+| Run report | Command palette (⌘K) |
+|---|---|
+| ![Report](landing-page/screens/05-run-report.png) | ![Palette](landing-page/screens/07-command-palette.png) |
+
+## The Loop
+
+```
+BOOK    Pick an agent profile, repo, budget, and time. One-off or recurring.
+  ↓
+RUN     Your own CLI engine executes unattended inside an OS-sandboxed
+        git worktree. Never touches main. SSH keys unreadable.
+  ↓
+REVIEW  A human-readable report lands in your inbox — what it did,
+        what it skipped and why, what it cost.
+  ↓
+REPEAT  Make it weekly. Search every past run forever.
 ```
 
-Full instructions incl. login-service install & `doctor`: [docs/install.md](docs/install.md).
+## ✨ Highlights
 
-## The honest execution model
+- 🗓 **A real calendar** — month/week views, recurrence (RRULE + cron),
+  missed-run policies, per-repo mutex, queue with reasons
+- 👤 **Human + agent time** — subscribe your personal calendar via read-only
+  ICS; see meetings next to scheduled agent work
+- 🔀 **Provider freedom** — Claude Code, Codex CLI, OpenCode, and Hermes Agent;
+  switch per task without rebuilding anything
+- 🤖 **13 production-grade agent profiles** — Dependency Surgeon, Test Doctor,
+  Security Auditor, Code Reviewer and more, each with mission, constraints,
+  safety rails, and an output contract
+- 🛡 **Human-in-the-loop approvals** — risky actions pause the run and ask you;
+  unanswered asks fail safe (never silently approved)
+- 🔎 **Searchable execution history** — FTS across every report and transcript;
+  ⌘K command palette everywhere
+- 💰 **Budget enforcement by the supervisor** — USD soft cap, turn limits,
+  wall-clock timeouts enforced outside the model
+- 🏠 **Local-first** — SQLite in `~/.clockwork`, loopback-only API, no account,
+  no cloud, no telemetry
 
-Runs execute **when your machine is awake**. Clockwork arms keep-awake before scheduled runs when you're plugged in, tells you loudly when sleep caused a miss, and makes missed-run policies (`run-late` / `skip` / `ask`) explicit per task. For true overnight jobs use an always-on machine. We market what's true.
+## Providers
 
-## Trust architecture
+Clockwork drives the CLIs you already have — **no API keys required**.
 
-1. **OS sandbox is the security boundary** — default-deny writes scoped to the run; SSH/AWS/GPG/shell-history reads denied; symlink escapes refused at profile generation.
-2. **Worktrees = accident isolation** — branch-only outputs (`clockwork/<task>/<run-id>`), never direct commits to your branches.
-3. **Budgets are enforced between messages** — USD soft cap with measured overshoot; turns/time are hard bounds.
-4. **Safety journal** — every deny-list hit, sandbox event, and budget stop recorded locally.
+| Provider | Auth | Status |
+|---|---|---|
+| **Claude Code** (default) | Your Claude subscription login | ✅ |
+| **Codex CLI** | Your ChatGPT/Codex login | ✅ |
+| **OpenCode** | Its own configured model | ✅ |
+| **Hermes Agent** (Nous Research) | Your Hermes-configured provider/model | ✅ |
 
-Details: [docs/security.md](docs/security.md) · scheduling semantics: [docs/scheduling.md](docs/scheduling.md) · as-built architecture: [docs/architecture.md](docs/architecture.md) · privacy: [docs/privacy.md](docs/privacy.md) · troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md).
+Detection is automatic (`Settings → Providers`): if the CLI is installed and
+logged in, it appears with its version and a health check. Select the engine
+per task in the composer — same task schema regardless of provider.
 
-## Repository map
+<details>
+<summary><b>How provider execution works</b></summary>
 
-| Path | What it holds |
+Every provider implements the same `AgentRunner` contract (`packages/shared/src/runner.ts`):
+spawn in the run's worktree, stream progress logs over SSE to the UI, enforce
+budget bounds at supervisor level, map exits to failure classes
+(auth / capacity / timeout / budget), and return a structured outcome that
+becomes the report. Hermes runs via `hermes -z` one-shot mode with
+`--usage-file` cost telemetry; Claude Code via `claude -p --output-format
+stream-json`; Codex and OpenCode via their native headless modes.
+
+</details>
+
+## 🤖 Agent Profile Library
+
+Profiles are production-grade operating contracts, not name stickers. Each one
+defines mission, constraints, hard safety rules, and an output contract.
+
+| Engineering | Operations & Docs |
 |---|---|
-| `packages/shared` | zod schemas, FSM states, JobSpec, report schema — the contracts |
-| `packages/runner` | AgentRunner engines (Claude CLI default, SDK opt-in), worktree lifecycle, sandbox profile generation, deny-list, stream parser |
-| `packages/daemon` | occurrence-ledger scheduler, run manager FSM, Fastify REST+SSE API, notifier, delivery channels, launchd service CLI |
-| `packages/ui` | React calendar · composer · inbox · approvals · settings |
-| `resources/skill-pack` | bundled versioned profile skills (dependency-triage, test-doctor, docs-writer) |
-| `spikes/reports` | Phase-0 engine contract matrix, T-001..T-009 verification reports |
-| `plan/` `vision/` | source-of-truth product documents (spec, architecture, scenarios, roadmap) |
-| `decisions/DECISIONS.md` | append-only ADR log (ADR-001..025) |
+| **Dep Surgeon** — patch/minor bumps proven by tests; majors get triage notes, never blind upgrades | **CI Investigator** — infra-flake vs regression triage from real logs |
+| **Test Doctor** — flaky vs broken classification, minimal fixes, never weakens assertions | **Repo Health Monitor** — morning digest: stale branches, drift, advisories |
+| **Bug Hunter** — evidence-first root cause before any fix | **Docs Scribe** — fix documentation drift from code evidence |
+| **Code Reviewer** — read-only, severity-rated findings with file:line evidence | **Changelog Writer** — entries derived from actual diffs, never invented |
+| **Refactoring Engineer** — behavior-preserving, tests green at every step | |
+| **Performance Engineer** — measure baseline → change one thing → re-measure | |
+| **Security Auditor** — report-only defensive scan; secrets masked | |
+| **Release Engineer** — version/changelog/build readiness checks | |
 
-## Contributing
+Create your own in-app (**Agents → New profile**): pick skills, permission
+mode, budget defaults, and system prompt — bookable a minute later.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Scenario-driven development: no feature is done until its scenario IDs have tests. Decisions log is append-only. Security boundaries are not negotiable in review.
+## 📦 Installation
+
+> macOS 14+ (Apple silicon). Free during beta.
+
+```bash
+# 1. Clone and install
+git clone https://github.com/vimoxshah/clockwork.git
+cd clockwork
+pnpm install
+
+# 2. Build everything
+pnpm build
+
+# 3. Start the daemon (serves UI + API on 127.0.0.1:4747)
+node packages/daemon/dist/main.js
+
+# 4. Pair the UI
+open http://127.0.0.1:4747
+# Paste the token from:
+cat ~/.clockwork/api-token
+```
+
+Prerequisites:
+- Node.js ≥ 22, pnpm ≥ 11 (`corepack enable`)
+- At least one provider CLI installed and logged in:
+  - [`claude`](https://docs.anthropic.com/en/docs/claude-code) (recommended default)
+  - [`codex`](https://github.com/openai/codex), [`opencode`](https://opencode.ai), or [`hermes`](https://github.com/NousResearch/hermes-agent) for alternative engines
+- git
+
+<details>
+<summary><b>Desktop app (Tauri)</b></summary>
+
+```bash
+pnpm tauri build          # unsigned .app + DMG in src-tauri/target/release/bundle/
+```
+
+The Tauri shell loads the local daemon URL; signing/notarization is left to
+your Apple Developer setup.
+
+</details>
+
+<details>
+<summary><b>Run as a background service</b></summary>
+
+```bash
+# clockworkd entrypoint: install/uninstall/doctor
+npx tsx packages/daemon/src/cli.ts install
+clockworkd doctor        # verifies PATH, providers, data dir
+```
+
+</details>
+
+## 🚀 First run in 60 seconds
+
+1. Open Clockwork → **+ New task**
+2. Name it "Nightly dependency triage", pick the **Dep Surgeon** profile
+3. Choose your repo, set a $1 cap, leave provider = Claude Code
+4. Schedule: weekly, Monday 07:00 — or just hit **ASAP**
+5. Come back later: the report is in your **Inbox** — branch, diffstat, cost
+
+## ⌨️ Keyboard shortcuts
+
+| Keys | Action |
+|---|---|
+| `⌘K` | Command palette (navigate, themes, create) |
+| `⌘N` | New task |
+| `⌘1–4` | Calendar / Inbox / Tasks / Agents |
+| `⌘,` | Settings |
+| `/` | Focus inbox search |
+
+Full list: [docs/SHORTCUTS.md](docs/SHORTCUTS.md)
+
+## 🏗 Architecture
+
+```
+┌──────────────┐   HTTP + SSE (loopback :4747, bearer token 0600)
+│   UI (React) │◄───────────────────────────┐
+└──────────────┘                            │
+      Tauri shell loads the same URL        │
+                                             │
+┌────────────────────────────────────────────▼───┐
+│                clockworkd (Fastify)            │
+│  scheduler · queue + repo mutex · run manager  │
+│  approvals · budgets · delivery · audit journal│
+│                    SQLite ~/.clockwork         │
+└──────────────────────┬─────────────────────────┘
+                       │ spawn per run
+            ┌──────────▼───────────┐
+            │  runner child process│  own pgid, Seatbelt profile
+            │  AgentRunner contract│  Claude │ Codex │ OpenCode │ Hermes
+            └──────────────────────┘  worktree-isolated git operations
+```
+
+- **Monorepo:** `packages/shared` (schemas/contracts) · `packages/runner`
+  (engine runners + sandboxing) · `packages/daemon` (API/scheduler/state) ·
+  `packages/ui` (React + Tailwind design system)
+- **Deterministic tests:** `CW_MOCK_STEP_MS` makes full-loop integration tests
+  sample intermediate states without sleeps
+
+## ⚖️ Security Model
+
+- **Isolation:** each run gets a fresh git worktree + branch cut from base;
+  macOS Seatbelt (`sandbox-exec`) profile restricts writes to that worktree
+- **Credential hygiene:** sanitized child environment; deny-list blocks reads
+  of `.ssh`, `.aws`, `.gnupg`, Keychains; secret masking in reports
+- **Approvals:** sensitive tool calls pause the run; ~2-minute decision window,
+  then fail-safe auto-deny (unattended mode) — recorded for audit either way
+- **Budgets:** USD soft cap + turn cap + wall-clock timeout enforced by the
+  supervisor process, not by the model's self-restraint
+- **Local-only:** daemon binds 127.0.0.1; bearer token file is 0600; no
+  analytics, no account, no cloud component
+
+Details: [docs/security.md](docs/security.md) · [docs/privacy.md](docs/privacy.md)
+
+## 🧪 Development
+
+```bash
+pnpm typecheck        # shared + runner + daemon
+pnpm lint             # eslint
+pnpm test             # vitest — unit + integration incl. full-loop E2E
+pnpm build            # all workspace packages
+
+# UI package only
+pnpm --filter @clockwork/ui dev       # vite (proxies nothing; use served app)
+pnpm --filter @clockwork/ui build
+```
+
+The e2e scripts under `packages/ui/e2e/` are Playwright harnesses used during
+development to verify the real served application end-to-end (calendar,
+themes, palette, providers, ICS overlay, 1000-task benchmarks).
+
+## 🗺 Roadmap
+
+- [x] Multi-provider execution (Claude/Codex/OpenCode/Hermes)
+- [x] Command palette + shortcut registry
+- [x] Human calendar overlay (ICS)
+- [x] 1000-task scale verification
+- [ ] RRULE expansion for external calendars
+- [ ] Chaining v2 (fan-in/out DAGs)
+- [ ] Team delivery targets (Slack/Telegram webhooks GA)
+- [ ] Signed & notarized desktop builds
 
 ## License
 
-[FSL-1.1 (Functional Source License)](LICENSE) — converts to MIT two years after each release. Free to use, modify, and redistribute; competing hosted products are the one restriction.
+[FSL-1.1](LICENSE) (Functional Source License) — free to use, modify, and
+self-host; competing-use restrictions convert to MIT after the change date.
+See [NOTICE](NOTICE) for third-party attributions.
+
+---
+
+<div align="center">
+<sub>Built for people who feel the chore pain weekly.</sub>
+</div>
