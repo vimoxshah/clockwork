@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="description" content="Clockwork — the calendar where your AI agents show up for work. Schedule recurring agent jobs on a real calendar, run them unattended in isolated sandboxes, and review honest reports." />
+<title>Clockwork — the calendar where your agents show up for work</title>
+<style>
+  :root {
+    --ground:#0c0e14; --panel:#141824; --panel-hover:#1a1f2e; --brass:#e8a33d;
+    --ink:#e9ebf3; --mut:#9ba1b6; --dim:#6a7189; --border:#232a3d;
+    --success:#4bc97f; --info:#5ea7f0;
+  }
+  * { box-sizing:border-box; }
+  html { scroll-behavior:smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior:auto; } * { animation:none !important; transition:none !important; } }
+  body { margin:0; background:var(--ground); color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; line-height:1.6; }
+  .wrap { max-width:1060px; margin:0 auto; padding:0 24px; }
+  section { padding:72px 0; }
+  h1 { font-size:44px; letter-spacing:.1em; margin:0 0 10px; font-weight:700; line-height:1.15; }
+  h1 b { color:var(--brass); }
+  h2 { font-size:30px; margin:0 0 10px; letter-spacing:.01em; }
+  .kicker { color:var(--brass); text-transform:uppercase; letter-spacing:.22em; font-size:12px; font-weight:700; margin-bottom:14px; }
+  .sub { color:var(--mut); font-size:20px; max-width:640px; }
+  nav.top { display:flex; align-items:center; gap:18px; padding:18px 0; position:sticky; top:0; background:rgba(12,14,20,.86); backdrop-filter:blur(8px); z-index:50; border-bottom:1px solid var(--border); }
+  nav.top .word { font-weight:700; letter-spacing:.2em; font-size:14px; }
+  nav.top .word b { color:var(--brass); }
+  nav.top a { color:var(--mut); text-decoration:none; font-size:13.5px; }
+  nav.top a:hover { color:var(--ink); }
+  nav.top .cta { margin-left:auto; background:var(--brass); color:#14100a; font-weight:700; border-radius:9px; padding:9px 16px; text-decoration:none; font-size:13.5px; }
+  .btnrow { display:flex; gap:14px; margin:30px 0 14px; flex-wrap:wrap; }
+  .btn { background:var(--brass); color:#14100a; font-weight:700; border:none; border-radius:11px; padding:15px 28px; font-size:16px; cursor:pointer; text-decoration:none; display:inline-block; transition:transform .15s ease, box-shadow .15s ease; }
+  .btn:hover { transform:translateY(-2px); box-shadow:0 10px 30px rgba(232,163,61,.25); }
+  .btn.ghost { background:transparent; color:var(--ink); border:1px solid var(--border-strong,#2a3247); }
+  .hero-grid { display:grid; grid-template-columns:1fr; gap:40px; align-items:center; padding:80px 0 40px; }
+  @media (min-width:900px) { .hero-grid { grid-template-columns:1.05fr .95fr; } h1 { font-size:52px; } }
+  .shot { width:100%; border-radius:14px; border:1px solid var(--border); box-shadow:0 24px 70px rgba(0,0,0,.5); display:block; background:var(--panel); }
+  .shots-2 { display:grid; grid-template-columns:1fr 1fr; gap:22px; margin-top:34px; }
+  @media (max-width:760px) { .shots-2 { grid-template-columns:1fr; } }
+  figure { margin:0; }
+  figcaption { color:var(--dim); font-size:12.5px; margin-top:8px; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:18px; margin-top:30px; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:22px; }
+  .card h3 { margin:0 0 8px; font-size:16.5px; }
+  .card p { margin:0; color:var(--mut); font-size:14px; }
+  .loop { display:flex; gap:0; flex-wrap:wrap; margin-top:30px; counter-reset:step; }
+  .step { flex:1 1 180px; background:var(--panel); border:1px solid var(--border); padding:22px; position:relative; counter-increment:step; }
+  .step:first-child { border-radius:14px 0 0 14px; } .step:last-child { border-radius:0 14px 14px 0; }
+  .step::before { content:counter(step,decimal-leading-zero); color:var(--brass); font-weight:800; font-size:13px; letter-spacing:.15em; }
+  .step h3 { margin:6px 0 4px; font-size:17px; } .step p { margin:0; color:var(--mut); font-size:13.5px; }
+  .providers { display:flex; gap:12px; flex-wrap:wrap; margin-top:26px; }
+  .prov { border:1px solid var(--border); border-radius:11px; padding:12px 18px; background:var(--panel); }
+  .prov strong { display:block; font-size:14.5px; } .prov span { color:var(--dim); font-size:12px; }
+  .dot-ok { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--success); margin-right:7px; }
+  .reveal { opacity:0; transform:translateY(18px); transition:opacity .7s ease, transform .7s ease; }
+  .reveal.in { opacity:1; transform:none; }
+  .honest { border-left:3px solid var(--brass); padding:12px 18px; color:var(--dim); font-size:14px; background:#11141d; border-radius:0 10px 10px 0; max-width:720px; }
+  footer { border-top:1px solid var(--border); padding:36px 0 60px; color:var(--dim); font-size:13px; }
+  footer a { color:var(--mut); }
+</style>
+</head>
+<body>
+
+<nav class="top wrap">
+  <span class="word">CLOCK<b>WORK</b></span>
+  <a href="#product">Product</a>
+  <a href="#how">How it works</a>
+  <a href="#agents">Agents</a>
+  <a href="#security">Security</a>
+  <a class="cta" href="#download">Download</a>
+</nav>
+
+<header class="wrap hero-grid">
+  <div>
+    <div class="kicker">Local-first · macOS · works with the logins you already have</div>
+    <h1>Your AI agents<br/>have a <b>calendar</b> now.</h1>
+    <p class="sub">Stop babysitting terminals and cron scripts. Book agent work on a real calendar — Clockwork runs it in an isolated sandbox at the hour you chose and files a report you can actually read.</p>
+    <div class="btnrow">
+      <a class="btn" href="#download">Download Clockwork</a>
+      <a class="btn ghost" href="#product">See it work ↓</a>
+    </div>
+    <p style="color:var(--dim);font-size:13px">Free during beta · No API key · Uses your Claude Code / Codex / OpenCode / Hermes login</p>
+  </div>
+  <figure>
+    <img class="shot" src="screens/01-calendar-month.png" alt="Clockwork month calendar with scheduled agent runs" loading="eager"/>
+    <figcaption>The default view: every agent job on one month grid.</figcaption>
+  </figure>
+</header>
+
+<section id="product" class="wrap">
+  <div class="reveal">
+    <div class="kicker">Why this exists</div>
+    <h2>Agents are powerful. Recurring work has no home.</h2>
+    <p class="sub">Right now recurring agent chores live in crontabs, shell scripts, CI pipelines, and sticky notes. Clockwork gives that work a home on your calendar — with budgets, approvals, isolation, and searchable history built in.</p>
+  </div>
+  <div class="shots-2">
+    <figure class="reveal"><img class="shot" src="screens/02-task-composer.png" alt="Task composer with provider selection" loading="lazy"/><figcaption>Book a job in under a minute — prompt, repo, budget, schedule.</figcaption></figure>
+    <figure class="reveal"><img class="shot" src="screens/08-provider-selection.png" alt="Provider selection between Claude, Codex, OpenCode and Hermes" loading="lazy"/><figcaption>Pick the engine per task: Claude Code, Codex, OpenCode, or Hermes Agent.</figcaption></figure>
+    <figure class="reveal"><img class="shot" src="screens/05-run-report.png" alt="Run report with summary and cost" loading="lazy"/><figcaption>Reports worth reading: what it did, what it skipped, what it cost.</figcaption></figure>
+    <figure class="reveal"><img class="shot" src="screens/07-command-palette.png" alt="Command palette" loading="lazy"/><figcaption>⌘K everything: navigate, switch themes, create tasks.</figcaption></figure>
+  </div>
+</section>
+
+<section id="how" class="wrap reveal">
+  <div class="kicker">The loop</div>
+  <h2>Book → Run → Review → Repeat</h2>
+  <div class="loop">
+    <div class="step"><h3>Book</h3><p>Choose an agent profile, a repo, a budget, and a time. One-off or recurring.</p></div>
+    <div class="step"><h3>Run</h3><p>Your own CLI engine executes unattended inside an OS-sandboxed git worktree.</p></div>
+    <div class="step"><h3>Review</h3><p>A human-readable report lands in your inbox — branch, diffstat, cost, transcript.</p></div>
+    <div class="step"><h3>Repeat</h3><p>Make it weekly. Search every past run forever. Trust grows with evidence.</p></div>
+  </div>
+</section>
+
+<section id="usp" class="wrap reveal">
+  <div class="kicker">Differentiators</div>
+  <h2>Built like a product, not a demo</h2>
+  <div class="cards">
+    <div class="card"><h3>🗓 A real calendar</h3><p>Month grid, recurrence, missed-run policies, per-repo mutex — scheduling is first-class, not an afterthought.</p></div>
+    <div class="card"><h3>🔀 Provider freedom</h3><p>Claude Code today, Codex / OpenCode / Hermes when you want. Switch per task without rebuilding anything.</p></div>
+    <div class="card"><h3>🛡 Human-in-the-loop</h3><p>Risky actions pause the run and ask you. Unanswered asks fail safe — never silently approved.</p></div>
+    <div class="card"><h3>📦 Real isolation</h3><p>Every run gets its own worktree and Seatbelt sandbox. Writes locked to scope. SSH keys unreadable.</p></div>
+    <div class="card"><h3>🔎 Searchable history</h3><p>Full-text search across every report and transcript. Your agent's track record becomes auditable.</p></div>
+    <div class="card"><h3>⌨️ Keyboard-native</h3><p>⌘K palette, global shortcuts, instant inbox search. Built by terminal people, for terminal people.</p></div>
+  </div>
+</section>
+
+<section id="agents" class="wrap reveal">
+  <div class="kicker">Agent library</div>
+  <h2>Ready-to-run specialists, not blank prompts</h2>
+  <p class="sub">Every profile ships with mission, constraints, safety rails, output contract, and success criteria — so "update my deps" doesn't turn into "rewrite my repo".</p>
+  <div class="cards">
+    <div class="card"><h3>Dependency Surgeon</h3><p>Groups upgrades, reads breaking changes, runs tests, opens PRs. Never force-pushes.</p></div>
+    <div class="card"><h3>Test Doctor</h3><p>Triage flaky suites, quarantine noise, propose minimal fixes.</p></div>
+    <div class="card"><h3>Docs Drift Checker</h3><p>Finds where docs and code disagree, drafts precise corrections.</p></div>
+    <div class="card"><h3>Repo Health Monitor</h3><p>Morning digest: stale branches, failing CI, security advisories.</p></div>
+  </div>
+  <div class="btnrow" style="margin-top:26px">
+    <a class="btn ghost" href="#download">Browse the full library in-app</a>
+  </div>
+</section>
+
+<section id="security" class="wrap reveal">
+  <div class="kicker">Security</div>
+  <h2>Trust is the feature</h2>
+  <div class="cards">
+    <div class="card"><h3>Sandboxed execution</h3><p>macOS Seatbelt profiles per run. File writes restricted to the run's worktree.</p></div>
+    <div class="card"><h3>Credential hygiene</h3><p>Sanitized environment. SSH agents and credential helpers unreadable from inside a run.</p></div>
+    <div class="card"><h3>Hard budget bounds</h3><p>USD soft caps, turn limits, wall-clock timeouts — enforced by the supervisor, not the model's good intentions.</p></div>
+    <div class="card"><h3>Audit journal</h3><p>Every approval, denial, and state change recorded. Nothing happens off the record.</p></div>
+  </div>
+  <p class="honest" style="margin-top:26px">⏾ <strong>The honest constraint:</strong> jobs run when your machine is awake. Clockwork keeps a plugged-in laptop awake through booked windows and tells you loudly when sleep caused a miss. For true overnight runs, use an always-on machine. We'd rather tell you now than disappoint you at 2am.</p>
+</section>
+
+<section id="providers" class="wrap reveal">
+  <div class="kicker">Providers</div>
+  <h2>Bring the engines you already pay for</h2>
+  <div class="providers">
+    <div class="prov"><strong><span class="dot-ok"></span>Claude Code</strong><span>subscription login · default</span></div>
+    <div class="prov"><strong><span class="dot-ok"></span>Codex CLI</strong><span>OpenAI</span></div>
+    <div class="prov"><strong><span class="dot-ok"></span>OpenCode</strong><span>multi-model</span></div>
+    <div class="prov"><strong><span class="dot-ok"></span>Hermes Agent</strong><span>Nous Research</span></div>
+  </div>
+  <figure class="reveal" style="margin-top:30px"><img class="shot" style="max-width:760px" src="screens/03-agent-profile.png" alt="Agent profiles library" loading="lazy"/><figcaption>Detection is automatic — if the CLI is installed, it appears.</figcaption></figure>
+</section>
+
+<section id="download" class="wrap reveal" style="text-align:center;padding-bottom:90px">
+  <div class="kicker">Get started</div>
+  <h2 style="font-size:38px">Give your agents a workday.</h2>
+  <p class="sub" style="margin:12px auto 30px;max-width:520px">Download the macOS app, connect once, book your first chore tonight.</p>
+  <a class="btn" href="https://github.com/vimoxshah/clockwork" rel="noopener">Download for macOS</a>
+  <p style="color:var(--dim);font-size:13px;margin-top:16px">Apple silicon · macOS 14+ · Free during beta</p>
+</section>
+
+<footer class="wrap">
+  © 2026 Clockwork · Functional Source License (FSL-1.1) · Local-first: your data stays in ~/.clockwork
+</footer>
+
+<script>
+  // Scroll reveal (respects prefers-reduced-motion via CSS override above)
+  const io = new IntersectionObserver((es) => {
+    es.forEach((e) => e.isIntersecting && e.target.classList.add('in'));
+  }, { threshold: 0.12 });
+  document.querySelectorAll('.reveal').forEach((el) => io.observe(el));
+</script>
+</body>
+</html>

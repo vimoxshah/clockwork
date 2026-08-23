@@ -1,0 +1,44 @@
+# NOTICE
+
+Clockwork — the calendar where your agents show up for work.
+Copyright 2026 Vimox Shah
+
+This product is licensed under the Functional Source License, v1.1 (FSL-1.1).
+See the LICENSE file for the complete terms.
+
+## Third-party components
+
+Runtime dependencies (see package.json files in each workspace package for
+exact versions):
+
+- React, React DOM — MIT License — Copyright Meta Platforms, Inc. and affiliates
+- Radix UI primitives (@radix-ui/react-dialog, -label, -popover, -select,
+  -separator, -switch, -tooltip) — MIT License — Copyright WorkOS / Radix UI contributors
+- lucide-react icon library — ISC License — Copyright (c) Lucide Contributors
+- class-variance-authority — Apache License 2.0 — Copyright (c) 2022 Joe Bell
+- clsx — MIT License — Copyright (c) Luke Edwards
+- tailwind-merge — MIT License — Copyright (c) Dercilio Fontes Vieira
+- react-day-picker — MIT License — Copyright (c) gpbl
+- Tailwind CSS — MIT License — Copyright (c) Tailwind Labs, Inc.
+- Vite — MIT License — Copyright (c) VoidZero Inc. and Vite contributors
+- esbuild — MIT License — Copyright (c) 2020 Evan Wallace
+- Fastify and @fastify/static — MIT License — Copyright Fastify contributors
+- zod — MIT License — Copyright (c) Colin McDonnell
+- croner — MIT License — Copyright (c) henriparviainen / hexagon
+- better-sqlite3 — MIT License — Copyright (c) Joshua Wise
+- vitest — MIT License — Copyright (c) Vitest contributors
+- Playwright — Apache License 2.0 — Copyright (c) Microsoft Corporation
+- TypeScript — Apache License 2.0 — Copyright Microsoft Corporation
+
+External CLI engines invoked at run time (not bundled; used under their own
+licenses via the user's own installed copy and account):
+
+- Claude Code — Anthropic PBC
+- Codex CLI — OpenAI
+- OpenCode — SST / opencode contributors
+- Hermes Agent — Nous Research (Apache-licensed project)
+
+## Trademarks
+
+All product names, logos, and brands are property of their respective owners.
+Use of these names does not imply affiliation or endorsement.
