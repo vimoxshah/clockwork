@@ -3,7 +3,7 @@
  * GET /calendar (runs + expanded recurring bookings), day selection with a
  * detail panel, event click → detail dialog, overflow handling.
  */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import { useAsync } from '../useAsync';
 import {
@@ -350,8 +350,17 @@ function EventDialog({
   );
   const [showTranscript, setShowTranscript] = useState(false);
 
+  // Escape closes the dialog (a11y: never trap the keyboard user)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
   return (
-    <div className="dialog-backdrop" onClick={onClose} role="dialog" aria-modal="true">
+    <div className="dialog-backdrop" onClick={onClose} role="dialog" aria-modal="true" aria-label={event.name}>
       <div className="dialog" onClick={(e) => e.stopPropagation()}>
         <h3>{event.name}</h3>
         <div className="statrow mono">
@@ -389,7 +398,7 @@ function EventDialog({
             {report.data?.report?.diffStat?.length > 0 && (
               <table className="diffstat-table mono">
                 <tbody>
-                  {report.data.report.diffStat.map((s: any) => (
+                  {report.data?.report?.diffStat?.map((s: any) => (
                     <tr key={s.path}>
                       <td>{s.path}</td>
                       <td className="add">+{s.additions}</td>

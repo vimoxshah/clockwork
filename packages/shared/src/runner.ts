@@ -55,7 +55,7 @@ export interface JobContext {
 }
 
 export interface AgentRunner {
-  readonly engine: 'cli' | 'sdk' | 'codex' | 'opencode' | 'mock';
+  readonly engine: 'cli' | 'sdk' | 'codex' | 'opencode' | 'hermes' | 'mock';
   start(job: JobSpecLike, ctx: JobContext): Promise<RunOutcome>;
   /** Fallback path only (ADR-014): restarts a turn with the decision injected. */
   resume(sessionRef: string, job: JobSpecLike, ctx: JobContext): Promise<RunOutcome>;

@@ -314,6 +314,7 @@ export class RunManager {
         break;
       case 'log':
         appendEventFile(path.join(this.deps.dataDir, 'runs', runId), { t: now, kind: 'log', text: msg.line.slice(0, 2000) });
+        this.deps.broadcast({ type: 'run.log', runId, line: msg.line.slice(0, 500), at: now });
         break;
       case 'artifact':
         break;

@@ -7,7 +7,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
-import { ClaudeCliRunner, MockRunner, CodexRunner, OpenCodeRunner, evaluateCommand, evaluatePathRead } from '@clockwork/runner';
+import { ClaudeCliRunner, MockRunner, CodexRunner, OpenCodeRunner, HermesRunner, evaluateCommand, evaluatePathRead } from '@clockwork/runner';
 import type { ChildToDaemon, DaemonToChild } from './runner-protocol.js';
 import type { JobSpec, RunOutcome } from '@clockwork/shared';
 
@@ -62,7 +62,9 @@ async function main(): Promise<void> {
         ? new CodexRunner()
         : job.engine === 'opencode'
           ? new OpenCodeRunner()
-          : new ClaudeCliRunner();
+          : job.engine === 'hermes'
+            ? new HermesRunner()
+            : new ClaudeCliRunner();
 
   // FR-2a: live-reference file attachments resolved at execution time.
   let effectiveJob: JobSpec = job;

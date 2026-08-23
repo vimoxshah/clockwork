@@ -7,7 +7,7 @@ import { api, openEventStream, setToken } from './api';
 import { ThemeProvider } from './theme';
 import CalendarView from './components/CalendarView';
 import AgentsView from './components/AgentsView';
-import InboxView from './components/InboxView';
+import InboxView, { setPendingRunId } from './components/InboxView';
 import TasksView from './components/TasksView';
 import ComposerView from './components/ComposerView';
 import SettingsView from './components/SettingsView';
@@ -67,7 +67,7 @@ export default function App(): JSX.Element {
   }, []);
 
   // live refresh over SSE — every state change bumps dataVersion so views refetch
-  const [toasts, setToasts] = useState<Array<{ id: number; title: string; body: string; target: Tab }>>([]);
+  const [toasts, setToasts] = useState<Array<{ id: number; runId?: string; title: string; body: string; target: Tab }>>([]);
   useEffect(() => {
     if (unauthorized || !localStorage.getItem('clockwork.token')) return;
     const es = openEventStream((e) => {
@@ -76,11 +76,12 @@ export default function App(): JSX.Element {
       }
       // toast center: click navigates to the relevant surface (FR: app-grade notifications)
       let toast: { title: string; body: string; target: Tab } | null = null;
-      if (e.type === 'report.ready') toast = { title: 'Run report ready', body: 'Open the inbox to review.', target: 'inbox' };
+      if (e.type === 'report.ready') toast = { title: 'Run report ready', body: 'Click to review the report.', target: 'inbox' };
       else if (e.type === 'approval.requested') toast = { title: 'Needs your approval', body: 'A run is asking for permission.', target: 'inbox' };
       if (toast) {
+        const runId = (e as any).runId as string | undefined;
         const id = Date.now() + Math.random();
-        setToasts((ts) => [...ts.slice(-3), { id, ...toast! }]);
+        setToasts((ts) => [...ts.slice(-3), { id, runId, ...toast! }]);
         setTimeout(() => setToasts((ts) => ts.filter((x) => x.id !== id)), 6000);
       }
       setDataVersion((v) => v + 1);
@@ -175,6 +176,7 @@ export default function App(): JSX.Element {
                 <button
                   key={t.id}
                   onClick={() => {
+                    if (t.runId) setPendingRunId(t.runId);
                     setTab(t.target);
                     setToasts((ts) => ts.filter((x) => x.id !== t.id));
                   }}

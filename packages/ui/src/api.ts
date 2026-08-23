@@ -190,7 +190,10 @@ export function openEventStream(onEvent: (e: any) => void): EventSource {
   const es = new EventSource(`/events?token=${encodeURIComponent(getToken())}`);
   es.onmessage = (m) => {
     try {
-      onEvent(JSON.parse(m.data));
+      const parsed = JSON.parse(m.data);
+      // fan-out for any component that needs SSE without prop drilling
+      window.dispatchEvent(new CustomEvent('clockwork:sse', { detail: parsed }));
+      onEvent(parsed);
     } catch {}
   };
   return es;

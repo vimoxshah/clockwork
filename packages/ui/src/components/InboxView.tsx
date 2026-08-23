@@ -3,7 +3,7 @@
  * unread tracking, approvals with REAL respond actions (within the child's
  * decision window), report detail with transcript viewer.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, type RunRowT } from '../api';
 import { useAsync } from '../useAsync';
 
@@ -33,6 +33,25 @@ export default function InboxView({ version }: { version: number }): JSX.Element
   const runs = useAsync(() => api.runs({ limit: 200 }), [version]);
   const approvals = useAsync(() => api.approvals(), [version]);
   const [selected, setSelected] = useState<string | null>(null);
+  // deep-link: toast click sets a pending run id; apply it on next render
+  const [pending, setPending] = useState<string | null>(null);
+  useEffect(() => {
+    if (pending) {
+      setSelected(pending);
+      setPending(null);
+    }
+  }, [pending]);
+  // listen for deep-link nudges (toast click while inbox is/isn't mounted)
+  useEffect(() => {
+    const onOpenRun = (e: Event): void => setPending((e as CustomEvent<string>).detail);
+    window.addEventListener('clockwork:open-run', onOpenRun);
+    // also apply anything queued before mount
+    if (pendingRunId) {
+      setSelected(pendingRunId);
+      pendingRunId = null;
+    }
+    return () => window.removeEventListener('clockwork:open-run', onOpenRun);
+  }, []);
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState<OutcomeFilter>('all');
   const [ftsOrder, setFtsOrder] = useState<Map<string, string> | null>(null);
@@ -194,6 +213,14 @@ export default function InboxView({ version }: { version: number }): JSX.Element
   );
 }
 
+/** Module-level deep-link handoff: App toast click → InboxView auto-select. */
+let pendingRunId: string | null = null;
+export function setPendingRunId(runId: string): void {
+  pendingRunId = runId;
+  // nudge any mounted InboxView; if not mounted, it reads pendingRunId on mount
+  window.dispatchEvent(new CustomEvent('clockwork:open-run', { detail: runId }));
+}
+
 function ApprovalCard({ approval, onChanged }: { approval: any; onChanged: () => void }): JSX.Element {
   const payload = typeof approval.payload_json === 'string' ? safeJson(approval.payload_json) : approval.payload_json ?? {};
   const [busy, setBusy] = useState(false);
@@ -258,6 +285,7 @@ function ReportDetail({ runId, version }: { runId: string; version: number }): J
 
   const { run, report } = detail.data;
   const spec = safeJson(run.jobspec_json);
+  const active = ['running', 'preparing', 'finalizing', 'waiting_approval', 'awaiting_user'].includes(run.state);
 
   return (
     <>
@@ -273,6 +301,7 @@ function ReportDetail({ runId, version }: { runId: string; version: number }): J
         {run.branch && <span>{run.branch}</span>}
       </div>
 
+      {active && <LiveTail runId={runId} />}
       {report?.summary ? (
         <div className="summary-block">{report.summary}</div>
       ) : (
@@ -318,6 +347,46 @@ function ReportDetail({ runId, version }: { runId: string; version: number }): J
         </div>
       )}
     </>
+  );
+}
+
+/** Live streaming output: subscribes to run.log SSE events for this run while it executes. */
+function LiveTail({ runId }: { runId: string }): JSX.Element {
+  const [lines, setLines] = useState<Array<{ at: number; line: string }>>([]);
+  const preRef = useRef<HTMLPreElement | null>(null);
+  useEffect(() => {
+    const onSse = (e: Event): void => {
+      const ev = (e as CustomEvent).detail as { type?: string; runId?: string; line?: string; at?: number };
+      if (ev?.type === 'run.log' && ev.runId === runId && typeof ev.line === 'string') {
+        setLines((ls) => [...ls.slice(-200), { at: ev.at ?? Date.now(), line: ev.line as string }]);
+      }
+    };
+    window.addEventListener('clockwork:sse', onSse);
+    return () => window.removeEventListener('clockwork:sse', onSse);
+  }, [runId]);
+  // auto-scroll to the newest line
+  useEffect(() => {
+    const el = preRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [lines]);
+  return (
+    <div className="live-tail" data-testid="live-tail">
+      <div className="hint" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span className="spinner" /> Live output
+      </div>
+      {lines.length === 0 ? (
+        <p className="hint">Waiting for output…</p>
+      ) : (
+        <pre ref={preRef} className="mono" style={{ maxHeight: 260, overflow: 'auto', fontSize: 12 }}>
+          {lines.map((l, i) => (
+            <div key={i}>
+              <span style={{ color: 'var(--dim)' }}>{new Date(l.at).toLocaleTimeString()} </span>
+              {l.line}
+            </div>
+          ))}
+        </pre>
+      )}
+    </div>
   );
 }
 

@@ -11,3 +11,4 @@ export * from './context.js';
 export * from './service-path.js';
 export * from './codex-runner.js';
 export * from './opencode-runner.js';
+export * from './hermes-runner.js';

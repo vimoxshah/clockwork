@@ -101,7 +101,8 @@ body {
 .wordmark { letter-spacing: 0.22em; font-weight: 600; }
 .wordmark b { color: var(--accent); font-weight: 600; }
 .topbar .spacer { flex: 1; }
-.health { color: var(--dim); display: flex; gap: 14px; align-items: center; font-size: 12.5px; }
+.health { color: var(--dim); display: flex; gap: 14px; align-items: center; font-size: 12.5px; flex-wrap: wrap; min-width: 0; }
+@media (max-width: 900px) { .health span:not(.chip) { display: none; } .health { gap: 8px; } }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); display: inline-block; margin-right: 5px; }
 .dot.down { background: var(--danger); }
 

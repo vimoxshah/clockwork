@@ -12,7 +12,7 @@ export const PermissionMode = z.enum(permissionModes);
 export type PermissionMode = (typeof permissionModes)[number];
 
 // ---- Engines/providers (ADR-016 + ADR-026): claude CLI default; codex & opencode CLIs opt-in.
-export const engines = ['cli', 'sdk', 'codex', 'opencode'] as const;
+export const engines = ['cli', 'sdk', 'codex', 'opencode', 'hermes'] as const;
 export const Engine = z.enum(engines);
 export type Engine = (typeof engines)[number];
 
@@ -21,6 +21,7 @@ export const PROVIDERS = [
   { id: 'cli', label: 'Claude Code', bin: 'claude' },
   { id: 'codex', label: 'Codex CLI', bin: 'codex' },
   { id: 'opencode', label: 'OpenCode', bin: 'opencode' },
+  { id: 'hermes', label: 'Hermes Agent', bin: 'hermes' },
 ] as const;
 
 // ---- Scheduling (FR-4)

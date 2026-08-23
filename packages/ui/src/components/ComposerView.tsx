@@ -385,8 +385,7 @@ export default function ComposerView({
                     />
                   ))}
               </div>
-              {selectedProfile?.system_prompt_extra ? null : null}
-            </section>
+              {selectedProfile === null ? null : null}            </section>
 
             <section>
               <Label>Permission mode</Label>
