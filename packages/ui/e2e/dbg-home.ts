@@ -1,0 +1,20 @@
+import { chromium } from 'playwright';
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+const TOKEN = readFileSync(homedir() + '/.clockwork/api-token', 'utf8').trim();
+const run = async (): Promise<void> => {
+  const browser = await chromium.launch();
+  const page = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
+  page.on('pageerror', (e) => console.log('PAGEERROR:', e.message.slice(0, 300)));
+  page.on('console', (m) => m.type() === 'error' && console.log('CONSOLE:', m.text().slice(0, 200)));
+  await page.addInitScript((t) => localStorage.setItem('clockwork.token', t), TOKEN);
+  await page.goto('http://127.0.0.1:4747', { waitUntil: 'networkidle' });
+  await page.waitForTimeout(1500);
+  console.log('BODY LEN:', (await page.locator('body').innerText()).length);
+  console.log((await page.locator('body').innerText()).slice(0, 600));
+  await page.screenshot({ path: '/tmp/gaunt-home.png', fullPage: true });
+  const html = await page.evaluate(() => document.querySelector('.cal-grid')?.outerHTML.slice(0, 400) ?? 'NO .cal-grid');
+  console.log('GRID HTML:', html);
+  await browser.close();
+};
+void run();
