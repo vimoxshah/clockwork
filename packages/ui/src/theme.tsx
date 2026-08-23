@@ -42,7 +42,16 @@ export function ThemeProvider({ children }: { children: ReactNode }): JSX.Elemen
       if (loadThemePref() === 'system') apply('system');
     };
     mq.addEventListener('change', onChange);
-    return () => mq.removeEventListener('change', onChange);
+    // external setters (command palette)
+    const onSetTheme = (e: Event): void => {
+      const p = (e as CustomEvent).detail;
+      if (p === 'light' || p === 'dark' || p === 'system') setPrefState(p);
+    };
+    document.addEventListener('clockwork:set-theme', onSetTheme as EventListener);
+    return () => {
+      mq.removeEventListener('change', onChange);
+      document.removeEventListener('clockwork:set-theme', onSetTheme as EventListener);
+    };
   }, [pref]);
 
   const setPref = (p: ThemePref): void => {

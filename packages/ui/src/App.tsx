@@ -2,12 +2,13 @@
  * Clockwork shell: topbar + tab navigation (hash-persisted), connect gate,
  * error boundary, SSE-driven refresh counter, theme provider.
  */
-import { Component, useEffect, useState, type ReactNode } from 'react';
+import { Component, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, openEventStream, setToken } from './api';
 import { ThemeProvider } from './theme';
 import CalendarView from './components/CalendarView';
 import AgentsView from './components/AgentsView';
 import InboxView, { setPendingRunId } from './components/InboxView';
+import { CommandPalette, useGlobalShortcuts, type Command, type Tab as PaletteTab } from './components/CommandPalette';
 import TasksView from './components/TasksView';
 import ComposerView from './components/ComposerView';
 import SettingsView from './components/SettingsView';
@@ -93,6 +94,32 @@ export default function App(): JSX.Element {
   }, [unauthorized]);
 
   const hasToken = Boolean(localStorage.getItem('clockwork.token'));
+
+  // Cmd+K command palette + global shortcuts
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  useGlobalShortcuts(
+    useMemo(
+      () => ({
+        onPalette: () => setPaletteOpen((o) => !o),
+        setTab: (t: PaletteTab) => setTab(t as Tab),
+      }),
+      [],
+    ),
+  );
+  const commands: Command[] = useMemo(
+    () => [
+      { id: 'nav-calendar', label: 'Open Calendar', section: 'Navigate', shortcut: '⌘1', run: () => setTab('calendar') },
+      { id: 'nav-inbox', label: 'Open Inbox', section: 'Navigate', shortcut: '⌘2', run: () => setTab('inbox') },
+      { id: 'nav-tasks', label: 'Open Tasks', section: 'Navigate', shortcut: '⌘3', run: () => setTab('tasks') },
+      { id: 'nav-agents', label: 'Open Agents', section: 'Navigate', shortcut: '⌘4', run: () => setTab('agents') },
+      { id: 'new-task', label: 'New task', section: 'Create', shortcut: '⌘N', run: () => setTab('new') },
+      { id: 'settings', label: 'Open Settings', section: 'Settings', shortcut: '⌘,', run: () => setTab('settings') },
+      { id: 'theme-light', label: 'Theme: light', section: 'Settings', run: () => document.dispatchEvent(new CustomEvent('clockwork:set-theme', { detail: 'light' })) },
+      { id: 'theme-dark', label: 'Theme: dark', section: 'Settings', run: () => document.dispatchEvent(new CustomEvent('clockwork:set-theme', { detail: 'dark' })) },
+      { id: 'theme-system', label: 'Theme: system', section: 'Settings', run: () => document.dispatchEvent(new CustomEvent('clockwork:set-theme', { detail: 'system' })) },
+    ],
+    [],
+  );
 
   return (
     <ThemeProvider>
@@ -187,6 +214,7 @@ export default function App(): JSX.Element {
                 </button>
               ))}
             </div>
+            <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={commands} />
           </>
         )}
       </ErrorBoundary>

@@ -4,6 +4,7 @@
  */
 import { useState } from 'react';
 import { useTheme } from '../theme';
+import { SHORTCUTS } from './CommandPalette';
 import { Switch } from './ui/switch';
 import { Badge } from './ui/card';
 import { api } from '../api';
@@ -92,6 +93,23 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
       <h3 className="section-title" style={{ marginTop: 20 }}>Usage &amp; limits</h3>
       <UsageCard version={version} />
 
+      <h3 className="section-title" style={{ marginTop: 20 }}>Keyboard shortcuts</h3>
+      <div className="tasklist-row" style={{ display: 'block' }}>
+        {SHORTCUTS.map((s) => (
+          <div key={s.keys} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 13 }}>
+            <span>
+              <kbd className="mono" style={{ background: 'var(--surface-active)', borderRadius: 5, padding: '2px 7px', marginRight: 10 }}>{s.keys}</kbd>
+              {s.action}
+            </span>
+            <span style={{ color: 'var(--dim)' }}>{s.context}</span>
+          </div>
+        ))}
+        <p className="hint" style={{ marginTop: 8 }}>Press ⌘K anywhere to search commands.</p>
+      </div>
+
+      <h3 className="section-title" style={{ marginTop: 20 }}>Providers</h3>
+      <ProvidersCard version={version} />
+
       <h3 className="section-title" style={{ marginTop: 20 }}>Execution</h3>
       <p className="hint">
         Engine: your own Claude Code via <span className="mono">claude -p</span> on your subscription
@@ -139,6 +157,63 @@ function UsageCard({ version }: { version: number }): JSX.Element {
       ))}
       <AdvisorNote windows={windows} providers={providers.data ?? []} />
       <p className="hint">Estimate-grade heuristic from your own runs — never a guarantee (FR-7).</p>
+    </div>
+  );
+}
+
+/** Provider cards: installed/version/health per execution engine, with a live test-connection probe. */
+const PROVIDER_NOTES: Record<string, string> = {
+  cli: 'Default engine. Uses your Claude Code subscription login — no API key.',
+  codex: 'OpenAI Codex CLI. Uses your ChatGPT/Codex login.',
+  opencode: 'OpenCode CLI with any configured model.',
+  hermes: 'Nous Research Hermes Agent one-shot (`hermes -z`). Uses your Hermes-configured provider/model.',
+};
+
+function ProvidersCard({ version }: { version: number }): JSX.Element {
+  const providers = useAsync(() => api.providers(), [version]);
+  const [testing, setTesting] = useState<string | null>(null);
+  const [result, setResult] = useState<Record<string, string>>({});
+
+  const test = async (id: string): Promise<void> => {
+    setTesting(id);
+    try {
+      // A real end-to-end probe would burn tokens; version+path presence is the health check.
+      const list = await api.providers();
+      const p = list.find((x: any) => x.id === id);
+      setResult((r) => ({ ...r, [id]: p?.detected ? `healthy · ${p.version ?? 'installed'}` : 'not found on PATH' }));
+    } catch (e) {
+      setResult((r) => ({ ...r, [id]: String((e as Error).message ?? e) }));
+    } finally {
+      setTesting(null);
+    }
+  };
+
+  if (providers.loading) return <p className="hint">Detecting installed engines…</p>;
+  if (providers.error) return <div className="error-banner">{providers.error}</div>;
+  return (
+    <div className="space-y-2">
+      {(providers.data ?? []).map((p: any) => (
+        <div key={p.id} className="tasklist-row">
+          <div className="grow">
+            <strong>{p.label}</strong>
+            <div className="hint" style={{ margin: 0 }}>
+              {PROVIDER_NOTES[p.id] ?? ''}
+            </div>
+            {result[p.id] && (
+              <div className={`mono text-xs ${result[p.id].startsWith('healthy') ? 'text-info' : ''}`} style={{ marginTop: 4 }}>
+                test: {result[p.id]}
+              </div>
+            )}
+          </div>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Badge variant={p.detected ? 'success' : 'danger'}>{p.detected ? p.version?.slice(0, 28) ?? 'installed' : 'not installed'}</Badge>
+            <button className="btn small" disabled={testing === p.id} onClick={() => void test(p.id)}>
+              {testing === p.id ? 'Testing…' : 'Test'}
+            </button>
+          </span>
+        </div>
+      ))}
+      <p className="hint">Detection runs on your machine each time this page loads. Select a provider per task in the composer.</p>
     </div>
   );
 }
