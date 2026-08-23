@@ -612,6 +612,8 @@ export class RunManager {
   }
 
   getRun(id: string): RunRow | undefined {
+    // Child-exit events can race daemon shutdown (db closed first) on slow CI.
+    if ((this.deps.db as unknown as { open?: boolean }).open === false) return undefined;
     return this.deps.db.prepare('SELECT * FROM runs WHERE id=?').get(id) as unknown as RunRow | undefined;
   }
 
