@@ -290,6 +290,19 @@ label.f { display: block; color: var(--muted); font-size: 12px; margin: 12px 0 4
 .tasklist-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; margin-bottom: 8px; }
 .tasklist-row .grow { flex: 1; min-width: 0; }
 
+/* Tasks page: use the full window width with a sticky toolbar */
+.tasks-page { width: 100%; max-width: none; margin: 0 auto; }
+.tasks-toolbar {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 0 12px; margin-bottom: 6px;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(6px);
+}
+.tasklist { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 10px; }
+.tasklist .tasklist-row { margin-bottom: 0; height: 100%; flex-wrap: wrap; }
+@media (max-width: 860px) { .tasklist { grid-template-columns: 1fr; } }
+
 .empty { color: var(--dim); text-align: center; padding: 48px 0; }
 .section-title { margin: 0 0 8px; font-size: 15px; }
 

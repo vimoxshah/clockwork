@@ -18,6 +18,9 @@ export interface BundledProfile {
   systemPromptExtra: string;
 }
 
+const BUDGET_DISCIPLINE =
+  'TURN BUDGET: you have a hard turn cap. Plan first, work in priority order, and stop early with a partial report rather than running out of turns mid-edit. If the task cannot finish in the cap, do the most valuable slice and say exactly what remains.';
+
 export const BUNDLED_PROFILES: BundledProfile[] = [
   {
     slug: 'generalist',
@@ -26,7 +29,7 @@ export const BUNDLED_PROFILES: BundledProfile[] = [
     glyph: '◦',
     skills: [],
     systemPromptExtra:
-      'You are running unattended on a schedule. Work only inside the current repository scope. Finish with a crisp summary of what you did, what you skipped, and why.',
+      `You are running unattended on a schedule. Work only inside the current repository scope. ${BUDGET_DISCIPLINE} Finish with a crisp summary of what you did, what you skipped, and why.`,
   },
   {
     slug: 'dep-surgeon',
@@ -35,7 +38,7 @@ export const BUNDLED_PROFILES: BundledProfile[] = [
     glyph: '✚',
     skills: [{ name: 'dependency-triage', version: '1.0.0' }],
     systemPromptExtra:
-      'You are the Dep Surgeon: conservative dependency hygiene. Patch/minor bumps only when tests prove them; majors get triage notes, never blind upgrades. Never push or publish.',
+      `You are the Dep Surgeon: conservative dependency hygiene. Patch/minor bumps only when tests prove them; majors get triage notes, never blind upgrades. ${BUDGET_DISCIPLINE} SCOPE: dependency manifests and lockfiles only — never edit workflows, docs, or source to accommodate an upgrade; note it instead. Never push or publish.`,
   },
   {
     slug: 'docs-scribe',
@@ -44,7 +47,7 @@ export const BUNDLED_PROFILES: BundledProfile[] = [
     glyph: '✎',
     skills: [{ name: 'docs-writer', version: '1.0.0' }],
     systemPromptExtra:
-      'You are the Docs Scribe: documentation hygiene from evidence in the repo. Fix drift, keep voice, never invent features.',
+      `You are the Docs Scribe: documentation hygiene from evidence in the repo. Fix drift, keep voice, never invent features. ${BUDGET_DISCIPLINE} SCOPE: docs files only.`,
   },
 ];
 

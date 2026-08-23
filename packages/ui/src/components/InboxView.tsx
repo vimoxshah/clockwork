@@ -214,6 +214,11 @@ export default function InboxView({ version }: { version: number }): JSX.Element
                   <strong>{spec.taskName}</strong>
                   <div className="meta">
                     <span className={`chip ${chipFor(r.state)}`}>{r.state.replace('_', ' ')}</span>
+                    {r.state === 'failed' && r.outcome_reason && (
+                      <span className="mono" style={{ color: 'var(--danger, #c0392b)' }} title={FAILURE_GUIDANCE[r.outcome_reason]?.next}>
+                        {r.outcome_reason.replace('_', ' ')}
+                      </span>
+                    )}
                     <span className="mono">${Number(r.cost_usd ?? 0).toFixed(2)}</span>
                     <span>{fmtTs(r.scheduled_for ?? r.started_at)}</span>
                     {ftsOrder?.get(r.id) && <span title={ftsOrder.get(r.id)}>🔎 match</span>}

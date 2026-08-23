@@ -1,13 +1,14 @@
 /**
- * Tasks (FR-5/FR-6): list with queue lane, run-now w/ feedback, edit dialog
- * (name/prompt/budget/mode), delete with confirmation, enable/pause reflecting
- * server state.
+ * Tasks (FR-5/FR-6): first-class task management surface.
+ * Full-width layout, instant multi-field search (name / prompt / repo /
+ * provider), status filters, windowed rendering for 500+ tasks.
  */
 import { useEffect, useMemo, useState } from 'react';
 import { api, type TaskViewT } from '../api';
 import { useAsync } from '../useAsync';
 
 type StatusFilter = 'all' | 'active' | 'paused';
+type SortKey = 'name' | 'recent';
 
 /** Windowed rendering: only a slice of rows mounts at once (5k+ tasks stay smooth). */
 const PAGE_SIZE = 100;
@@ -19,22 +20,29 @@ export default function TasksView({ version }: { version: number }): JSX.Element
   const [actionErr, setActionErr] = useState<string | null>(null);
   const [editing, setEditing] = useState<TaskViewT | null>(null);
   const [deleting, setDeleting] = useState<TaskViewT | null>(null);
-  // scale controls: instant client-side filter/search over the full list
   const [q, setQ] = useState('');
   const [status, setStatus] = useState<StatusFilter>('all');
+  const [sort, setSort] = useState<SortKey>('recent');
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
-  useEffect(() => setVisibleCount(PAGE_SIZE), [q, status]);
+  useEffect(() => setVisibleCount(PAGE_SIZE), [q, status, sort]);
 
   const filtered = useMemo(() => {
-    let rows = tasks.data ?? [];
+    let rows = [...(tasks.data ?? [])];
     if (status === 'active') rows = rows.filter((t) => t.enabled);
     else if (status === 'paused') rows = rows.filter((t) => !t.enabled);
     const term = q.trim().toLowerCase();
-    if (term) rows = rows.filter((t) => t.name.toLowerCase().includes(term) || t.prompt.toLowerCase().includes(term));
+    if (term) {
+      rows = rows.filter((t) =>
+        t.name.toLowerCase().includes(term) ||
+        t.prompt.toLowerCase().includes(term) ||
+        (t.repoPath ?? '').toLowerCase().includes(term) ||
+        String(t.engine ?? '').toLowerCase().includes(term));
+    }
+    if (sort === 'name') rows.sort((a, b) => a.name.localeCompare(b.name));
+    else rows.sort((a, b) => String(b.id).localeCompare(String(a.id))); // ULID ids are time-ordered
     return rows;
-  }, [tasks.data, q, status]);
-
+  }, [tasks.data, q, status, sort]);
 
   const act = async (fn: () => Promise<unknown>, okMsg?: string): Promise<void> => {
     setActionErr(null);
@@ -52,36 +60,31 @@ export default function TasksView({ version }: { version: number }): JSX.Element
   };
 
   return (
-    <div style={{ maxWidth: 820 }}>
-      {queue.data && queue.data.length > 0 && (
-        <div style={{ marginBottom: 20 }}>
-          <h3 className="section-title">Queue</h3>
-          {queue.error && <div className="error-banner">Couldn’t load queue: {queue.error}</div>}
-          {queue.data.map((q) => (
-            <div key={q.runId} className="tasklist-row" data-testid={`queue-${q.position}`}>
-              <span className="chip running">#{q.position}</span>
-              <div className="grow">
-                <strong>{q.name}</strong>
-                <div className="hint" style={{ margin: 0 }}>{q.reason}</div>
-              </div>
-              <button className="btn danger small" onClick={() => void act(() => api.cancelRun(q.runId))}>
-                Cancel
-              </button>
-            </div>
-          ))}
+    <div className="tasks-page">
+      {/* ---- sticky toolbar: search drives everything ---- */}
+      <div className="tasks-toolbar">
+        <div className="relative" style={{ flex: 1, minWidth: 260 }}>
+          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-dim">🔍</span>
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search tasks by name, prompt, repo, or provider…"
+            aria-label="Search tasks"
+            data-testid="task-filter"
+            className="inbox-search !pl-9"
+            style={{ width: '100%' }}
+            autoFocus
+          />
+          {q && (
+            <button
+              onClick={() => setQ('')}
+              aria-label="Clear search"
+              className="absolute right-3 top-1/2 -translate-y-1/2 rounded px-1 text-xs text-dim hover:text-fg"
+            >
+              ✕
+            </button>
+          )}
         </div>
-      )}
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <h3 className="section-title">Tasks</h3>
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Filter tasks…"
-          aria-label="Filter tasks"
-          data-testid="task-filter"
-          style={{ maxWidth: 240 }}
-        />
         <div className="seg" role="tablist" aria-label="Task status">
           {(['all', 'active', 'paused'] as StatusFilter[]).map((s) => (
             <button key={s} role="tab" aria-selected={status === s} className={status === s ? 'on' : ''} onClick={() => setStatus(s)}>
@@ -89,19 +92,50 @@ export default function TasksView({ version }: { version: number }): JSX.Element
             </button>
           ))}
         </div>
-        <span className="hint" style={{ fontSize: 12 }}>
-          {filtered.length === (tasks.data ?? []).length
-            ? `${filtered.length} task${filtered.length === 1 ? '' : 's'}`
-            : `${filtered.length} of ${tasks.data?.length ?? 0}`}
+        <select
+          value={sort}
+          onChange={(e) => setSort(e.target.value as SortKey)}
+          aria-label="Sort tasks"
+          className="btn small"
+          style={{ padding: '6px 10px' }}
+        >
+          <option value="recent">Newest first</option>
+          <option value="name">Name A→Z</option>
+        </select>
+        <span className="chip" style={{ whiteSpace: 'nowrap' }} data-testid="task-count">
+          {q.trim() || status !== 'all'
+            ? `${filtered.length} of ${tasks.data?.length ?? 0}`
+            : `${filtered.length} task${filtered.length === 1 ? '' : 's'}`}
         </span>
         <button className="btn small" onClick={() => { tasks.reload(); queue.reload(); }} aria-label="Refresh tasks">
-          ⟳ Refresh
+          ⟳
         </button>
       </div>
 
       {notice && <div className="ok-banner">{notice}</div>}
       {actionErr && <div className="error-banner" role="alert">{actionErr}</div>}
 
+      {/* ---- queue lane ---- */}
+      {queue.data && queue.data.length > 0 && (
+        <div style={{ marginBottom: 20 }}>
+          <h3 className="section-title">Queue — waiting to run</h3>
+          {queue.error && <div className="error-banner">Couldn’t load queue: {queue.error}</div>}
+          {queue.data.map((qi) => (
+            <div key={qi.runId} className="tasklist-row" data-testid={`queue-${qi.position}`}>
+              <span className="chip running">#{qi.position}</span>
+              <div className="grow">
+                <strong>{qi.name}</strong>
+                <div className="hint" style={{ margin: 0 }}>{qi.reason}</div>
+              </div>
+              <button className="btn danger small" onClick={() => void act(() => api.cancelRun(qi.runId))}>
+                Cancel
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ---- states ---- */}
       {tasks.loading && <div className="state-line"><span className="spinner" /> Loading tasks…</div>}
       {tasks.error && (
         <div className="error-banner" role="alert">
@@ -115,21 +149,27 @@ export default function TasksView({ version }: { version: number }): JSX.Element
         </div>
       )}
       {!tasks.loading && !tasks.error && (tasks.data ?? []).length > 0 && filtered.length === 0 && (
-        <div className="empty">No tasks match “{q.trim()}”{status !== 'all' ? ` (${status})` : ''}.</div>
+        <div className="empty">
+          No tasks match “{q.trim()}”{status !== 'all' ? ` (${status})` : ''}.
+          <div><button className="btn small" style={{ marginTop: 8 }} onClick={() => { setQ(''); setStatus('all'); }}>Clear filters</button></div>
+        </div>
       )}
 
-      {filtered.slice(0, visibleCount).map((t) => (
-        <TaskRow
-          key={t.id}
-          task={t}
-          onRunNow={() => void act(() => api.runNow(t.id), `Run queued for “${t.name}” — watch the calendar or inbox.`)}
-          onToggle={() => void act(() => api.patchTask(t.id, { enabled: !t.enabled, version: t.version }))}
-          onEdit={() => setEditing(t)}
-          onDelete={() => setDeleting(t)}
-        />
-      ))}
+      {/* ---- list ---- */}
+      <div className="tasklist">
+        {filtered.slice(0, visibleCount).map((t) => (
+          <TaskRow
+            key={t.id}
+            task={t}
+            onRunNow={() => void act(() => api.runNow(t.id), `Run queued for “${t.name}” — watch the calendar or inbox.`)}
+            onToggle={() => void act(() => api.patchTask(t.id, { enabled: !t.enabled, version: t.version }))}
+            onEdit={() => setEditing(t)}
+            onDelete={() => setDeleting(t)}
+          />
+        ))}
+      </div>
       {visibleCount < filtered.length && (
-        <button className="btn small" style={{ marginTop: 10 }} onClick={() => setVisibleCount((c) => c + PAGE_SIZE)} data-testid="task-more">
+        <button className="btn small" style={{ marginTop: 12 }} onClick={() => setVisibleCount((c) => c + PAGE_SIZE)} data-testid="task-more">
           Show {Math.min(PAGE_SIZE, filtered.length - visibleCount)} more ({filtered.length - visibleCount} hidden)
         </button>
       )}
@@ -138,9 +178,10 @@ export default function TasksView({ version }: { version: number }): JSX.Element
         <EditDialog
           task={editing}
           onClose={() => setEditing(null)}
-          onSaved={(msg) => {
+          onSaved={(msg: string) => {
             setEditing(null);
-            void act(async () => {}, msg);
+            setNotice(msg);
+            setTimeout(() => setNotice(null), 4000);
             tasks.reload();
           }}
         />
