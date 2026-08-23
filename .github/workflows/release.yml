@@ -1,0 +1,117 @@
+name: release
+
+# Build + package macOS DMG on version tags, create GitHub Release with
+# checksums. Signing/notarization runs only when secrets are configured;
+# otherwise the artifact is produced unsigned (documented in docs/install.md).
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  dmg:
+    runs-on: macos-14 # Apple Silicon
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Install deps + build workspace
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          pnpm test
+
+      - name: Import signing identity (if configured)
+        if: env.APPLE_CERT_P12 != ''
+        env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD || 'ci-only' }}
+        run: |
+          echo "$APPLE_CERT_P12" | base64 --decode > cert.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security import cert.p12 -k build.keychain -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          rm cert.p12
+
+      - name: Tauri build (DMG)
+        env:
+          # tauri-action-compatible env; empty = unsigned build
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERT_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          cd src-tauri
+          npx tauri build --bundles dmg
+
+      - name: Verify signature (informational)
+        run: |
+          APP="src-tauri/target/release/bundle/macos/Clockwork.app"
+          codesign -dv "$APP" 2>&1 | head -5 || true
+          spctl -a -vv "$APP" 2>&1 | head -3 || true
+
+      - name: Checksums
+        id: sum
+        run: |
+          cd src-tauri/target/release/bundle/dmg
+          shasum -a 256 *.dmg > checksums-sha256.txt
+          cat checksums-sha256.txt
+          echo "dmg=$(ls *.dmg)" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release + upload assets (REST, no gh)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VER="${TAG#v}"
+          NOTE="## Clockwork ${TAG}
+
+          ### Install
+          1. Download Clockwork_${VER}_aarch64.dmg (Apple Silicon)
+          2. Open the DMG and drag Clockwork to Applications
+          3. Launch — pair with your local daemon using ~/.clockwork/api-token
+
+          ### Requirements
+          - macOS 14+ · Apple Silicon · Node 22 + one provider CLI (claude/codex/opencode/hermes)
+
+          ### Signature status
+          See checksums-sha256.txt to verify integrity. If this build is unsigned,
+          macOS Gatekeeper will ask you to confirm the app in System Settings →
+          Privacy & Security on first launch.
+
+          ### Known limitations
+          Jobs execute when the machine is awake."
+          PAYLOAD=$(jq -n --arg tag "$TAG" --arg name "Clockwork ${TAG}" --arg body "$NOTE" \
+            '{tag_name:$tag,name:$name,body:$body,draft:false,prerelease:false}')
+          RELEASE=$(curl -sf -X POST \
+            -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
+            -d "$PAYLOAD" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases" || \
+            curl -sf "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/$TAG")
+          ID=$(echo "$RELEASE" | jq -r '.id')
+          UPLOAD="https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/$ID/assets?name="
+          cd src-tauri/target/release/bundle/dmg
+          for f in *.dmg checksums-sha256.txt; do
+            curl -sf -X POST \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary "@$f" \
+              "${UPLOAD}$f" > /dev/null && echo "uploaded $f"
+          done

@@ -7,8 +7,10 @@ const run = async (): Promise<void> => {
   const failed: string[] = [];
   page.on('requestfailed', (r) => failed.push(r.url()));
   page.on('response', (r) => r.status() >= 400 && failed.push(`${r.status()} ${r.url()}`));
-  await page.goto('file://' + process.cwd() + '/../../landing-page/index.html', { waitUntil: 'networkidle' });
-  await page.waitForTimeout(1200);
+  await page.goto('file:///Users/vimoxshah/Desktop/Vimox/poc/clockwork/landing-page/index.html', { waitUntil: 'networkidle' });
+  await page.waitForTimeout(2500);
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  await page.waitForTimeout(1500);
   // all images loaded?
   const imgs = await page.evaluate(() =>
     Array.from(document.images).map((i) => ({ src: i.src.split('/').slice(-2).join('/'), ok: i.complete && i.naturalWidth > 0 })),

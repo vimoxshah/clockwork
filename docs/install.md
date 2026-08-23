@@ -1,86 +1,60 @@
-# Installing & Running Clockwork (developer build)
+# Installing Clockwork on macOS
 
-> Status: private-alpha engineering build. macOS-first. Requires an existing
-> Claude Code login (`claude` CLI on PATH) — Clockwork rides your subscription;
-> no API key needed.
+## The short version
 
-## Prerequisites
+1. Download `Clockwork-<version>-aarch64.dmg` from
+   [Releases](https://github.com/vimoxshah/clockwork/releases/latest) (Apple Silicon, macOS 14+).
+2. Verify integrity (recommended):
+   ```bash
+   shasum -a 256 ~/Downloads/Clockwork-*-aarch64.dmg
+   # compare with checksums-sha256.txt attached to the release
+   ```
+3. Open the DMG and drag **Clockwork** into **Applications**.
+4. Launch Clockwork.
+5. Pair the UI with your local daemon: paste the token from `~/.clockwork/api-token`
+   (printed during first daemon setup).
 
-- macOS 13+ (Apple Silicon tested)
-- Node.js ≥ 22
-- pnpm ≥ 9 (`corepack enable pnpm`)
-- git ≥ 2.38
-- Claude Code CLI installed and logged in (`claude --version`, run `claude` once)
+## Gatekeeper & signature status — read this honestly
 
-## Build
+Clockwork is distributed **directly**, not through the Mac App Store.
 
-```bash
-pnpm install
-pnpm build          # builds shared → runner → daemon → ui
-```
+- If a release is **signed and notarized** (releases built after Apple Developer
+  credentials are configured in CI), it launches normally: macOS verifies the
+  notarization ticket silently.
+- If a release is **unsigned** (early releases), macOS will say the app "cannot
+  be opened because Apple cannot check it for malicious software". This is
+  expected for unsigned direct downloads. To open it once:
+  right-click (or Control-click) Clockwork.app → **Open** → **Open**. Or approve
+  it under **System Settings → Privacy & Security → Security**, which shows an
+  "Open Anyway" button after a blocked launch attempt.
 
-## Run the daemon + UI (single port)
+We will always tell you which kind of release you're downloading — check the
+release notes' "Signature status" section. Do not disable Gatekeeper globally.
 
-```bash
-pnpm --filter @clockwork/ui build   # if you changed UI code
-node packages/daemon/dist/main.js
-# → clockworkd 0.1.0 listening on 127.0.0.1:4747
-```
+## After launch
 
-Open http://127.0.0.1:4747 — paste your API token when prompted:
+1. Clockwork needs the local daemon (`clockworkd`) running — the app walks you
+   through first-run setup, or run:
+   ```bash
+   git clone https://github.com/vimoxshah/clockwork && cd clockwork
+   pnpm install && pnpm build
+   node packages/daemon/dist/main.js
+   ```
+2. Install at least one provider CLI and log in once:
+   - [`claude`](https://docs.anthropic.com/en/docs/claude-code) (recommended)
+   - `codex`, `opencode`, or [`hermes`](https://github.com/NousResearch/hermes-agent)
+3. Check **Settings → Providers** — each installed engine shows its version and health.
+4. Optional: connect your personal calendar (**Settings → Calendars**) via a
+   read-only ICS subscription URL.
 
-```bash
-cat ~/.clockwork/api-token
-```
+## Permissions Clockwork itself requests
 
-## Install as a login service (starts at login, restarts on crash)
-
-```bash
-node packages/daemon/dist/cli.js install     # writes ~/Library/LaunchAgents/com.clockwork.daemon.plist
-node packages/daemon/dist/cli.js doctor      # 6 canned misconfig checks incl. duplicate instance
-node packages/daemon/dist/cli.js uninstall
-```
-
-The daemon does **not** run while logged out or while the machine sleeps — that
-is the honest execution model; see `docs/scheduling.md`.
-
-## First task (60 seconds)
-
-1. Open the UI → **+ New task**.
-2. Prompt: "List the TODOs in this repo and summarize themes." Pick a repo path.
-3. Schedule: one-off, a minute from now. Book it.
-4. Watch the calendar tick over; the report lands in **Inbox**, searchable.
-
-Or drive the API directly:
-
-```bash
-TOKEN=$(cat ~/.clockwork/api-token)
-curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4747/health
-curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
-  -d '{"name":"demo","prompt":"say hi","schedule":{"kind":"once","runAt":'"$(($(date +%s)*1000+60000))"',"tz":"UTC"}}' \
-  http://127.0.0.1:4747/tasks
-curl -s -X POST -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4747/tasks/<id>/run-now
-```
-
-## Test engine without spending quota
-
-Set `CW_ENGINE=mock` for the daemon to execute jobs with the deterministic
-MockRunner — full loop behavior, zero API spend.
-
-## Data layout
-
-```
-~/.clockwork/
-  clockwork.sqlite      # tasks, schedules, occurrence ledger, runs, reports (WAL)
-  api-token             # 0600 bearer token
-  safety-journal.jsonl  # deny-list hits, sandbox events, budget stops (FR-27)
-  runs/<run-id>/        # transcripts, artifacts, stream journals
-  worktrees/            # per-run git worktrees (retention-pruned)
-```
+The desktop app runs as a normal user process. It does not ask for screen
+recording, accessibility, or full-disk access. Agent runs execute inside
+sandboxed worktrees whose file writes are restricted by macOS Seatbelt; SSH
+keys and credential stores are deliberately unreadable from within a run.
 
 ## Uninstall
 
-```bash
-node packages/daemon/dist/cli.js uninstall
-# keep or export ~/.clockwork (reports + DB) before deleting it manually
-```
+Quit Clockwork, then drag it from Applications to Trash. Data lives in
+`~/.clockwork/` — delete that folder to remove all tasks, runs, and reports.

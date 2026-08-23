@@ -10,6 +10,7 @@ import { Button } from './ui/button';
 import { Input, Textarea, Label } from './ui/input';
 import { Card, CardContent } from './ui/card';
 import { Segmented } from './ui/segmented';
+import { AgentPicker } from './AgentPicker';
 import { DateTimePicker } from './ui/datetime-picker';
 import { Badge } from './ui/card';
 import { Zap, FolderGit2, Bot, Wallet, CalendarClock, AlertCircle, GitBranch } from 'lucide-react';
@@ -371,19 +372,13 @@ export default function ComposerView({
                   slug={null}
                   description="Balanced defaults for any repo chore."
                 />
-                {profiles
-                  .filter((p) => p.slug !== 'generalist')
-                  .map((p) => (
-                    <PersonaCard
-                      key={p.id}
-                      selected={form.profileId === p.id}
-                      onSelect={() => setForm({ ...form, profileId: p.id })}
-                      glyph={p.avatar ?? '◆'}
-                      color={p.color ?? '#7FD8C8'}
-                      name={p.name}
-                      slug={p.slug}
-                    />
-                  ))}
+              </div>
+              <div className="mt-2">
+                <AgentPicker
+                  profiles={profiles.map((p) => ({ id: p.id, name: p.name, slug: p.slug ?? null, avatar: p.avatar ?? null, color: p.color ?? null }))}
+                  value={form.profileId}
+                  onChange={(id) => setForm({ ...form, profileId: id })}
+                />
               </div>
               {selectedProfile === null ? null : null}            </section>
 

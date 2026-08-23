@@ -91,6 +91,19 @@ export default function InboxView({ version }: { version: number }): JSX.Element
     return rows.filter((r) => matchesFilter(r.state, filter));
   }, [runs.data, ftsOrder, filter]);
 
+  // IA: group by recency so the inbox answers "what happened while I wasn't looking?"
+  const grouped = useMemo(() => {
+    const startOfToday = todayMidnightLocal();
+    const groups: Record<string, RunRowT[]> = { Today: [], Yesterday: [], Earlier: [] };
+    for (const r of visibleRuns) {
+      const ts = r.ended_at ?? r.started_at ?? r.scheduled_for ?? 0;
+      if (ts >= startOfToday) groups.Today!.push(r);
+      else if (ts >= startOfToday - 86_400_000) groups.Yesterday!.push(r);
+      else groups.Earlier!.push(r);
+    }
+    return Object.entries(groups).filter(([, rows]) => rows.length > 0);
+  }, [visibleRuns]);
+
   const selectRun = (id: string): void => {
     setSelected(id);
     const row = (runs.data ?? []).find((r) => r.id === id);
@@ -183,26 +196,33 @@ export default function InboxView({ version }: { version: number }): JSX.Element
             {q ? `No runs match “${q}”.` : 'No runs yet. Book one from the calendar.'}
           </div>
         )}
-        {visibleRuns.map((r: RunRowT) => {
-          const spec = safeJson(r.jobspec_json);
-          const unread = (r.ended_at ?? r.started_at ?? 0) > lastRead && r.state !== 'running' && r.state !== 'queued';
-          return (
-            <div
-              key={r.id}
-              className={`inbox-row ${selected === r.id ? 'sel' : ''} ${unread ? 'unread' : ''}`}
-              onClick={() => selectRun(r.id)}
-              data-testid={`run-${r.state}`}
-            >
-              <strong>{spec.taskName}</strong>
-              <div className="meta">
-                <span className={`chip ${chipFor(r.state)}`}>{r.state.replace('_', ' ')}</span>
-                <span className="mono">${Number(r.cost_usd ?? 0).toFixed(2)}</span>
-                <span>{fmtTs(r.scheduled_for ?? r.started_at)}</span>
-                {ftsOrder?.get(r.id) && <span title={ftsOrder.get(r.id)}>🔎 match</span>}
-              </div>
+        {grouped.map(([label, rows]) => (
+          <div key={label}>
+            <div className="mb-1 mt-2 text-[11px] font-semibold uppercase tracking-wider text-dim">
+              {label} · {rows.length}
             </div>
-          );
-        })}
+            {rows.map((r: RunRowT) => {
+              const spec = safeJson(r.jobspec_json);
+              const unread = (r.ended_at ?? r.started_at ?? 0) > lastRead && r.state !== 'running' && r.state !== 'queued';
+              return (
+                <div
+                  key={r.id}
+                  className={`inbox-row ${selected === r.id ? 'sel' : ''} ${unread ? 'unread' : ''}`}
+                  onClick={() => selectRun(r.id)}
+                  data-testid={`run-${r.state}`}
+                >
+                  <strong>{spec.taskName}</strong>
+                  <div className="meta">
+                    <span className={`chip ${chipFor(r.state)}`}>{r.state.replace('_', ' ')}</span>
+                    <span className="mono">${Number(r.cost_usd ?? 0).toFixed(2)}</span>
+                    <span>{fmtTs(r.scheduled_for ?? r.started_at)}</span>
+                    {ftsOrder?.get(r.id) && <span title={ftsOrder.get(r.id)}>🔎 match</span>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ))}
       </div>
 
       <div className="report">
@@ -401,6 +421,11 @@ function safeJson(s: string): any {
   } catch {
     return {};
   }
+}
+
+function todayMidnightLocal(): number {
+  const d = new Date();
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 }
 
 /** ⌘K focuses the inbox search from anywhere. */

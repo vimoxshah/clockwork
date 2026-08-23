@@ -12,7 +12,7 @@ actually read.
 
 [Website](https://vimoxshah.github.io/clockwork/) · [Download](#-installation) · [Agent Library](#-agent-profile-library) · [Providers](#-providers) · [Security](#%EF%B8%8F-security-model)
 
-![platform](https://img.shields.io/badge/platform-macOS-black) ![license](https://img.shields.io/badge/license-FSL--1.1-blue) ![tests](https://img.shields.io/badge/tests-108%20passing-brightgreen) [![pages](https://img.shields.io/badge/docs-GitHub%20Pages-orange)](https://vimoxshah.github.io/clockwork/)
+![platform](https://img.shields.io/badge/platform-macOS-black) ![license](https://img.shields.io/badge/license-proprietary-red) ![tests](https://img.shields.io/badge/tests-passing-brightgreen) [![pages](https://img.shields.io/badge/docs-GitHub%20Pages-orange)](https://vimoxshah.github.io/clockwork/)
 
 </div>
 
@@ -268,9 +268,13 @@ themes, palette, providers, ICS overlay, 1000-task benchmarks).
 
 ## License
 
-[FSL-1.1](LICENSE) (Functional Source License) — free to use, modify, and
-self-host; competing-use restrictions convert to MIT after the change date.
-See [NOTICE](NOTICE) for third-party attributions.
+Clockwork is **proprietary software** — see [LICENSE](LICENSE).
+
+- **Personal, non-commercial use:** free. Run it on your own machines for your own work.
+- **Commercial use** (company-wide internal use, redistribution, or offering Clockwork-based functionality to others): requires a written Commercial License from the author.
+- The repository is public so you can audit exactly what runs on your machine — that transparency is a feature, not an invitation to redistribute.
+
+Third-party open-source components keep their own licenses; see [NOTICE](NOTICE).
 
 ---
 

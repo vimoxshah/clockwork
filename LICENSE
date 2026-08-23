@@ -1,60 +1,89 @@
-# Functional Source License, v1.1 (FSL-1.1)
+CLOCKWORK PROPRIETARY SOFTWARE LICENSE AGREEMENT
 
-# Acceptance
+Version 1.0 — Effective 2026-08-23
 
-By obtaining, using, modifying, or redistributing the Software, you accept and
-agree to be bound by the terms of this License.
+Copyright (c) 2026 Vimox Shah. All Rights Reserved.
 
-# 1. Definitions
+1. DEFINITIONS
 
-"Software" means Clockwork and its source code, documentation, and associated
-assets made available under this License.
+   "Software" means the Clockwork source code, object code, binaries,
+   documentation, design assets, agent profile definitions, and associated
+   materials in this repository.
+   "Licensor" means Vimox Shah, the sole copyright holder.
+   "Commercial License" means a written license agreement signed by the
+   Licensor granting rights beyond those in Section 2.
 
-"Licensor" means the copyright holder identified below.
+2. LICENSE GRANT TO YOU
 
-"You" means any person or entity that exercises rights under this License.
+   You may, free of charge:
+   a. View and read the Software's source code;
+   b. Run unmodified copies of the Software for personal, non-commercial,
+      internal evaluation and use on machines you own or control.
 
-"Competing Use" means making the Software or its functionality available to
-third parties as a hosted, managed, embedded, or packaged product that competes
-with a Licensor product.
+   No other rights are granted. All rights not expressly granted are
+   reserved by the Licensor.
 
-"Trademark" means the names, logos, and brand features of the Licensor.
+3. RESTRICTIONS — YOU MAY NOT
 
-# 2. Grant of Rights
+   a. Redistribute, sell, sublicense, rent, lease, or publish the Software
+      or any modified version of it, in source or binary form;
+   b. Use the Software, or any derivative of it, to operate as a competing
+      or substitute product or service (including hosted/scheduled agent
+      orchestration offered to third parties);
+   c. Remove, obscure, or alter copyright, trademark, or attribution notices;
+   d. Use the Licensor's names, logos, or trademarks ("Clockwork", the
+      wordmark and device marks) to market derivative works;
+   e. Circumvent license checks, entitlement mechanisms, or technical
+      protection measures in the Software.
 
-Subject to the terms of this License, the Licensor grants You a worldwide,
-royalty-free, non-exclusive, non-transferable license to use, copy, modify,
-contribute to, and redistribute the Software for any purpose other than a
-Competing Use.
+4. COMMERCIAL USE AND PAYMENT
 
-# 3. Competing Use Restriction
+   Any use beyond Section 2 — including internal commercial use by a
+   company, redistribution within an organization beyond evaluation, or
+   offering Clockwork-based functionality to third parties — requires a
+   Commercial License from the Licensor. Contact the Licensor to obtain one.
+   Absent such a license, commercial use is NOT permitted.
 
-You may not make the Software available to third parties as part of a Competing
-Use. If you are unsure whether a use is a Competing Use, contact the Licensor.
+5. CONTRIBUTIONS
 
-# 4. Trademarks
+   If you submit a pull request or patch, you grant the Licensor a perpetual,
+   worldwide, royalty-free right to incorporate it into the Software under
+   any terms the Licensor chooses. You retain ownership of your contribution
+   but assign no warranty and receive no license back except as stated here.
 
-This License does not grant any right to use the Trademarks.
+6. THIRD-PARTY COMPONENTS
 
-# 5. Contributions
+   The Software depends on third-party open-source libraries. This Agreement
+   does not modify those libraries' own licenses, which remain governed by
+   their respective terms. See NOTICE for attribution. Nothing in this
+   Agreement imposes additional restrictions on those libraries as
+   distributed upstream.
 
-Contributions submitted to the Licensor are licensed to the Licensor under the
-same terms as this License, plus a perpetual, irrevocable license for the
-Licensor to use them without restriction.
+7. NO WARRANTY
 
-# 6. Warranty; Liability
+   THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND
+   NON-INFRINGEMENT.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-LICENSOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
-ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+8. LIMITATION OF LIABILITY
 
-# 7. Conversion
+   TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, THE LICENSOR SHALL NOT
+   BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR
+   PUNITIVE DAMAGES ARISING FROM USE OF THE SOFTWARE, EVEN IF ADVISED OF THE
+   POSSIBILITY OF SUCH DAMAGES.
 
-On the second anniversary of the date a version of the Software is first made
-publicly available, that version automatically becomes subject to the MIT
-License (https://opensource.org/licenses/MIT).
+9. TERMINATION
 
-Copyright (c) 2026 vimoxshah
+   Your rights under Section 2 terminate automatically if you breach this
+   Agreement. Sections 3–8 survive termination.
+
+10. GOVERNING LAW
+
+    This Agreement is governed by the laws applicable at the Licensor's
+    principal place of residence, without regard to conflict-of-law rules.
+    Jurisdiction-specific statutory limitations on copyright licensing
+    (including fair use / fair dealing) are unaffected by this Agreement.
+
+11. CONTACT
+
+    Commercial licensing inquiries: via github.com/vimoxshah
