@@ -51,15 +51,21 @@ jobs:
 
       - name: Tauri build (DMG)
         env:
-          # Tauri signing env; empty/absent secrets = unsigned build (documented path)
-          APPLE_CERTIFICATE: ${{ vars.APPLE_CERTIFICATE || '' }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD || '' }}
+          # Only set signing vars when APPLE_CERTIFICATE is actually configured;
+          # empty-string vars make Tauri attempt a keychain import that fails.
+          APPLE_CERTIFICATE: ${{ vars.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY || '-' }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           cd src-tauri
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
+            export APPLE_SIGNING_IDENTITY="-"
+            echo "No signing certificate configured — building UNSIGNED DMG (documented in release notes)."
+          fi
           npx tauri build --bundles dmg
 
       - name: Verify signature (informational)
