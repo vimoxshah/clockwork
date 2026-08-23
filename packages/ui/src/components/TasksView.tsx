@@ -3,9 +3,14 @@
  * (name/prompt/budget/mode), delete with confirmation, enable/pause reflecting
  * server state.
  */
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api, type TaskViewT } from '../api';
 import { useAsync } from '../useAsync';
+
+type StatusFilter = 'all' | 'active' | 'paused';
+
+/** Windowed rendering: only a slice of rows mounts at once (5k+ tasks stay smooth). */
+const PAGE_SIZE = 100;
 
 export default function TasksView({ version }: { version: number }): JSX.Element {
   const tasks = useAsync(() => api.tasks(), [version]);
@@ -14,6 +19,22 @@ export default function TasksView({ version }: { version: number }): JSX.Element
   const [actionErr, setActionErr] = useState<string | null>(null);
   const [editing, setEditing] = useState<TaskViewT | null>(null);
   const [deleting, setDeleting] = useState<TaskViewT | null>(null);
+  // scale controls: instant client-side filter/search over the full list
+  const [q, setQ] = useState('');
+  const [status, setStatus] = useState<StatusFilter>('all');
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+
+  useEffect(() => setVisibleCount(PAGE_SIZE), [q, status]);
+
+  const filtered = useMemo(() => {
+    let rows = tasks.data ?? [];
+    if (status === 'active') rows = rows.filter((t) => t.enabled);
+    else if (status === 'paused') rows = rows.filter((t) => !t.enabled);
+    const term = q.trim().toLowerCase();
+    if (term) rows = rows.filter((t) => t.name.toLowerCase().includes(term) || t.prompt.toLowerCase().includes(term));
+    return rows;
+  }, [tasks.data, q, status]);
+
 
   const act = async (fn: () => Promise<unknown>, okMsg?: string): Promise<void> => {
     setActionErr(null);
@@ -51,8 +72,28 @@ export default function TasksView({ version }: { version: number }): JSX.Element
         </div>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <h3 className="section-title">Tasks</h3>
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Filter tasks…"
+          aria-label="Filter tasks"
+          data-testid="task-filter"
+          style={{ maxWidth: 240 }}
+        />
+        <div className="seg" role="tablist" aria-label="Task status">
+          {(['all', 'active', 'paused'] as StatusFilter[]).map((s) => (
+            <button key={s} role="tab" aria-selected={status === s} className={status === s ? 'on' : ''} onClick={() => setStatus(s)}>
+              {s}
+            </button>
+          ))}
+        </div>
+        <span className="hint" style={{ fontSize: 12 }}>
+          {filtered.length === (tasks.data ?? []).length
+            ? `${filtered.length} task${filtered.length === 1 ? '' : 's'}`
+            : `${filtered.length} of ${tasks.data?.length ?? 0}`}
+        </span>
         <button className="btn small" onClick={() => { tasks.reload(); queue.reload(); }} aria-label="Refresh tasks">
           ⟳ Refresh
         </button>
@@ -73,8 +114,11 @@ export default function TasksView({ version }: { version: number }): JSX.Element
           No tasks yet. Book your first run from the calendar or the “+ New task” tab.
         </div>
       )}
+      {!tasks.loading && !tasks.error && (tasks.data ?? []).length > 0 && filtered.length === 0 && (
+        <div className="empty">No tasks match “{q.trim()}”{status !== 'all' ? ` (${status})` : ''}.</div>
+      )}
 
-      {(tasks.data ?? []).map((t) => (
+      {filtered.slice(0, visibleCount).map((t) => (
         <TaskRow
           key={t.id}
           task={t}
@@ -84,6 +128,11 @@ export default function TasksView({ version }: { version: number }): JSX.Element
           onDelete={() => setDeleting(t)}
         />
       ))}
+      {visibleCount < filtered.length && (
+        <button className="btn small" style={{ marginTop: 10 }} onClick={() => setVisibleCount((c) => c + PAGE_SIZE)} data-testid="task-more">
+          Show {Math.min(PAGE_SIZE, filtered.length - visibleCount)} more ({filtered.length - visibleCount} hidden)
+        </button>
+      )}
 
       {editing && (
         <EditDialog
