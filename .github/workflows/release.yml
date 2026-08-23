@@ -25,6 +25,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
+      - name: Install Tauri system deps (macOS)
+        run: brew install pkg-config create-dmg
 
       - name: Install deps + build workspace
         run: |
