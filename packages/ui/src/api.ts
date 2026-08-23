@@ -99,7 +99,7 @@ export interface RunRowT {
 }
 
 export interface CalendarEvent {
-  kind: 'run' | 'booking';
+  kind: 'run' | 'booking' | 'human';
   id: string;
   taskId: string;
   name: string;
@@ -107,6 +107,7 @@ export interface CalendarEvent {
   state?: string;
   costUsd?: number;
   outcomeReason?: string | null;
+  allDay?: boolean;
 }
 
 export const api = {
@@ -117,10 +118,14 @@ export const api = {
   deleteTask: (id: string) => req<{ deleted: boolean }>('DELETE', `/tasks/${id}`),
   runNow: (id: string) => req<{ runId: string }>('POST', `/tasks/${id}/run-now`),
   calendar: (from: number, to: number) =>
-    req<{ from: number; to: number; runs: RunRowT[]; bookings: Array<{ taskId: string; name: string; at: number; kind: 'booking' }> }>(
+    req<{ from: number; to: number; runs: RunRowT[]; bookings: Array<{ taskId: string; name: string; at: number; kind: 'booking' }>; humans?: Array<{ uid: string; name: string; at: number; allDay: boolean }> }>(
       'GET',
       `/calendar?from=${from}&to=${to}`,
     ),
+  icsSources: () => req<Array<{ id: string; url: string; label: string }>>('GET', '/calendars/ics'),
+  addIcsSource: (url: string, label: string) =>
+    req<{ id: string; label: string; events: number }>('POST', '/calendars/ics', { url, label }),
+  removeIcsSource: (id: string) => req<{ removed: string }>('DELETE', `/calendars/ics/${id}`),
   queue: () =>
     req<Array<{ runId: string; taskId: string; name: string; position: number; reason: string }>>(
       'GET',

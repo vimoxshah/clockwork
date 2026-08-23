@@ -93,6 +93,9 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
       <h3 className="section-title" style={{ marginTop: 20 }}>Usage &amp; limits</h3>
       <UsageCard version={version} />
 
+      <h3 className="section-title" style={{ marginTop: 20 }}>Calendars</h3>
+      <IcsCard version={version} />
+
       <h3 className="section-title" style={{ marginTop: 20 }}>Keyboard shortcuts</h3>
       <div className="tasklist-row" style={{ display: 'block' }}>
         {SHORTCUTS.map((s) => (
@@ -157,6 +160,63 @@ function UsageCard({ version }: { version: number }): JSX.Element {
       ))}
       <AdvisorNote windows={windows} providers={providers.data ?? []} />
       <p className="hint">Estimate-grade heuristic from your own runs — never a guarantee (FR-7).</p>
+    </div>
+  );
+}
+
+/** ICS calendar subscriptions: human events overlay the agent calendar (read-only). */
+function IcsCard({ version }: { version: number }): JSX.Element {
+  const sources = useAsync(() => api.icsSources(), [version]);
+  const [url, setUrl] = useState('');
+  const [label, setLabel] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const add = async (): Promise<void> => {
+    setBusy(true); setErr(null); setMsg(null);
+    try {
+      const r = await api.addIcsSource(url.trim(), label.trim());
+      setMsg(`Connected “${r.label}” — ${r.events} events found.`);
+      setUrl(''); setLabel('');
+      sources.reload();
+    } catch (e) {
+      setErr(String((e as Error).message ?? e));
+    } finally { setBusy(false); }
+  };
+  const remove = async (id: string): Promise<void> => {
+    await api.removeIcsSource(id).catch(() => {});
+    sources.reload();
+  };
+
+  return (
+    <div>
+      <p className="hint" style={{ marginTop: 0 }}>
+        Subscribe to a read-only ICS feed (Google Calendar → “secret address in iCal format”, Apple
+        Calendar published calendar, Fastmail, Nextcloud…). Your meetings appear on the Clockwork
+        calendar next to agent work. Clockwork never writes to your personal calendar.
+      </p>
+      {(sources.data ?? []).map((s) => (
+        <div key={s.id} className="tasklist-row">
+          <div className="grow">
+            <strong>{s.label}</strong>
+            <div className="hint mono" style={{ margin: 0, fontSize: 11 }}>{s.url}</div>
+          </div>
+          <button className="btn danger small" onClick={() => void remove(s.id)}>Disconnect</button>
+        </div>
+      ))}
+      {(sources.data ?? []).length === 0 && !sources.loading && (
+        <p className="hint" style={{ color: 'var(--dim)' }}>No calendars connected.</p>
+      )}
+      <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+        <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…/basic.ics" aria-label="ICS URL" style={{ flex: 2, minWidth: 220 }} data-testid="ics-url" />
+        <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Label (Work)" aria-label="Calendar label" style={{ flex: 1, minWidth: 120 }} />
+        <button className="btn primary small" disabled={busy || !url.trim()} onClick={() => void add()}>
+          {busy ? 'Connecting…' : 'Connect'}
+        </button>
+      </div>
+      {msg && <div className="ok-banner">{msg}</div>}
+      {err && <div className="error-banner" role="alert">{err}</div>}
     </div>
   );
 }

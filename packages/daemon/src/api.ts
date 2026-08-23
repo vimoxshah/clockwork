@@ -443,7 +443,59 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     }
     bookings.sort((a, b) => a.at - b.at);
 
-    return { from, to, runs: runRows, bookings };
+    // Human events from subscribed ICS feeds (read-only; never written to).
+    let humans: Array<{ uid: string; name: string; at: number; allDay: boolean }> = [];
+    try {
+      const { loadIcsSources, fetchIcs } = await import('./ics.js');
+      const sources = loadIcsSources(deps.dataDir);
+      const seen = new Set<string>();
+      for (const src of sources) {
+        try {
+          const res = await fetchIcs(src.url);
+          if (!res.ok || !res.events) continue;
+          for (const ev of res.events) {
+            if (ev.startMs < from || ev.startMs > to) continue;
+            if (seen.has(ev.uid)) continue;
+            seen.add(ev.uid);
+            humans.push({ uid: ev.uid, name: ev.summary, at: ev.startMs, allDay: ev.allDay });
+          }
+        } catch {
+          /* one bad feed must not break the calendar */
+        }
+      }
+      humans.sort((a, b) => a.at - b.at);
+    } catch {
+      /* ICS overlay is best-effort */
+    }
+
+    return { from, to, runs: runRows, bookings, humans };
+  });
+
+  // ---- ICS calendar sources (read-only subscriptions; Settings → Calendars) ----
+  app.get('/calendars/ics', async () => {
+    const { loadIcsSources } = await import('./ics.js');
+    return loadIcsSources(deps.dataDir);
+  });
+  app.post('/calendars/ics', async (req, reply) => {
+    const body = req.body as any;
+    const url = String(body?.url ?? '').trim();
+    const label = String(body?.label ?? '').trim() || 'My calendar';
+    if (!/^https:\/\//i.test(url)) return reply.code(422).send({ error: 'url must be https' });
+    const { fetchIcs, loadIcsSources, saveIcsSources } = await import('./ics.js');
+    const probe = await fetchIcs(url);
+    if (!probe.ok) return reply.code(422).send({ error: probe.error ?? 'feed unreachable' });
+    const sources = loadIcsSources(deps.dataDir);
+    const id = `ics_${Date.now().toString(36)}`;
+    sources.push({ id, url, label });
+    saveIcsSources(deps.dataDir, sources);
+    return { id, label, url, events: probe.events?.length ?? 0 };
+  });
+  app.delete('/calendars/ics/:id', async (req) => {
+    const { loadIcsSources, saveIcsSources } = await import('./ics.js');
+    const id = String((req.params as any).id ?? '');
+    const remaining = loadIcsSources(deps.dataDir).filter((s) => s.id !== id);
+    saveIcsSources(deps.dataDir, remaining);
+    return { removed: id, kept: remaining.length };
   });
 
   app.post('/profiles', async (req, reply) => {

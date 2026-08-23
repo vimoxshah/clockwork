@@ -95,6 +95,10 @@ export default function CalendarView({
     for (const b of cal.data?.bookings ?? []) {
       push({ kind: 'booking', id: `b-${b.taskId}-${b.at}`, taskId: b.taskId, name: b.name, at: b.at });
     }
+    // human events from subscribed ICS calendars (read-only overlay)
+    for (const h of (cal.data as any)?.humans ?? []) {
+      push({ kind: 'human', id: `h-${h.uid}`, taskId: '', name: h.name, at: h.at, allDay: h.allDay });
+    }
     for (const [, arr] of map) arr.sort((a, b) => a.at - b.at);
     return map;
   }, [cal.data]);
@@ -221,7 +225,12 @@ export default function CalendarView({
                       </div>
                       <div className="events">
                         {evs.map((ev) => (
-                          <button key={ev.id} className={`cal-event ${ev.kind === 'run' ? stateClass(ev.state) : 'booking'}`} title={`${timeLabel(ev.at)} · ${ev.name}`} onClick={(e) => { e.stopPropagation(); setDetailEvent(ev); }}>
+                          <button
+                            key={ev.id}
+                            className={`cal-event ${ev.kind === 'run' ? stateClass(ev.state) : ev.kind === 'human' ? 'human' : 'booking'}`}
+                            title={`${timeLabel(ev.at)} · ${ev.name}`}
+                            onClick={(e) => { e.stopPropagation(); setDetailEvent(ev); }}
+                          >
                             {timeLabel(ev.at)} {ev.name}
                           </button>
                         ))}
@@ -311,7 +320,7 @@ function MonthCell({
         {shown.map((ev) => (
           <button
             key={ev.id}
-            className={`cal-event ${ev.kind === 'run' ? stateClass(ev.state) : 'booking'}`}
+            className={`cal-event ${ev.kind === 'run' ? stateClass(ev.state) : ev.kind === 'human' ? 'human' : 'booking'}`}
             title={`${timeLabel(ev.at)} · ${ev.name}${ev.state ? ` — ${ev.state}` : ''}`}
             onClick={(e) => {
               e.stopPropagation();
@@ -375,6 +384,17 @@ function EventDialog({
             <span className="chip">booked (future occurrence)</span>
           )}
         </div>
+
+        {event.kind === 'human' && (
+          <>
+            <p className="hint">👤 Human event from your subscribed calendar (read-only). Clockwork never modifies your personal calendar.</p>
+            <div className="actions">
+              <button className="btn primary" onClick={onClose}>
+                Close
+              </button>
+            </div>
+          </>
+        )}
 
         {event.kind === 'booking' && (
           <>

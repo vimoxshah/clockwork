@@ -190,6 +190,11 @@ button.cal-event:hover { filter: brightness(1.12); }
 .cal-event.st-running { background: var(--ev-running-bg); color: var(--ev-running-fg); }
 .cal-event.st-needsyou { background: var(--ev-needsyou-bg); color: var(--ev-needsyou-fg); animation: pulse 1.8s infinite; }
 .cal-event.st-cancelled { background: var(--surface-hover); color: var(--dim); text-decoration: line-through; }
+.cal-event.human {
+  background: color-mix(in srgb, var(--info) 18%, transparent);
+  color: var(--info);
+  border-left: 3px solid var(--info);
+}
 .cal-event.booking {
   background: transparent; border: 1px dashed var(--ev-booking-border); color: var(--ev-booking-fg);
 }
