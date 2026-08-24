@@ -24,6 +24,120 @@ export const PROVIDERS = [
   { id: 'hermes', label: 'Hermes Agent', bin: 'hermes' },
 ] as const;
 
+// ---- BYOK provider configs (ADR-027): user-configured API providers ----
+export const byokKinds = [
+  'anthropic',
+  'openai',
+  'openrouter',
+  'google',
+  'mistral',
+  'deepseek',
+  'xai',
+  'custom_openai',
+] as const;
+export const ByokKind = z.enum(byokKinds);
+export type ByokKind = (typeof byokKinds)[number];
+
+export const authModes = ['keychain', 'env'] as const;
+export const AuthMode = z.enum(authModes);
+
+/**
+ * A user-configured API provider. The credential itself NEVER lives here:
+ * keychain mode stores it under service name `clockwork-byok-<id>` in the OS
+ * keychain; env mode names an environment variable the daemon may read.
+ */
+export const ProviderConfig = z.object({
+  id: z.string().min(6),
+  kind: ByokKind,
+  label: z.string().min(1).max(80),
+  /** base URL override; required for custom_openai, optional elsewhere */
+  base_url: z.string().url().optional(),
+  auth: AuthMode,
+  /** keychain mode: redacted hint like "••••9A2F"; never the key itself */
+  hint: z.string().max(12).optional(),
+  /** env mode: variable name to read */
+  env_var: z.string().regex(/^[A-Z_][A-Z0-9_]*$/).optional(),
+  default_model: z.string().min(1),
+  created_at: z.number().int(),
+  last_validated_at: z.number().int().nullable(),
+  last_error: z.string().nullable(),
+});
+export type ProviderConfig = z.infer<typeof ProviderConfig>;
+
+export const PROVIDER_KIND_META: Record<ByokKind, {
+  label: string;
+  defaultBaseUrl: string;
+  authOptions: Array<{ mode: 'subscription_cli' | 'api_key'; label: string; detail: string }>;
+  models: Array<{ id: string; context: number; inPerM: number; outPerM: number; vision: boolean; tools: boolean; reasoning: boolean }>;
+}> = {
+  anthropic: {
+    label: 'Anthropic',
+    defaultBaseUrl: 'https://api.anthropic.com',
+    authOptions: [
+      { mode: 'subscription_cli', label: 'Claude subscription / Claude Code CLI', detail: 'Uses your installed claude credentials — billed to your Claude plan.' },
+      { mode: 'api_key', label: 'API key', detail: 'Billed per-token to your Anthropic API account.' },
+    ],
+    models: [
+      { id: 'claude-sonnet-4-5', context: 200000, inPerM: 3, outPerM: 15, vision: true, tools: true, reasoning: false },
+      { id: 'claude-haiku-4-5', context: 200000, inPerM: 1, outPerM: 5, vision: true, tools: true, reasoning: false },
+      { id: 'claude-opus-4-1', context: 200000, inPerM: 15, outPerM: 75, vision: true, tools: true, reasoning: false },
+    ],
+  },
+  openai: {
+    label: 'OpenAI',
+    defaultBaseUrl: 'https://api.openai.com/v1',
+    authOptions: [
+      { mode: 'subscription_cli', label: 'Codex CLI (ChatGPT plan)', detail: 'Uses installed codex credentials — governed by your ChatGPT subscription.' },
+      { mode: 'api_key', label: 'API key', detail: 'Billed per-token to your OpenAI platform account.' },
+    ],
+    models: [
+      { id: 'gpt-5.2-codex', context: 400000, inPerM: 1.25, outPerM: 10, vision: true, tools: true, reasoning: true },
+      { id: 'gpt-5-mini', context: 400000, inPerM: 0.25, outPerM: 2, vision: true, tools: true, reasoning: true },
+      { id: 'gpt-4.1-mini', context: 1000000, inPerM: 0.4, outPerM: 1.6, vision: true, tools: true, reasoning: false },
+    ],
+  },
+  openrouter: {
+    label: 'OpenRouter',
+    defaultBaseUrl: 'https://openrouter.ai/api/v1',
+    authOptions: [{ mode: 'api_key', label: 'API key', detail: 'One key, hundreds of models — usage billed through OpenRouter.' }],
+    models: [
+      { id: 'anthropic/claude-sonnet-4.5', context: 200000, inPerM: 3, outPerM: 15, vision: true, tools: true, reasoning: false },
+      { id: 'google/gemini-2.5-pro', context: 1048576, inPerM: 1.25, outPerM: 10, vision: true, tools: true, reasoning: true },
+      { id: 'deepseek/deepseek-chat-v3.1', context: 163840, inPerM: 0.2, outPerM: 0.8, vision: false, tools: true, reasoning: false },
+    ],
+  },
+  google: {
+    label: 'Google AI',
+    defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    authOptions: [{ mode: 'api_key', label: 'API key', detail: 'Gemini API billing.' }],
+    models: [{ id: 'gemini-2.5-pro', context: 1048576, inPerM: 1.25, outPerM: 10, vision: true, tools: true, reasoning: true }],
+  },
+  mistral: {
+    label: 'Mistral',
+    defaultBaseUrl: 'https://api.mistral.ai/v1',
+    authOptions: [{ mode: 'api_key', label: 'API key', detail: 'La Plateforme billing.' }],
+    models: [{ id: 'mistral-large-latest', context: 128000, inPerM: 2, outPerM: 6, vision: false, tools: true, reasoning: false }],
+  },
+  deepseek: {
+    label: 'DeepSeek',
+    defaultBaseUrl: 'https://api.deepseek.com/v1',
+    authOptions: [{ mode: 'api_key', label: 'API key', detail: 'DeepSeek platform billing.' }],
+    models: [{ id: 'deepseek-chat', context: 131072, inPerM: 0.28, outPerM: 0.42, vision: false, tools: true, reasoning: false }],
+  },
+  xai: {
+    label: 'xAI',
+    defaultBaseUrl: 'https://api.x.ai/v1',
+    authOptions: [{ mode: 'api_key', label: 'API key', detail: 'xAI API billing.' }],
+    models: [{ id: 'grok-4-fast', context: 2000000, inPerM: 0.2, outPerM: 0.5, vision: true, tools: true, reasoning: true }],
+  },
+  custom_openai: {
+    label: 'Custom OpenAI-compatible',
+    defaultBaseUrl: 'http://localhost:11434/v1',
+    authOptions: [{ mode: 'api_key', label: 'API key (optional)', detail: 'Ollama, vLLM, LM Studio, or any enterprise gateway exposing /chat/completions.' }],
+    models: [],
+  },
+};
+
 // ---- Scheduling (FR-4)
 export const scheduleKinds = ['once', 'rrule', 'cron', 'queue'] as const;
 export const ScheduleKind = z.enum(scheduleKinds);
@@ -130,6 +244,8 @@ export const TaskCreate = z.object({
   baseBranch: z.string().optional(),
   model: z.string().optional(),
   engine: Engine.optional(), // per-task provider override (ADR-026); default = profile/cli
+  /** BYOK provider config id — when set, task executes via the API agent adapter (ADR-027/028) */
+  byokId: z.string().optional(),
   permissionMode: PermissionMode.default('acceptEdits'),
   budget: Budget.default({ maxUsd: 2.0, maxTurns: 50, timeoutSec: 3600 }),
   schedule: ScheduleSpec,
@@ -144,6 +260,7 @@ export type TaskCreate = z.infer<typeof TaskCreate>;
 
 export const TaskPatch = z.object({
   engine: Engine.optional(),
+  byokId: z.string().nullable().optional(),
   name: z.string().min(1).max(120).optional(),
   prompt: z.string().min(1).max(32_000).optional(),
   profileId: z.string().nullable().optional(),
@@ -174,6 +291,8 @@ export const JobSpec = z.object({
   prompt: z.string(),
   engine: Engine,
   model: z.string().nullable(),
+  /** BYOK config id snapshot (ADR-027); credential itself is injected via env at spawn, never serialized */
+  byokId: z.string().nullable(),
   permissionMode: PermissionMode,
   budget: Budget,
   repoPath: z.string().nullable(),

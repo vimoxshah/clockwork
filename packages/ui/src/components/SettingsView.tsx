@@ -7,6 +7,7 @@ import { useTheme } from '../theme';
 import { SHORTCUTS } from './CommandPalette';
 import { Switch } from './ui/switch';
 import { Badge } from './ui/card';
+import { ByokCard } from './ByokCard';
 import { api } from '../api';
 import { useAsync } from '../useAsync';
 
@@ -110,7 +111,9 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
         <p className="hint" style={{ marginTop: 8 }}>Press ⌘K anywhere to search commands.</p>
       </div>
 
-      <h3 className="section-title" style={{ marginTop: 20 }}>Providers</h3>
+      <h3 className="section-title" style={{ marginTop: 20 }}>API providers (BYOK)</h3>
+      <ByokCard version={version} />
+      <h3 className="section-title" style={{ marginTop: 20 }}>CLI engines</h3>
       <ProvidersCard version={version} />
 
       <h3 className="section-title" style={{ marginTop: 20 }}>Execution</h3>

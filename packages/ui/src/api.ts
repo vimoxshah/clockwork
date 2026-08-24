@@ -112,6 +112,11 @@ export interface CalendarEvent {
 
 export const api = {
   health: () => req<Health>('GET', '/health'),
+  byok: () => req<{ configs: unknown[]; meta: unknown }>('GET', '/byok'),
+  byokCreate: (b: unknown) => req<unknown>('POST', '/byok', b),
+  byokRotate: (id: string, secret: string) => req<{ ok: boolean; hint?: string }>('POST', `/byok/${id}/rotate`, { secret }),
+  byokTest: (id: string) => req<{ ok: boolean; error: string | null }>('POST', `/byok/${id}/test`),
+  byokDelete: (id: string) => req<unknown>('DELETE', `/byok/${id}`),
   tasks: () => req<TaskViewT[]>('GET', '/tasks'),
   createTask: (t: unknown) => req<TaskViewT>('POST', '/tasks', t),
   patchTask: (id: string, p: unknown) => req<TaskViewT>('PATCH', `/tasks/${id}`, p),

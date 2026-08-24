@@ -122,7 +122,42 @@ async function main(): Promise<void> {
 
   let outcome: RunOutcome;
   try {
-    outcome = await runner.start(effectiveJob as any, ctx as any);
+    if ((job as any).byokId) {
+      // ADR-028: BYOK API-agent execution. Credential arrives via env
+      // (CW_BYOK_KEY / CW_BYOK_BASE_URL), injected by the daemon at spawn time;
+      // it is never written to the jobspec file or logs.
+      const { runApiAgent } = await import('@clockwork/runner');
+      const apiKey = process.env.CW_BYOK_KEY ?? '';
+      const baseUrl = process.env.CW_BYOK_BASE_URL ?? '';
+      if (!apiKey || !baseUrl) {
+        outcome = { state: 'failed', failureReason: 'auth', summary: 'BYOK credential not provided to runner', artifacts: [], costUsd: 0, turns: 0 };
+      } else {
+        const r = await runApiAgent({
+          baseUrl,
+          apiKey,
+          model: job.model || 'default',
+          systemPrompt: job.profile?.systemPromptExtra ?? 'You are a helpful autonomous agent working in a repository workspace.',
+          prompt: effectiveJob.prompt,
+          cwd: job.worktreePath || job.scratchPath || process.cwd(),
+          maxTurns: job.budget.maxTurns,
+          timeoutSec: job.budget.timeoutSec,
+          onLog: (line: string) => send({ t: 'log', line }),
+        });
+        // Stream usage as it lands (same channel CLI engines use).
+        send({ t: 'usage', costUsd: Number(((r.promptTokens * 3 + r.completionTokens * 15) / 1_000_000).toFixed(6)), turns: r.turns });
+        outcome = {
+          state: r.ok ? 'completed' : ('failed' as never),
+          failureReason: r.ok ? undefined : ((r.error as never) ?? 'provider_error'),
+          summary: r.output,
+          artifacts: [],
+          // Rough cost model until per-provider pricing lands: $3/M in + $15/M out blended.
+          costUsd: Number(((r.promptTokens * 3 + r.completionTokens * 15) / 1_000_000).toFixed(6)),
+          turns: r.turns,
+        } as RunOutcome;
+      }
+    } else {
+      outcome = await runner.start(effectiveJob as any, ctx as any);
+    }
   } catch (e) {
     outcome = {
       state: 'failed',

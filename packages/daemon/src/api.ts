@@ -10,6 +10,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { ByokStore, validateProvider, keychainGet } from './byok.js';
 import {
   TaskCreate,
   TaskPatch,
@@ -20,6 +21,7 @@ import {
   type JobSpec,
   slugify,
   branchFor,
+  PROVIDER_KIND_META,
 } from '@clockwork/shared';
 import type { DB } from './db.js';
 import { TaskRepo, ProfileRepo, RunRepo, indexTask } from './repo.js';
@@ -717,6 +719,64 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     return out;
   });
 
+  // ---- BYOK provider configs (ADR-027) ----
+  const byok = new ByokStore({ db: deps.db });
+
+  app.get('/byok', async () => {
+    return { configs: byok.list(), meta: PROVIDER_KIND_META };
+  });
+
+  app.post('/byok', async (req, reply) => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    try {
+      const cfg = byok.create({
+        kind: String(b.kind ?? '') as never,
+        label: typeof b.label === 'string' && b.label.trim() ? b.label.trim() : undefined,
+        baseUrl: typeof b.base_url === 'string' && b.base_url.trim() ? b.base_url.trim() : undefined,
+        auth: b.auth === 'env' ? 'env' : 'keychain',
+        secret: typeof b.secret === 'string' ? b.secret : undefined,
+        envVar: typeof b.env_var === 'string' ? b.env_var : undefined,
+        defaultModel: String(b.default_model ?? ''),
+      });
+      // optional immediate validation
+      if (b.validate_now !== false && cfg.auth === 'keychain') {
+        const err = await validateProvider(cfg.kind, byok.baseUrlFor(cfg), keychainGet(cfg.id));
+        byok.markValidated(cfg.id, err ?? null);
+      }
+      return reply.code(201).send(byok.get(cfg.id));
+    } catch (e) {
+      return reply.code(422).send({ error: String((e as Error).message ?? e) });
+    }
+  });
+
+  app.post('/byok/:id/rotate', async (req, reply) => {
+    try {
+      const secret = String(((req.body ?? {}) as Record<string, unknown>).secret ?? '');
+      const hint = byok.rotateKey(String((req.params as any).id), secret);
+      return { ok: true, hint };
+    } catch (e) {
+      return reply.code(422).send({ error: String((e as Error).message ?? e) });
+    }
+  });
+
+  app.post('/byok/:id/test', async (req, reply) => {
+    const cfg = byok.get(String((req.params as any).id));
+    if (!cfg) return reply.code(404).send({ error: 'not found' });
+    let err: string | undefined;
+    try {
+      err = await validateProvider(cfg.kind, byok.baseUrlFor(cfg), byok.resolveCredential(cfg));
+    } catch (e) {
+      err = String((e as Error).message ?? e);
+    }
+    byok.markValidated(cfg.id, err ?? null);
+    return { ok: !err, error: err ?? null, validated_at: Date.now() };
+  });
+
+  app.delete('/byok/:id', async (req, reply) => {
+    byok.delete(String((req.params as any).id));
+    return reply.code(204).send();
+  });
+
   // ---- filesystem browse (repo picker; read-only, home-scoped) ----
   app.get('/fs/browse', async (req, reply) => {
     const { readdirSync, statSync } = await import('node:fs');
@@ -847,6 +907,7 @@ function jobSpecForTask(db: DB, taskRow: any, now: number) {
     taskSlug: slug,
     prompt: taskRow.prompt,
     engine: ((taskRow.engine ?? profile?.engine ?? 'cli') as JobSpec['engine']),
+    byokId: taskRow.byok_id ?? null,
     model: taskRow.model ?? profile?.model ?? null,
     permissionMode: taskRow.permission_mode,
     budget: { maxUsd: taskRow.budget_usd, maxTurns: taskRow.max_turns, timeoutSec: taskRow.timeout_sec },
@@ -886,6 +947,7 @@ function view(row: any, nextFire: number | null = null): unknown {
     model: row.model ?? null,
     permissionMode: row.permission_mode,
     engine: row.engine ?? null,
+    byokId: row.byok_id ?? null,
     budget: { maxUsd: row.budget_usd, maxTurns: row.max_turns, timeoutSec: row.timeout_sec },
     missedPolicy: row.missed_policy,
     missedWindowSec: row.missed_window_sec,

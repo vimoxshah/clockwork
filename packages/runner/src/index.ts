@@ -12,3 +12,4 @@ export * from './service-path.js';
 export * from './codex-runner.js';
 export * from './opencode-runner.js';
 export * from './hermes-runner.js';
+export * from './api-agent-runner.js';

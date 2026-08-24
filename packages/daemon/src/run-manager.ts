@@ -34,6 +34,7 @@ import { indexRun } from './repo.js';
 import type { DB } from './db.js';
 import type { Clock } from './clock.js';
 import type { ChildToDaemon } from './runner-protocol.js';
+import { ByokStore, keychainGet } from './byok.js';
 
 export interface RunManagerDeps {
   db: DB;
@@ -205,6 +206,7 @@ export class RunManager {
       LANG: process.env.LANG ?? 'en_US.UTF-8',
       CW_ENGINE: process.env.CW_ENGINE ?? '', // test hook only
       ...(process.env.CW_MOCK_STEP_MS ? { CW_MOCK_STEP_MS: process.env.CW_MOCK_STEP_MS } : {}), // test hook
+      ...this.byokEnv(spec), // BYOK credential injection (ADR-027/028) — keychain read happens here, in the daemon
       ...(process.env.USER ? { USER: process.env.USER } : {}),
       ...(process.env.LOGNAME ? { LOGNAME: process.env.LOGNAME } : {}),
     };
@@ -608,6 +610,33 @@ export class RunManager {
   private releaseMutex(spec: JobSpec): void {
     if (spec.repoPath && this.repoMutex.get(spec.repoPath) === spec.runId) {
       this.repoMutex.delete(spec.repoPath);
+    }
+  }
+
+  /**
+   * BYOK credential env (ADR-027/028). Resolved lazily at spawn in the daemon
+   * process; the secret travels only via child env, never the jobspec file.
+   * Returns {} when the task is not a BYOK task or resolution fails (the run
+   * will then fail fast with an auth error inside the runner).
+   */
+  private byokEnv(spec: JobSpec): Record<string, string> {
+    const byokId = (spec as unknown as { byokId?: string | null }).byokId;
+    if (!byokId) return {};
+    try {
+      const store = new ByokStore({ db: this.deps.db });
+      const cfg = store.get(byokId);
+      if (!cfg) return {};
+      const envOut: Record<string, string> = { CW_BYOK_BASE_URL: store.baseUrlFor(cfg) };
+      if (cfg.auth === 'env' && cfg.env_var && process.env[cfg.env_var]) {
+        envOut.CW_BYOK_KEY = process.env[cfg.env_var] as string;
+      } else if (cfg.auth === 'keychain') {
+        try {
+          envOut.CW_BYOK_KEY = keychainGet(cfg.id);
+        } catch { /* absent key → runner fails fast with auth */ }
+      }
+      return envOut;
+    } catch {
+      return {};
     }
   }
 
