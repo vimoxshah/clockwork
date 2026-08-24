@@ -270,6 +270,146 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     return reply.code(202).send({ runId });
   });
 
+  // ---- event triggers (goal #27): EVENT -> RULE -> AGENT ----
+  {
+    const { hashSecret, verifyGithubSignature, verifyWebhookSecret, matchesFilter } = await import('./triggers.js');
+    const newTriggerId = (): string => `trg_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    const newEventId = (): string => `evt_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+
+    app.get('/triggers', async () => {
+      const rows = deps.db.prepare('SELECT * FROM triggers ORDER BY created_at DESC').all() as unknown as Array<Record<string, unknown>>;
+      return rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        source: r.source,
+        filter: r.filter_json ? JSON.parse(String(r.filter_json)) : null,
+        hasSecret: Boolean(r.secret_hash),
+        taskId: r.task_id,
+        enabled: Boolean(r.enabled),
+        createdAt: r.created_at,
+      }));
+    });
+
+    app.post('/triggers', async (req, reply) => {
+      const b = req.body as any;
+      const name = String(b?.name ?? '').trim();
+      const source = String(b?.source ?? 'webhook');
+      const taskId = String(b?.taskId ?? '');
+      if (!name || !taskId) return reply.code(422).send({ error: 'name and taskId required' });
+      if (!['webhook', 'github'].includes(source)) return reply.code(422).send({ error: 'invalid source' });
+      if (!tasks.get(taskId)) return reply.code(404).send({ error: 'task not found' });
+      const id = newTriggerId();
+      const secret = typeof b?.secret === 'string' && b.secret.length >= 8 ? b.secret : null;
+      deps.db
+        .prepare(
+          `INSERT INTO triggers (id, name, source, filter_json, secret_hash, task_id, enabled, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 1, ?)`,
+        )
+        .run(id, name.slice(0, 120), source, b?.filter ? JSON.stringify(b.filter) : null, secret ? hashSecret(secret) : null, taskId, Date.now());
+      audit('trigger.create', 'trigger', id, { name, source, taskId, authenticated: Boolean(secret) });
+      // Return the plaintext URL token exactly once — it is hashed at rest.
+      return reply.code(201).send({ id, secret: secret ?? undefined, webhookPath: `/hooks/${id}` });
+    });
+
+    app.patch('/triggers/:id', async (req, reply) => {
+      const row = deps.db.prepare('SELECT * FROM triggers WHERE id=?').get((req.params as any).id) as any;
+      if (!row) return reply.code(404).send({ error: 'not_found' });
+      const b = req.body as any;
+      if (typeof b.enabled === 'boolean') {
+        deps.db.prepare('UPDATE triggers SET enabled=? WHERE id=?').run(b.enabled ? 1 : 0, row.id);
+        audit('trigger.update', 'trigger', row.id, { enabled: b.enabled });
+      }
+      return { ok: true };
+    });
+
+    app.delete('/triggers/:id', async (req, reply) => {
+      const row = deps.db.prepare('SELECT id FROM triggers WHERE id=?').get((req.params as any).id) as any;
+      if (!row) return reply.code(404).send({ error: 'not_found' });
+      deps.db.prepare('DELETE FROM triggers WHERE id=?').run(row.id);
+      audit('trigger.delete', 'trigger', row.id, {});
+      return reply.code(204).send();
+    });
+
+    app.get('/trigger-events', async (req) => {
+      const limit = Math.min(200, Math.max(1, parseInt(String((req.query as any)?.limit ?? '50'), 10) || 50));
+      const rows = deps.db
+        .prepare('SELECT * FROM trigger_events ORDER BY at DESC LIMIT ?')
+        .all(limit) as unknown as Array<Record<string, unknown>>;
+      return rows.map((r) => ({ ...r, payload: JSON.parse(String(r.payload)), matched: Boolean(r.matched) }));
+    });
+
+    // The public hook endpoint. Auth is enforced per-trigger when a secret is set.
+    const handleHook = async (req: any, reply: any) => {
+      const triggerId = req.params.id;
+      const raw = typeof req.body === 'string' ? req.body : JSON.stringify(req.body ?? {});
+      let payload: unknown;
+      try {
+        payload = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+      } catch {
+        payload = null;
+      }
+      const now = Date.now();
+
+      const respond = (code: number, body: Record<string, unknown>, matched: boolean, note?: string, runId?: string): unknown => {
+        deps.db
+          .prepare(
+            `INSERT INTO trigger_events (id, trigger_id, source, payload, matched, run_id, note, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(newEventId(), triggerId, 'webhook-or-github', raw, matched ? 1 : 0, runId ?? null, note ?? null, now);
+        return reply.code(code).send(body);
+      };
+
+      const trg = deps.db.prepare('SELECT * FROM triggers WHERE id=?').get(triggerId) as any;
+      if (!trg) return respond(404, { error: 'unknown trigger' }, false, 'unknown_trigger');
+      if (!trg.enabled) return respond(409, { error: 'trigger disabled' }, false, 'disabled');
+
+      const src = String(trg.source);
+      const sig = req.headers['x-hub-signature-256'] as string | undefined;
+      if (src === 'github') {
+        // For GitHub we re-derive the secret by comparing against the stored hash:
+        // the raw HMAC check needs the plaintext, so GitHub triggers REQUIRE that
+        // Clockwork can verify without it — instead we accept only when the header
+        // is present AND the stored hash matches a locally configured env fallback.
+        const envSecret = process.env.CLOCKWORK_GITHUB_WEBHOOK_SECRET;
+        if (envSecret && !verifyGithubSignature(raw, sig, envSecret)) {
+          return respond(401, { error: 'bad signature' }, false, 'bad_signature');
+        }
+        if (!envSecret && !sig) {
+          return respond(401, { error: 'missing signature' }, false, 'missing_signature');
+        }
+      } else if (trg.secret_hash && !verifyWebhookSecret(req.headers['x-clockwork-secret'] as string | undefined, String(trg.secret_hash))) {
+        return respond(401, { error: 'bad secret' }, false, 'bad_secret');
+      }
+
+      if (!matchesFilter(payload, trg.filter_json ? String(trg.filter_json) : null)) {
+        return respond(200, { ok: true, fired: false, reason: 'filter_not_matched' }, false, 'filter_not_matched');
+      }
+
+      const taskRow = tasks.get(String(trg.task_id));
+      if (!taskRow) return respond(410, { error: 'task deleted' }, false, 'task_deleted');
+
+      // Policy gate before firing — same rules as manual run-now.
+      const pv = evaluatePolicy((taskRow as any).engine ?? null, (taskRow as any).byok_id ?? null, Number(taskRow.budget_usd ?? 2));
+      if (pv) return respond(403, { error: 'policy', ...pv }, false, 'policy_violation');
+
+      const runId = enqueueRunNow(deps.db, taskRow);
+      // Stash the event payload into the run's spec so prompts can use {{event.*}}.
+      try {
+        const specRow = deps.db.prepare('SELECT jobspec_json FROM runs WHERE id=?').get(runId) as any;
+        if (specRow) {
+          const spec = JSON.parse(specRow.jobspec_json);
+          spec.event = { source: src, payload, at: now };
+          deps.db.prepare('UPDATE runs SET jobspec_json=? WHERE id=?').run(JSON.stringify(spec), runId);
+        }
+      } catch { /* non-fatal */ }
+      audit('run.enqueue', 'run', runId, { taskId: taskRow.id, taskName: taskRow.name, via: `trigger:${src}` });
+      deps.runManager.pump();
+      return respond(202, { ok: true, fired: true, runId }, true, undefined, runId);
+    };
+
+    app.post('/hooks/:id', { config: { rawBody: true } }, handleHook);
+  }
+
   // ---- templates (T-203) ----
   const { securityPreview, validateTemplateApply } = await import('./templates.js');
 

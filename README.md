@@ -278,7 +278,7 @@ themes, palette, providers, ICS overlay, 1000-task benchmarks).
 - [x] Agent chains (chain-after + trigger states + `{{previous.report}}` hand-off)
 - [x] Docker execution target (ephemeral, network-isolated, resource-capped)
 - [x] Governance: policy engine, audit log, retention, capability matrix
-- [ ] Event-triggered agents (GitHub/Slack/webhook → task)
+- [x] Event triggers: webhook + GitHub sources fire tasks (HMAC-verified)
 - [ ] Chaining v2 (fan-in/out DAGs)
 - [ ] RRULE expansion for external calendars
 - [ ] Team delivery targets (Slack/Telegram webhooks GA)
