@@ -11,6 +11,7 @@ interface Analytics {
   byTask: Array<{ taskId: string; name: string; runs: number; completed: number; failed: number; costUsd: number; successRate: number; avgDurationMs: number }>;
   byProvider: Array<{ engine: string; runs: number; completed: number; failed: number; costUsd: number; successRate: number }>;
   daily: Array<{ day: string; runs: number; costUsd: number }>;
+  suggestions?: Array<{ taskName: string; kind: string; message: string }>;
 }
 
 export default function AnalyticsView({ version }: { version: number }): JSX.Element {
@@ -78,7 +79,24 @@ export default function AnalyticsView({ version }: { version: number }): JSX.Ele
             </>
           )}
 
-          {/* by provider/engine */}
+          {/* optimization suggestions (goal #35) */}
+          {data.suggestions && data.suggestions.length > 0 && (
+            <>
+              <h3 className="section-title">Optimization suggestions</h3>
+              <div style={{ marginBottom: 20 }}>
+                {data.suggestions.map((s, i) => (
+                  <div key={i} className="tasklist-row" style={{ alignItems: 'flex-start' }}>
+                    <span className="chip needs-you">{s.kind === 'failing_task' ? 'fix' : s.kind === 'prompt_scoping' ? 'scope' : 'cheaper'}</span>
+                    <div className="grow">
+                      <div>{s.message}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {/* by provider */}
           {data.byProvider.length > 0 && (
             <>
               <h3 className="section-title">By provider</h3>

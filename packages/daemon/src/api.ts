@@ -777,6 +777,38 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       .map((t) => ({ ...t, costUsd: round4(t.costUsd), successRate: t.runs ? Math.round((t.completed / t.runs) * 100) : 0, avgDurationMs: t.runs ? Math.round(t.durationMs / t.runs) : 0 }));
     const enginesOut = [...byEngine.values()].map((e) => ({ ...e, costUsd: round4(e.costUsd), successRate: e.runs ? Math.round((e.completed / e.runs) * 100) : 0 }));
 
+    // ---- cost optimization suggestions (goal #35) ----
+    const suggestions: Array<{ taskName: string; kind: string; message: string }> = [];
+
+    for (const t of byTask.values()) {
+      const avgCost = t.runs ? t.costUsd / t.runs : 0;
+      // High-spend + high-failure: the worst combination — money for nothing.
+      if (t.failed >= 3 && t.failed > t.completed && t.costUsd > 0.05) {
+        suggestions.push({
+          taskName: t.name,
+          kind: 'failing_task',
+          message: `“${t.name}” failed ${t.failed} of ${t.runs} runs ($${round4(t.costUsd)} spent). Fix or pause it before it burns more budget.`,
+        });
+      }
+      // Expensive per-run tasks: suggest a cheaper model profile.
+      if (t.completed >= 3 && avgCost > 0.5) {
+        suggestions.push({
+          taskName: t.name,
+          kind: 'cheaper_model',
+          message: `“${t.name}” averages $${round4(avgCost)} per successful run. A smaller model (e.g. a Haiku/mini-class) often handles routine jobs at 60–80% lower cost.`,
+        });
+      }
+      // Turn-hungry tasks: prompt scoping suggestion.
+      if (t.turns / Math.max(1, t.runs) > 40 && t.completed < t.runs) {
+        suggestions.push({
+          taskName: t.name,
+          kind: 'prompt_scoping',
+          message: `“${t.name}” averages ${Math.round(t.turns / t.runs)} turns/run and has failures. Narrowing the prompt scope usually cuts turns dramatically.`,
+        });
+      }
+    }
+    suggestions.sort((a, b) => b.kind.localeCompare(a.kind));
+
     return reply.send({
       range: { from, to, days },
       totals: {
@@ -791,6 +823,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       byTask: tasksOut,
       byProvider: enginesOut,
       daily: [...daily.values()].sort((a, b) => a.day.localeCompare(b.day)).map((d) => ({ ...d, costUsd: round4(d.costUsd) })),
+      suggestions,
     });
   });
 
