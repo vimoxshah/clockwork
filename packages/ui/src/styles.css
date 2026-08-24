@@ -335,7 +335,7 @@ label.f { display: block; color: var(--muted); font-size: 12px; margin: 12px 0 4
 /* ---------- Settings page layout (design-system pass) ---------- */
 /* Wide, readable measure instead of the old 680px column that left the
    right half of wide windows empty. */
-.settings-page { max-width: 1080px; }
+.settings-page { width: 100%; max-width: none; }
 
 /* Two-column pairing for compact sections (usage + calendars/shortcuts).
    Collapses to one column below 980px like the calendar view does. */
@@ -345,9 +345,12 @@ label.f { display: block; color: var(--muted); font-size: 12px; margin: 12px 0 4
   gap: 20px;
   align-items: start;
 }
+@media (min-width: 1500px) {
+  .settings-grid { grid-template-columns: 1fr 1fr 1fr; }
+}
 @media (max-width: 980px) {
   .settings-grid { grid-template-columns: 1fr; }
 }
 
 /* Agents page: use the full width; 3-up cards from ~1200px, 2-up below. */
-.agents-page { max-width: 1280px; }
+.agents-page { width: 100%; max-width: none; }
