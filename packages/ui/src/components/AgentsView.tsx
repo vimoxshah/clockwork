@@ -50,7 +50,7 @@ export default function AgentsView({ version }: { version: number }): JSX.Elemen
   const [creating, setCreating] = useState(false);
 
   return (
-    <div style={{ maxWidth: 900 }}>
+    <div className="agents-page">
       <div className="mb-3 flex items-center justify-between">
         <div>
           <h2 className="text-base font-semibold">Agent profiles</h2>

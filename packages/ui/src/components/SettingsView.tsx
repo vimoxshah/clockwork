@@ -35,7 +35,7 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
   };
 
   return (
-    <div style={{ maxWidth: 680 }}>
+    <div className="settings-page">
       <h2 style={{ marginTop: 0 }}>Settings</h2>
 
       <h3 className="section-title">Appearance</h3>
@@ -92,23 +92,26 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
       )}
 
       <h3 className="section-title" style={{ marginTop: 20 }}>Usage &amp; limits</h3>
-      <UsageCard version={version} />
-
-      <h3 className="section-title" style={{ marginTop: 20 }}>Calendars</h3>
-      <IcsCard version={version} />
-
-      <h3 className="section-title" style={{ marginTop: 20 }}>Keyboard shortcuts</h3>
-      <div className="tasklist-row" style={{ display: 'block' }}>
-        {SHORTCUTS.map((s) => (
-          <div key={s.keys} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 13 }}>
-            <span>
-              <kbd className="mono" style={{ background: 'var(--surface-active)', borderRadius: 5, padding: '2px 7px', marginRight: 10 }}>{s.keys}</kbd>
-              {s.action}
-            </span>
-            <span style={{ color: 'var(--dim)' }}>{s.context}</span>
+      <div className="settings-grid">
+        <div>
+          <UsageCard version={version} />
+        </div>
+        <div>
+          <IcsCard version={version} />
+          <h3 className="section-title" style={{ marginTop: 18 }}>Keyboard shortcuts</h3>
+          <div className="tasklist-row" style={{ display: 'block' }}>
+            {SHORTCUTS.map((s) => (
+              <div key={s.keys} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 13 }}>
+                <span>
+                  <kbd className="mono" style={{ background: 'var(--surface-active)', borderRadius: 5, padding: '2px 7px', marginRight: 10 }}>{s.keys}</kbd>
+                  {s.action}
+                </span>
+                <span style={{ color: 'var(--dim)' }}>{s.context}</span>
+              </div>
+            ))}
+            <p className="hint" style={{ marginTop: 8 }}>Press ⌘K anywhere to search commands.</p>
           </div>
-        ))}
-        <p className="hint" style={{ marginTop: 8 }}>Press ⌘K anywhere to search commands.</p>
+        </div>
       </div>
 
       <h3 className="section-title" style={{ marginTop: 20 }}>API providers (BYOK)</h3>
