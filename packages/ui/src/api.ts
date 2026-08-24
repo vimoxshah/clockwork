@@ -72,6 +72,9 @@ export interface TaskViewT {
   prompt: string;
   profileId: string | null;
   engine?: string | null;
+  byokId?: string | null;
+  chainAfter?: string | null;
+  chainOn?: string | null;
   repoPath: string | null;
   permissionMode: string;
   budget: { maxUsd: number; maxTurns: number; timeoutSec: number };

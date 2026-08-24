@@ -261,6 +261,13 @@ function EditDialog({
   const [maxTurns, setMaxTurns] = useState(String(task.budget.maxTurns));
   const [timeoutSec, setTimeoutSec] = useState(String(task.budget.timeoutSec));
   const [permissionMode, setPermissionMode] = useState(task.permissionMode);
+  const [chainAfter, setChainAfter] = useState<string | null>(task.chainAfter ?? null);
+  const [chainOn, setChainOn] = useState<string>(task.chainOn ?? 'completed');
+  // sibling tasks offered as upstream (excluding self)
+  const [allTasks, setAllTasks] = useState<Array<{ id: string; name: string }>>([]);
+  useEffect(() => {
+    void api.tasks().then((rows) => setAllTasks(rows.filter((t) => t.id !== task.id).map((t) => ({ id: t.id, name: t.name })))).catch(() => {});
+  }, [task.id]);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -272,6 +279,8 @@ function EditDialog({
         name,
         prompt,
         permissionMode,
+        chainAfter,
+        chainOn: chainAfter ? chainOn : undefined,
         budget: { maxUsd: Number(maxUsd) || task.budget.maxUsd, maxTurns: Number(maxTurns) || task.budget.maxTurns, timeoutSec: Number(timeoutSec) || task.budget.timeoutSec },
         version: task.version,
       });
@@ -311,6 +320,29 @@ function EditDialog({
           <option value="plan">plan (dry-run)</option>
           <option value="acceptEdits">acceptEdits</option>
         </select>
+
+        <label className="f">Chain after (run when that task finishes)</label>
+        <select
+          value={chainAfter ?? ''}
+          onChange={(e) => setChainAfter(e.target.value || null)}
+          aria-label="Chain after"
+        >
+          <option value="">— none —</option>
+          {allTasks
+            .filter((t) => t.id !== task.id)
+            .map((t) => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+        </select>
+        {chainAfter && (
+          <>
+            <label className="f">Fire when upstream is…</label>
+            <select value={chainOn} onChange={(e) => setChainOn(e.target.value)} aria-label="Chain trigger">
+              <option value="completed">completed (recommended)</option>
+              <option value="any_terminal">any terminal state</option>
+            </select>
+          </>
+        )}
         {err && <div className="error-banner">{err}</div>}
         <div className="actions">
           <button className="btn" onClick={onClose}>Cancel</button>

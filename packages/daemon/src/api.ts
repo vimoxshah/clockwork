@@ -1177,6 +1177,8 @@ function view(row: any, nextFire: number | null = null): unknown {
     permissionMode: row.permission_mode,
     engine: row.engine ?? null,
     byokId: row.byok_id ?? null,
+    chainAfter: row.chain_after ?? null,
+    chainOn: row.chain_on ?? null,
     budget: { maxUsd: row.budget_usd, maxTurns: row.max_turns, timeoutSec: row.timeout_sec },
     missedPolicy: row.missed_policy,
     missedWindowSec: row.missed_window_sec,
