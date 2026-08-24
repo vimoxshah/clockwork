@@ -26,6 +26,11 @@ const run = async (): Promise<void> => {
   await page.setViewportSize({ width: 700, height: 850 });
   await page.waitForTimeout(500);
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  const h1 = page.locator('h1').first();
+  const hb = await h1.boundingBox();
+  const fs = await h1.evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+  const lines = Math.round(hb.height / (fs * 1.14));
+  console.log('h1 lines:', lines, '(height', Math.round(hb.height) + ')');
   console.log('OVERFLOW at 700px:', overflow > 4 ? `YES ${overflow}px` : 'none');
   await browser.close();
   if (failed.length) console.log('FAILED REQUESTS:', failed.join(', '));
