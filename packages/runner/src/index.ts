@@ -13,3 +13,4 @@ export * from './codex-runner.js';
 export * from './opencode-runner.js';
 export * from './hermes-runner.js';
 export * from './api-agent-runner.js';
+export * from './docker-runner.js';

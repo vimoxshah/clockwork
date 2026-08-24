@@ -882,6 +882,19 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     return { tier: getTier(), features: capabilityMatrix() };
   });
 
+  // ---- execution targets (goals #12/#15): local + docker now, cloud later ----
+  app.get('/targets', async () => {
+    const { isDockerAvailable } = await import('@clockwork/runner');
+    const docker = await isDockerAvailable();
+    return {
+      targets: [
+        { id: 'local', label: 'This Mac (sandboxed worktree)', available: true },
+        { id: 'docker', label: 'Ephemeral container (isolated FS/network)', available: docker },
+      ],
+      default: 'local',
+    };
+  });
+
   app.put('/policies', async (req, reply) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
     try {
