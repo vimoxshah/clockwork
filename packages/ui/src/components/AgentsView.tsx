@@ -67,7 +67,7 @@ export default function AgentsView({ version }: { version: number }): JSX.Elemen
       {profiles.loading && <p className="state-line">Loading…</p>}
       {profiles.error && <div className="error-banner">{profiles.error}</div>}
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
         {(profiles.data ?? []).map((p) => (
           <ProfileCard key={p.id} p={p} />
         ))}

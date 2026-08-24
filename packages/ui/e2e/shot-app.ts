@@ -11,6 +11,16 @@ async function main(): Promise<void> {
   await page.evaluate((t) => localStorage.setItem('clockwork.token', t), tok);
   await page.reload({ waitUntil: 'networkidle' });
 
+  await page.goto('file:///Users/vimoxshah/Desktop/Vimox/poc/clockwork/landing-page/index.html', { waitUntil: 'networkidle' });
+  await page.waitForTimeout(500);
+  const gut = await page.evaluate(() => {
+    const w = document.querySelector('.wrap');
+    const cs = getComputedStyle(w ?? document.body);
+    const r = (w ?? document.body).getBoundingClientRect();
+    return { left: Math.round(r.left), padL: Math.round(parseFloat(cs.paddingLeft)), width: Math.round(r.width), vw: window.innerWidth };
+  });
+  console.log('landing wrap:', JSON.stringify(gut));
+
   for (const tab of ['settings', 'agents', 'tasks']) {
     await page.goto(`http://127.0.0.1:4747/#${tab}`, { waitUntil: 'networkidle' });
     await page.waitForTimeout(500);

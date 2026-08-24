@@ -116,11 +116,17 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
 
       <h3 className="section-title" style={{ marginTop: 20 }}>API providers (BYOK)</h3>
       <ByokCard version={version} />
-      <h3 className="section-title" style={{ marginTop: 20 }}>CLI engines</h3>
-      <ProvidersCard version={version} />
 
-      <h3 className="section-title" style={{ marginTop: 20 }}>Event triggers</h3>
-      <TriggersCard version={version} />
+      <h3 className="section-title" style={{ marginTop: 20 }}>CLI engines</h3>
+      <div className="settings-grid">
+        <div>
+          <ProvidersCard version={version} />
+        </div>
+        <div>
+          <h3 className="section-title" style={{ marginTop: 0 }}>Event triggers</h3>
+          <TriggersCard version={version} />
+        </div>
+      </div>
 
       <h3 className="section-title" style={{ marginTop: 20 }}>Execution</h3>
       <p className="hint">
