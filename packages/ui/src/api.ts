@@ -129,6 +129,11 @@ export const api = {
   byokTest: (id: string) => req<{ ok: boolean; error: string | null }>('POST', `/byok/${id}/test`),
   byokDelete: (id: string) => req<unknown>('DELETE', `/byok/${id}`),
   analytics: (days: number) => req<AnalyticsT>('GET', `/analytics?days=${days}`),
+  triggers: () => req<Array<{ id: string; name: string; source: string; filter: Record<string, unknown> | null; hasSecret: boolean; taskId: string; enabled: boolean }>>('GET', '/triggers'),
+  createTrigger: (body: { name: string; source: string; taskId: string; secret?: string; filter?: Record<string, unknown> }) =>
+    req<{ id: string; secret?: string; webhookPath: string }>('POST', '/triggers', body),
+  toggleTrigger: (id: string, enabled: boolean) => req<{ ok: true }>('PATCH', `/triggers/${id}`, { enabled }),
+  deleteTrigger: (id: string) => req<void>('DELETE', `/triggers/${id}`),
   tasks: () => req<TaskViewT[]>('GET', '/tasks'),
   createTask: (t: unknown) => req<TaskViewT>('POST', '/tasks', t),
   patchTask: (id: string, p: unknown) => req<TaskViewT>('PATCH', `/tasks/${id}`, p),

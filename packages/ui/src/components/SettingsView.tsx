@@ -116,6 +116,9 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
       <h3 className="section-title" style={{ marginTop: 20 }}>CLI engines</h3>
       <ProvidersCard version={version} />
 
+      <h3 className="section-title" style={{ marginTop: 20 }}>Event triggers</h3>
+      <TriggersCard version={version} />
+
       <h3 className="section-title" style={{ marginTop: 20 }}>Execution</h3>
       <p className="hint">
         Engine: your own Claude Code via <span className="mono">claude -p</span> on your subscription
@@ -277,6 +280,132 @@ function ProvidersCard({ version }: { version: number }): JSX.Element {
         </div>
       ))}
       <p className="hint">Detection runs on your machine each time this page loads. Select a provider per task in the composer.</p>
+    </div>
+  );
+}
+
+/** Event triggers (goal #27): create, enable/disable, and observe inbound hooks. */
+function TriggersCard({ version }: { version: number }): JSX.Element {
+  const triggers = useAsync(() => api.triggers(), [version]);
+  const tasks = useAsync(() => api.tasks(), [version]);
+  const [name, setName] = useState('');
+  const [source, setSource] = useState<'webhook' | 'github'>('webhook');
+  const [taskId, setTaskId] = useState('');
+  const [secret, setSecret] = useState('');
+  const [created, setCreated] = useState<{ id: string; secret?: string } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const create = async (): Promise<void> => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await api.createTrigger({
+        name,
+        source,
+        taskId,
+        ...(secret.trim() ? { secret: secret.trim() } : {}),
+      });
+      setCreated(res);
+      setName('');
+      setSecret('');
+      triggers.reload();
+    } catch (e) {
+      setErr(String((e as Error).message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (triggers.error) return <div className="error-banner">{triggers.error}</div>;
+
+  return (
+    <div>
+      {/* creation form */}
+      <div className="row3" style={{ alignItems: 'end' }}>
+        <div>
+          <label className="f" htmlFor="trg-name">Name</label>
+          <input id="trg-name" type="text" value={name} placeholder="PR opened" onChange={(e) => setName(e.target.value)} />
+        </div>
+        <div>
+          <label className="f" htmlFor="trg-src">Source</label>
+          <select id="trg-src" value={source} onChange={(e) => setSource(e.target.value as 'webhook' | 'github')}>
+            <option value="webhook">Webhook (generic)</option>
+            <option value="github">GitHub</option>
+          </select>
+        </div>
+        <div>
+          <label className="f" htmlFor="trg-task">Fire task</label>
+          <select id="trg-task" value={taskId} onChange={(e) => setTaskId(e.target.value)}>
+            <option value="">— pick a task —</option>
+            {(tasks.data ?? []).map((t) => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="f" htmlFor="trg-secret">{source === 'github' ? 'Note' : 'Shared secret (optional)'}</label>
+          {source === 'github'
+            ? (
+              <p className="hint" style={{ margin: 0 }}>
+                GitHub verifies via <span className="mono">CLOCKWORK_GITHUB_WEBHOOK_SECRET</span>.
+              </p>
+            )
+            : (
+              <input id="trg-secret" type="password" value={secret} placeholder="min 8 chars" onChange={(e) => setSecret(e.target.value)} />
+            )}
+        </div>
+        <button
+          className="btn primary"
+          disabled={busy || !name.trim() || !taskId}
+          onClick={() => void create()}
+        >
+          Add trigger
+        </button>
+      </div>
+
+      {created && (
+        <div className="ok-banner mono" style={{ marginTop: 10 }}>
+          Webhook URL: <strong>POST /hooks/{created.id}</strong>
+          {created.secret && <> · Secret (copy now — shown once): <strong>{created.secret}</strong></>}
+          {!created.secret && source === 'webhook' && <> · No secret set — anyone who can reach this daemon can fire it.</>}
+        </div>
+      )}
+      {err && <div className="error-banner">{err}</div>}
+
+      {/* existing triggers */}
+      <div style={{ marginTop: 12 }}>
+        {(triggers.data ?? []).length === 0 && (
+          <p className="hint">
+            No triggers yet. A trigger fires a task when an external event arrives — e.g. a GitHub PR
+            opens and your review agent runs. Events that don't match are logged, never silently dropped.
+          </p>
+        )}
+        {(triggers.data ?? []).map((t) => (
+          <div key={t.id} className="tasklist-row">
+            <div className="grow">
+              <strong>{t.name}</strong>{' '}
+              <span className="hint">
+                ({t.source}{t.hasSecret ? ', authenticated' : ', no secret'}
+                {t.filter ? `, filter ${JSON.stringify(t.filter)}` : ''})
+              </span>
+              <div className="hint mono" style={{ fontSize: 11 }}>POST /hooks/{t.id}</div>
+            </div>
+            <button
+              className="btn"
+              onClick={() => void api.toggleTrigger(t.id, !t.enabled).then(triggers.reload)}
+            >
+              {t.enabled ? 'Disable' : 'Enable'}
+            </button>
+            <button
+              className="btn danger"
+              onClick={() => void api.deleteTrigger(t.id).then(triggers.reload)}
+            >
+              Delete
+            </button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
