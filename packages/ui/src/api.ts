@@ -110,6 +110,14 @@ export interface CalendarEvent {
   allDay?: boolean;
 }
 
+export interface AnalyticsT {
+  range: { from: number; to: number; days: number };
+  totals: { runs: number; completed: number; failed: number; successRate: number; costUsd: number; turns: number; avgCostPerRun: number };
+  byTask: Array<{ taskId: string; name: string; runs: number; completed: number; failed: number; costUsd: number; successRate: number; avgDurationMs: number }>;
+  byProvider: Array<{ engine: string; runs: number; completed: number; failed: number; costUsd: number; successRate: number }>;
+  daily: Array<{ day: string; runs: number; costUsd: number }>;
+}
+
 export const api = {
   health: () => req<Health>('GET', '/health'),
   byok: () => req<{ configs: unknown[]; meta: unknown }>('GET', '/byok'),
@@ -117,6 +125,7 @@ export const api = {
   byokRotate: (id: string, secret: string) => req<{ ok: boolean; hint?: string }>('POST', `/byok/${id}/rotate`, { secret }),
   byokTest: (id: string) => req<{ ok: boolean; error: string | null }>('POST', `/byok/${id}/test`),
   byokDelete: (id: string) => req<unknown>('DELETE', `/byok/${id}`),
+  analytics: (days: number) => req<AnalyticsT>('GET', `/analytics?days=${days}`),
   tasks: () => req<TaskViewT[]>('GET', '/tasks'),
   createTask: (t: unknown) => req<TaskViewT>('POST', '/tasks', t),
   patchTask: (id: string, p: unknown) => req<TaskViewT>('PATCH', `/tasks/${id}`, p),

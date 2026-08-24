@@ -692,6 +692,86 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     return readPrefs(deps.dataDir);
   });
 
+  // ---- cost & reliability analytics (ADR-029) ----
+  app.get('/analytics', async (req, reply) => {
+    const q = req.query as Record<string, string>;
+    const to = q.to ? parseInt(String(q.to), 10) : Date.now();
+    const days = Math.min(180, Math.max(1, parseInt(String(q.days ?? '30'), 10)));
+    const from = to - days * 86_400_000;
+
+    const rows = deps.db
+      .prepare(
+        `SELECT task_id, state, outcome_reason, started_at, ended_at, cost_usd, turns, jobspec_json
+         FROM runs
+         WHERE COALESCE(ended_at, scheduled_for) BETWEEN ? AND ?`,
+      )
+      .all(from, to) as unknown as Array<Record<string, unknown>>;
+
+    type TaskAgg = { taskId: string; name: string; runs: number; completed: number; failed: number; costUsd: number; turns: number; durationMs: number };
+    const byTask = new Map<string, TaskAgg>();
+    const byEngine = new Map<string, { engine: string; runs: number; completed: number; failed: number; costUsd: number }>();
+    let totalRuns = 0;
+    let totalCompleted = 0;
+    let totalFailed = 0;
+    let totalCostUsd = 0;
+    let totalTurns = 0;
+    const daily = new Map<string, { day: string; runs: number; costUsd: number }>();
+
+    for (const r of rows) {
+      totalRuns += 1;
+      const state = String(r.state);
+      const isDone = state === 'completed';
+      const isFail = state === 'failed' || state === 'timed_out';
+      if (isDone) totalCompleted += 1;
+      if (isFail) totalFailed += 1;
+      const cost = Number(r.cost_usd ?? 0);
+      totalCostUsd += cost;
+      const turns = Number(r.turns ?? 0);
+      totalTurns += turns;
+      const dur = Number(r.ended_at && r.started_at ? (r.ended_at as number) - (r.started_at as number) : 0);
+
+      const spec = safeParseSpec(r.jobspec_json);
+      const name = String(spec.taskName ?? 'unknown');
+      const engFromSpec = String(spec.engine ?? 'cli');
+      const day = new Date(Number(r.ended_at ?? r.scheduled_for)).toISOString().slice(0, 10);
+
+      const t = byTask.get(String(r.task_id)) ?? { taskId: String(r.task_id), name, runs: 0, completed: 0, failed: 0, costUsd: 0, turns: 0, durationMs: 0 };
+      t.runs += 1; if (isDone) t.completed += 1; if (isFail) t.failed += 1;
+      t.costUsd += cost; t.turns += turns; t.durationMs += dur;
+      byTask.set(String(r.task_id), t);
+
+      const engKey = engFromSpec + (spec.byokId ? ':byok' : '');
+      const e = byEngine.get(engKey) ?? { engine: engKey, runs: 0, completed: 0, failed: 0, costUsd: 0 };
+      e.runs += 1; if (isDone) e.completed += 1; if (isFail) e.failed += 1; e.costUsd += cost;
+      byEngine.set(engKey, e);
+
+      const d = daily.get(day) ?? { day, runs: 0, costUsd: 0 };
+      d.runs += 1; d.costUsd += cost;
+      daily.set(day, d);
+    }
+
+    const tasksOut = [...byTask.values()]
+      .sort((a, b) => b.costUsd - a.costUsd)
+      .map((t) => ({ ...t, costUsd: round4(t.costUsd), successRate: t.runs ? Math.round((t.completed / t.runs) * 100) : 0, avgDurationMs: t.runs ? Math.round(t.durationMs / t.runs) : 0 }));
+    const enginesOut = [...byEngine.values()].map((e) => ({ ...e, costUsd: round4(e.costUsd), successRate: e.runs ? Math.round((e.completed / e.runs) * 100) : 0 }));
+
+    return reply.send({
+      range: { from, to, days },
+      totals: {
+        runs: totalRuns,
+        completed: totalCompleted,
+        failed: totalFailed,
+        successRate: totalRuns ? Math.round((totalCompleted / totalRuns) * 100) : 0,
+        costUsd: round4(totalCostUsd),
+        turns: totalTurns,
+        avgCostPerRun: totalRuns ? round4(totalCostUsd / totalRuns) : 0,
+      },
+      byTask: tasksOut,
+      byProvider: enginesOut,
+      daily: [...daily.values()].sort((a, b) => a.day.localeCompare(b.day)).map((d) => ({ ...d, costUsd: round4(d.costUsd) })),
+    });
+  });
+
   // ---- providers (ADR-026): detect installed CLIs + versions ----
   app.get('/providers', async () => {
     const { execFileSync } = await import('node:child_process');
@@ -934,6 +1014,18 @@ function jobSpecForTask(db: DB, taskRow: any, now: number) {
     scheduledFor: now,
     createdAt: now,
   };
+}
+
+function safeParseSpec(raw: unknown): { taskName?: string; byokId?: string | null; engine?: string } {
+  try {
+    return JSON.parse(String(raw ?? '{}')) as { taskName?: string; byokId?: string | null; engine?: string };
+  } catch {
+    return {};
+  }
+}
+
+function round4(n: number): number {
+  return Math.round(n * 10_000) / 10_000;
 }
 
 function view(row: any, nextFire: number | null = null): unknown {

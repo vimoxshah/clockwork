@@ -12,10 +12,11 @@ import { CommandPalette, useGlobalShortcuts, type Command, type Tab as PaletteTa
 import TasksView from './components/TasksView';
 import ComposerView from './components/ComposerView';
 import SettingsView from './components/SettingsView';
+import AnalyticsView from './components/AnalyticsView';
 import type { Health } from './api';
 
-type Tab = 'calendar' | 'inbox' | 'agents' | 'tasks' | 'new' | 'settings';
-const TABS: Tab[] = ['calendar', 'inbox', 'agents', 'tasks', 'new', 'settings'];
+type Tab = 'calendar' | 'inbox' | 'agents' | 'tasks' | 'analytics' | 'new' | 'settings';
+const TABS: Tab[] = ['calendar', 'inbox', 'agents', 'tasks', 'analytics', 'new', 'settings'];
 
 function tabFromHash(): Tab {
   const h = window.location.hash.replace('#/', '').replace('#', '') as Tab;
@@ -186,6 +187,7 @@ export default function App(): JSX.Element {
               {tab === 'inbox' && <InboxView version={dataVersion} />}
               {tab === 'agents' && <AgentsView version={dataVersion} />}
               {tab === 'tasks' && <TasksView version={dataVersion} />}
+              {tab === 'analytics' && <AnalyticsView version={dataVersion} />}
               {tab === 'new' && (
                 <ComposerView
                   prefill={composerPrefill}
