@@ -48,7 +48,7 @@ export const FEATURES: FeatureDef[] = [
   { key: 'webhooks',            label: 'Webhook delivery',             category: 'integrations', tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'available' },
   { key: 'event_triggers',      label: 'Event-triggered agents',       category: 'integrations', tiers: { free: { available: false }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'planned' },
   { key: 'cloud_agents',        label: 'Cloud execution targets',      category: 'execution',  tiers: { free: { available: false }, pro: { available: false }, team: { available: true, limit: 'fair use' }, enterprise: { available: true } }, status: 'planned' },
-  { key: 'agent_chains',        label: 'Agent chains',                 category: 'execution',  tiers: { free: { available: false }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'planned' },
+  { key: 'agent_chains',        label: 'Agent chains',                 category: 'execution',  tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'available' },
   { key: 'sso_scim',            label: 'SSO / SCIM',                   category: 'governance', tiers: { enterprise: { available: true } }, status: 'planned' },
 ];
 

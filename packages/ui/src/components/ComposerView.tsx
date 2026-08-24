@@ -85,6 +85,7 @@ export default function ComposerView({
     profileId: '',
     providerId: 'claude',
     byokId: '',
+    chainAfter: '',
     permissionMode: 'acceptEdits' as 'plan' | 'acceptEdits',
     maxUsd: '2',
     maxTurns: '50',
@@ -335,6 +336,30 @@ export default function ComposerView({
                       Runs via API with your key (billed to your provider account, separate from any subscription). Configure keys in Settings → API providers.
                     </p>
                   )}
+                </div>
+              )}
+              {profiles.length > 1 && (
+                <div className="mt-2">
+                  <Label htmlFor="c-chain-after">Chain after (optional)</Label>
+                  <select
+                    id="c-chain-after"
+                    value={form.chainAfter}
+                    onChange={(e) => setForm({ ...form, chainAfter: e.target.value })}
+                    aria-label="Chain after task"
+                    style={{ padding: '6px 8px', width: '100%' }}
+                  >
+                    <option value="">— run independently —</option>
+                    {profiles
+                      .filter((p) => p.id !== form.profileId)
+                      .map((p) => (
+                        <option key={p.id} value={p.id}>
+                          After profile: {p.name}
+                        </option>
+                      ))}
+                  </select>
+                  <p className="mt-1 text-xs text-dim">
+                    Chained tasks wait for the upstream task to finish, then run with its report injected via {'{{previous.report}}'}.
+                  </p>
                 </div>
               )}
             </Section>
