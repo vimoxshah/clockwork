@@ -11,6 +11,7 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { ByokStore, validateProvider, keychainGet } from './byok.js';
+import { RetentionAudit } from './retention-audit.js';
 import {
   TaskCreate,
   TaskPatch,
@@ -171,6 +172,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     if (!v.ok) return reply.code(422).send({ error: v.error });
     const row = tasks.create(parsed.data, v.profileId, v.nextFire);
     indexTask(deps.db, row.id, row.name, row.prompt);
+    audit('task.create', 'task', row.id, { name: row.name, engine: parsed.data.engine ?? null, byokId: parsed.data.byokId ?? null });
     broadcast({ type: 'task.changed', taskId: row.id, at: Date.now() });
     return reply.code(201).send(view(row, v.nextFire));
   });
@@ -215,6 +217,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     const res = tasks.patch((req.params as any).id, parsed.data, (req.body as any)?.version, nextFire ?? null);
     if (res === 'not_found') return reply.code(404).send({ error: 'not_found' });
     if (res === 'version_conflict') return reply.code(409).send({ error: 'version_conflict' }); // S-82
+    audit('task.update', 'task', res.id, { fields: Object.keys(parsed.data) });
     broadcast({ type: 'task.changed', taskId: res.id, at: Date.now() });
     const s = tasks.scheduleFor(res.id);
     return view(res, s?.next_fire ?? null);
@@ -223,6 +226,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
   app.delete('/tasks/:id', async (req, reply) => {
     const ok = tasks.softDelete((req.params as any).id);
     if (!ok) return reply.code(404).send({ error: 'not_found' });
+    audit('task.delete', 'task', String((req.params as any).id));
     return { deleted: true }; // S-6: soft delete; in-flight run completes, history retained
   });
 
@@ -230,6 +234,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     const row = tasks.get((req.params as any).id);
     if (!row) return reply.code(404).send({ error: 'not_found' });
     const runId = enqueueRunNow(deps.db, row);
+    audit('run.enqueue', 'run', runId, { taskId: row.id, taskName: row.name, via: 'run-now' });
     deps.runManager.pump();
     return reply.code(202).send({ runId });
   });
@@ -773,6 +778,45 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
   });
 
   // ---- providers (ADR-026): detect installed CLIs + versions ----
+  const retentionAudit = new RetentionAudit(deps.db);
+
+  /** Audit helper: record a control-plane mutation with result snapshot. */
+  const audit = (action: string, targetType: string | undefined, targetId: string | undefined, detail?: Record<string, unknown>): void => {
+    try {
+      retentionAudit.log({ at: Date.now(), action, targetType, targetId, detail });
+    } catch { /* audit must never break the request path */ }
+  };
+
+  app.get('/retention', async () => retentionAudit.getPrefs());
+
+  app.put('/retention', async (req, reply) => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    try {
+      retentionAudit.setPrefs(
+        b.runDays === null || b.runDays === undefined ? null : Number(b.runDays),
+        b.maxRuns === null || b.maxRuns === undefined ? null : Number(b.maxRuns),
+      );
+      audit('retention.update', 'settings', 'retention', { runDays: b.runDays ?? null, maxRuns: b.maxRuns ?? null });
+      return retentionAudit.getPrefs();
+    } catch (e) {
+      return reply.code(422).send({ error: String((e as Error).message ?? e) });
+    }
+  });
+
+  app.post('/retention/sweep', async () => {
+    const deleted = retentionAudit.sweep();
+    audit('retention.sweep', 'settings', 'retention', { deleted });
+    return { deleted };
+  });
+
+  app.get('/audit', async (req) => {
+    const q = req.query as Record<string, string>;
+    const limit = Math.min(500, Math.max(1, parseInt(String(q.limit ?? '200'), 10)));
+    const offset = Math.max(0, parseInt(String(q.offset ?? '0'), 10));
+    return { entries: retentionAudit.list(limit, offset) };
+  });
+
+
   app.get('/providers', async () => {
     const { execFileSync } = await import('node:child_process');
     const { PROVIDERS } = await import('@clockwork/shared');
