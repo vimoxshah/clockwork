@@ -197,6 +197,16 @@ export const DeliveryConfig = z.object({
     })
     .optional(),
 });
+
+/**
+ * Quiet hours (ADR-030): never fire inside the local-time window
+ * [startHour, endHour) — may wrap midnight. `critical` tasks bypass.
+ * Deferred occurrences are pushed to the window's end, never silently dropped.
+ */
+export const QuietHours = z.object({
+  startHour: z.number().int().min(0).max(23),
+  endHour: z.number().int().min(0).max(23),
+}).optional();
 export type DeliveryConfig = z.infer<typeof DeliveryConfig>;
 
 // ---- Context attachments (M1: FR-2a files only; URL/MCP is T-306)

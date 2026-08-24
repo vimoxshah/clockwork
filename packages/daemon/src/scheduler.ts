@@ -8,6 +8,7 @@
  * (schedule_id, occurrence_at) makes double-fire impossible even across
  * crash/restart races and backward clock jumps (S-25).
  */
+import { DateTime } from 'luxon';
 import type { DB } from './db.js';
 import type { Clock } from './clock.js';
 import { occurrencesBetween, nextOccurrenceAfter, type ScheduleLike } from './recurrence.js';
@@ -184,6 +185,26 @@ export class Scheduler {
     tx();
 
     if (claimed && !late) {
+      // Quiet hours (ADR-030): defer into the task's local-time quiet window.
+      const qh = readQuietHours(task.delivery_json);
+      const tz = sched.tz;
+      if (qh && inQuietWindow(fireAt, qh, tz)) {
+        const resumeAt = quietWindowEnd(fireAt, qh, tz);
+        this.deps.db
+          .prepare(`UPDATE schedule_occurrences SET disposition='deferred' WHERE schedule_id=? AND occurrence_at=?`)
+          .run(sched.id, fireAt);
+        this.deps.notify('missed', task.name, `Deferred past quiet hours — rescheduled to ${new Date(resumeAt).toLocaleString()}.`);
+        // Re-claim the pushed occurrence so it still fires after the window.
+        this.deps.db
+          .prepare(
+            `INSERT OR IGNORE INTO schedule_occurrences (schedule_id, occurrence_at, disposition, claimed_at)
+             VALUES (?, ?, 'pending', ?)`,
+          )
+          .run(sched.id, resumeAt, now);
+        const bump = this.deps.db.prepare('UPDATE schedules SET next_fire=? WHERE id=? AND kind != \'once\'');
+        if (sched.kind !== 'once') bump.run(resumeAt, sched.id);
+        return;
+      }
       this.enqueue(task, sched, fireAt, now, false, 0);
     } else if (claimed && late) {
       // run-late within window: one catch-up run listing covered occurrences
@@ -275,4 +296,48 @@ export function buildJobSpec(runId: string, task: TaskRow, now: number, occurren
     scheduledFor: occurrenceAt,
     createdAt: now,
   };
+}
+
+// ---- Quiet hours helpers (ADR-030) ----
+
+interface QuietHours {
+  startHour: number;
+  endHour: number;
+}
+
+/** Read quiet-hours config from delivery_json.quietHours (validated defensively). */
+function readQuietHours(deliveryJson: string | null | undefined): QuietHours | null {
+  try {
+    const d = JSON.parse(deliveryJson ?? '{}') as { quietHours?: { startHour?: unknown; endHour?: unknown } };
+    const q = d.quietHours;
+    if (!q || typeof q !== 'object') return null;
+    const s = Number(q.startHour);
+    const e = Number(q.endHour);
+    if (!Number.isInteger(s) || !Number.isInteger(e) || s < 0 || s > 23 || e < 0 || e > 23) return null;
+    return { startHour: s, endHour: e };
+  } catch {
+    return null;
+  }
+}
+
+/** Is `atMs` inside the local-time quiet window [start, end)? Wraps midnight. */
+export function inQuietWindow(atMs: number, qh: QuietHours, tz: string): boolean {
+  const hour = luxonHour(atMs, tz);
+  if (qh.startHour === qh.endHour) return false; // zero-length window = always allowed
+  if (qh.startHour < qh.endHour) return hour >= qh.startHour && hour < qh.endHour;
+  return hour >= qh.startHour || hour < qh.endHour; // wraps midnight (e.g. 23→07)
+}
+
+/** First local-time instant at/after `atMs` where the quiet window has ended. */
+export function quietWindowEnd(atMs: number, qh: QuietHours, tz: string): number {
+  let probe = DateTime.fromMillis(atMs).setZone(tz).startOf('hour');
+  for (let i = 0; i < 30; i++) {
+    if (!inQuietWindow(probe.toMillis(), qh, tz)) return probe.toMillis();
+    probe = probe.plus({ hours: 1 });
+  }
+  return atMs; // unreachable in practice
+}
+
+function luxonHour(atMs: number, tz: string): number {
+  return DateTime.fromMillis(atMs).setZone(tz).hour;
 }
