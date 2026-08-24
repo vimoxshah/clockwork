@@ -86,6 +86,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     const url = (req.raw.url ?? '').split('?')[0]!;
     const needsAuth =
       /^\/(tasks|runs|approvals|profiles|search|widget|queue|onboarding|pause-all|resume|capacity)/.test(url) ||
+      /^\/(analytics|retention|audit|policies|capabilities|targets|byok|triggers|trigger-events|ics|usage)/.test(url) ||
       url.startsWith('/events');
     if (!needsAuth) return; // /health + static UI assets carry no user data
     // SSE handled via query param (EventSource cannot set headers)
