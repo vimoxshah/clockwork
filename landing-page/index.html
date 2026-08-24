@@ -9,33 +9,57 @@
 <link rel="apple-touch-icon" href="favicon.svg" />
 <style>
   :root {
-    --ground:#0c0e14; --panel:#141824; --panel-hover:#1a1f2e; --brass:#e8a33d;
-    --ink:#e9ebf3; --mut:#9ba1b6; --dim:#6a7189; --border:#232a3d;
+    --ground:#0b0b12; --panel:#131320; --panel-hover:#1a1a2c; --brass:#e8a33d;
+    --ink:#f2f2f7; --mut:#9ba1b6; --dim:#6a7189; --border:#232338; --border-strong:#2a2a44;
     --success:#4bc97f; --info:#5ea7f0;
+    --signal:#d7f24b; /* the "live" accent — lime, like a status LED */
   }
   * { box-sizing:border-box; }
   html { scroll-behavior:smooth; }
   @media (prefers-reduced-motion: reduce) { html { scroll-behavior:auto; } * { animation:none !important; transition:none !important; } }
   body { margin:0; background:var(--ground); color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; line-height:1.6; }
-  .wrap { max-width:1060px; margin:0 auto; padding:0 24px; }
+  .wrap { max-width:1120px; margin:0 auto; padding:0 24px; }
   section { padding:72px 0; }
-  h1 { font-size:44px; letter-spacing:.1em; margin:0 0 10px; font-weight:700; line-height:1.15; }
-  h1 b { color:var(--brass); }
-  h2 { font-size:30px; margin:0 0 10px; letter-spacing:.01em; }
-  .kicker { color:var(--brass); text-transform:uppercase; letter-spacing:.22em; font-size:12px; font-weight:700; margin-bottom:14px; }
-  .sub { color:var(--mut); font-size:20px; max-width:640px; }
-  nav.top { display:flex; align-items:center; gap:18px; padding:18px 0; position:sticky; top:0; background:rgba(12,14,20,.86); backdrop-filter:blur(8px); z-index:50; border-bottom:1px solid var(--border); }
-  nav.top .word { font-weight:700; letter-spacing:.2em; font-size:14px; }
-  nav.top .word b { color:var(--brass); }
-  nav.top a { color:var(--mut); text-decoration:none; font-size:13.5px; }
-  nav.top a:hover { color:var(--ink); }
-  nav.top .cta { margin-left:auto; background:var(--brass); color:#14100a; font-weight:700; border-radius:9px; padding:9px 16px; text-decoration:none; font-size:13.5px; }
-  .btnrow { display:flex; gap:14px; margin:30px 0 14px; flex-wrap:wrap; }
-  .btn { background:var(--brass); color:#14100a; font-weight:700; border:none; border-radius:11px; padding:15px 28px; font-size:16px; cursor:pointer; text-decoration:none; display:inline-block; transition:transform .15s ease, box-shadow .15s ease; }
-  .btn:hover { transform:translateY(-2px); box-shadow:0 10px 30px rgba(232,163,61,.25); }
-  .btn.ghost { background:transparent; color:var(--ink); border:1px solid var(--border-strong,#2a3247); }
-  .hero-grid { display:grid; grid-template-columns:1fr; gap:40px; align-items:center; padding:80px 0 40px; }
-  @media (min-width:900px) { .hero-grid { grid-template-columns:1.05fr .95fr; } h1 { font-size:52px; } }
+  .display { font-family:Georgia,'Times New Roman',serif; font-style:italic; letter-spacing:0; font-weight:600; }
+  h1 { font-size:46px; margin:0 0 12px; font-weight:700; line-height:1.08; letter-spacing:-0.01em; }
+  h1 em { color:var(--signal); font-family:Georgia,serif; font-style:italic; font-weight:600; }
+  h2 { font-size:32px; margin:0 0 10px; line-height:1.15; }
+  h2 em { color:var(--signal); font-family:Georgia,serif; font-style:italic; font-weight:600; }
+  .kicker { color:var(--signal); text-transform:none; letter-spacing:.02em; font-size:13px; font-weight:500; margin-bottom:16px; display:flex; align-items:center; gap:8px; }
+  .kicker::before { content:''; width:8px; height:8px; border-radius:50%; background:var(--signal); box-shadow:0 0 10px var(--signal); animation:pulse-dot 2s infinite; }
+  @keyframes pulse-dot { 50% { opacity:.35; } }
+  .sub { color:var(--mut); font-size:19px; max-width:640px; }
+  nav.top { display:flex; align-items:center; gap:18px; padding:14px 0; position:sticky; top:0; background:rgba(11,11,18,.88); backdrop-filter:blur(10px); z-index:50; border-bottom:1px solid var(--border); }
+  nav.top .word { font-weight:800; letter-spacing:.24em; font-size:13px; }
+  nav.top .word b { color:var(--signal); }
+  nav.top a { color:rgba(255,255,255,.62); text-decoration:none; font-size:13.5px; padding:6px 10px; border-radius:8px; }
+  nav.top a:hover { color:var(--ink); background:rgba(255,255,255,.06); }
+  nav.top .cta { margin-left:auto; background:var(--signal); color:#0b0b12; font-weight:700; border-radius:999px; padding:9px 18px; text-decoration:none; font-size:13.5px; }
+  nav.top .cta:hover { background:#e4f96a; }
+  .btnrow { display:flex; gap:14px; margin:30px 0 14px; flex-wrap:wrap; align-items:center; }
+  .btn { background:var(--signal); color:#0b0b12; font-weight:700; border:none; border-radius:999px; padding:14px 28px; font-size:15.5px; cursor:pointer; text-decoration:none; display:inline-block; transition:transform .15s ease, background .15s ease; }
+  .btn:hover { transform:translateY(-2px); background:#e4f96a; }
+  .btn.ghost { background:transparent; color:var(--ink); border:1px solid var(--border-strong); border-radius:999px; }
+  .btn.ghost:hover { background:rgba(255,255,255,.06); }
+  /* Live calendar strip — the hero IS a working month grid */
+  .live-cal { background:var(--panel); border:1px solid var(--border); border-radius:18px; padding:20px; box-shadow:0 24px 70px rgba(0,0,0,.55); }
+  .live-cal .cal-head { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:14px; }
+  .live-cal .cal-title { font-size:15px; font-weight:700; }
+  .live-cal .cal-meta { color:var(--dim); font-size:12px; display:flex; gap:10px; align-items:center; }
+  .live-cal table { width:100%; border-collapse:collapse; table-layout:fixed; }
+  .live-cal th { color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.12em; padding:6px 0; text-align:left; font-weight:600; }
+  .live-cal td { border:1px solid var(--border); height:64px; vertical-align:top; padding:6px; font-size:12px; color:var(--dim); }
+  .live-cal td.today { background:rgba(215,242,75,.07); border-color:rgba(215,242,75,.45); color:var(--signal); font-weight:700; }
+  .chip { display:block; border-radius:6px; padding:3px 6px; font-size:10.5px; margin-top:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+  .chip.run { background:rgba(215,242,75,.14); color:var(--signal); }
+  .chip.meet { background:rgba(94,167,240,.16); color:#8fc3f7; }
+  .chip.ok { background:rgba(75,201,127,.15); color:#7fdca4; }
+  .chip.wait { background:rgba(232,163,61,.17); color:#f0bd72; }
+  .live-row { display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; }
+  .pill { border:1px solid var(--border-strong); border-radius:999px; padding:4px 12px; font-size:11.5px; color:var(--mut); }
+  .pill b { color:var(--ink); }
+  .hero-grid { display:grid; grid-template-columns:1fr; gap:48px; align-items:center; padding:72px 0 48px; }
+  @media (min-width:960px) { .hero-grid { grid-template-columns:.92fr 1.08fr; } h1 { font-size:56px; } }
   .shot { width:100%; border-radius:14px; border:1px solid var(--border); box-shadow:0 24px 70px rgba(0,0,0,.5); display:block; background:var(--panel); }
   .shots-2 { display:grid; grid-template-columns:1fr 1fr; gap:22px; margin-top:34px; }
   @media (max-width:760px) { .shots-2 { grid-template-columns:1fr; } }
@@ -48,7 +72,7 @@
   .loop { display:flex; gap:0; flex-wrap:wrap; margin-top:30px; counter-reset:step; }
   .step { flex:1 1 180px; background:var(--panel); border:1px solid var(--border); padding:22px; position:relative; counter-increment:step; }
   .step:first-child { border-radius:14px 0 0 14px; } .step:last-child { border-radius:0 14px 14px 0; }
-  .step::before { content:counter(step,decimal-leading-zero); color:var(--brass); font-weight:800; font-size:13px; letter-spacing:.15em; }
+  .step::before { content:counter(step,decimal-leading-zero); color:var(--signal); font-weight:800; font-size:13px; letter-spacing:.15em; }
   .step h3 { margin:6px 0 4px; font-size:17px; } .step p { margin:0; color:var(--mut); font-size:13.5px; }
   .providers { display:flex; gap:12px; flex-wrap:wrap; margin-top:26px; }
   .prov { border:1px solid var(--border); border-radius:11px; padding:12px 18px; background:var(--panel); }
@@ -56,7 +80,7 @@
   .dot-ok { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--success); margin-right:7px; }
   .reveal { opacity:0; transform:translateY(18px); transition:opacity .7s ease, transform .7s ease; }
   .reveal.in { opacity:1; transform:none; }
-  .honest { border-left:3px solid var(--brass); padding:12px 18px; color:var(--dim); font-size:14px; background:#11141d; border-radius:0 10px 10px 0; max-width:720px; }
+  .honest { border-left:3px solid var(--signal); padding:12px 18px; color:var(--dim); font-size:14px; background:#111120; border-radius:0 10px 10px 0; max-width:720px; }
   footer { border-top:1px solid var(--border); padding:36px 0 60px; color:var(--dim); font-size:13px; }
   footer a { color:var(--mut); }
 </style>
@@ -74,24 +98,39 @@
 
 <header class="wrap hero-grid">
   <div>
-    <div class="kicker">Local-first · macOS · works with the logins you already have</div>
-    <h1>Your AI agents<br/>have a <b>calendar</b> now.</h1>
-    <p class="sub">Stop babysitting terminals and cron scripts. Book agent work on a real calendar — Clockwork runs it in an isolated sandbox at the hour you chose and files a report you can actually read.</p>
+    <div class="kicker">Clockwork · live agent calendar · local-first</div>
+    <h1>Your agents have<br/>a <em>calendar</em> now.</h1>
+    <p class="sub">Verified runs. One clear view. Book recurring AI work on a real
+    calendar — Clockwork runs it in an isolated sandbox and files an honest report.</p>
     <div class="btnrow">
       <a class="btn" href="#download">Download Clockwork</a>
       <a class="btn ghost" href="#product">See it work ↓</a>
     </div>
-    <p style="color:var(--dim);font-size:13px">Free during beta · No API key · Uses your Claude Code / Codex / OpenCode / Hermes login</p>
+    <p style="color:var(--dim);font-size:13px">Free during beta · No API key needed · Uses your Claude Code / Codex / OpenCode / Hermes login</p>
   </div>
-  <figure>
-    <img class="shot" src="screens/01-calendar-month.png" alt="Clockwork month calendar with scheduled agent runs" loading="eager"/>
-    <figcaption>The default view: every agent job on one month grid.</figcaption>
-  </figure>
+
+  <!-- The hero IS a live-looking month grid, kochi.buzz style -->
+  <div class="live-cal" role="img" aria-label="Clockwork month view showing scheduled agent runs alongside meetings">
+    <div class="cal-head">
+      <span class="cal-title" id="lc-month">August 2026</span>
+      <span class="cal-meta"><span style="color:var(--signal)">●</span> 6 runs this week · next in 42m</span>
+    </div>
+    <table>
+      <thead><tr><th>Sun</th><th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th><th>Sat</th></tr></thead>
+      <tbody id="lc-body"></tbody>
+    </table>
+    <div class="live-row">
+      <span class="pill">runs today <b>4</b></span>
+      <span class="pill">needs you <b style="color:var(--signal)">1</b></span>
+      <span class="pill">spend this week <b>$1.29</b></span>
+      <span class="pill">success <b>92%</b></span>
+    </div>
+  </div>
 </header>
 
 <section id="story" class="wrap reveal" style="padding-top:40px">
   <div class="kicker">Act I — the problem</div>
-  <h2>Your agents are everywhere. Their work is nowhere.</h2>
+  <h2>Your agents are everywhere. Their work is <em>nowhere</em>.</h2>
   <p class="sub">You have powerful AI agents. But the work they do lives in terminal scrollback,
   cron tables, CI logs and chat threads — invisible, unrepeatable, unaccountable.</p>
   <svg viewBox="0 0 720 180" style="width:100%;max-width:760px;margin-top:26px" role="img" aria-label="Scattered agent work across terminals, cron and CI converging into a calendar">
@@ -114,7 +153,7 @@
 
 <section id="day" class="wrap reveal">
   <div class="kicker">Act II — your agents' workday</div>
-  <h2>Human time + agent time, on one grid.</h2>
+  <h2>Human time + agent time, <em>one grid</em>.</h2>
   <p class="sub">Clockwork overlays your meetings with scheduled agent work, so you always
   know what ran while you were heads-down — and what needs you now.</p>
   <svg viewBox="0 0 720 230" style="width:100%;max-width:700px;margin-top:26px;display:block" role="img" aria-label="Example day: meetings interleaved with agent jobs">
@@ -215,14 +254,14 @@
 
 <section id="download" class="wrap reveal" style="text-align:center;padding-bottom:40px">
   <div class="kicker">Get started</div>
-  <h2 style="font-size:38px">Give your agents a workday.</h2>
+  <h2 style="font-size:38px">Give your agents a <em>workday</em>.</h2>
   <p class="sub" style="margin:12px auto 30px;max-width:520px">Download Clockwork for Mac, connect once, book your first chore tonight.</p>
   <a class="btn" href="https://github.com/vimoxshah/clockwork/releases/latest" rel="noopener" id="dmg-cta">Download Clockwork for Mac</a>
   <p style="color:var(--dim);font-size:13px;margin-top:16px">Apple silicon · macOS 14+ · <a href="https://github.com/vimoxshah/clockwork/releases" style="color:var(--mut)">All releases &amp; checksums</a></p>
 </section>
 
 <section id="pricing" class="wrap reveal" style="padding-bottom:90px">
-  <div class="kicker" style="text-align:center">Pricing</div>
+  <div class="kicker" style="justify-content:center">Pricing</div>
   <h2 style="text-align:center;font-size:30px">Free for personal use. BYOK, always.</h2>
   <p style="text-align:center;color:var(--dim);max-width:640px;margin:10px auto 26px">
     Bring your own API keys — Clockwork never marks up provider charges.
@@ -262,7 +301,7 @@
       </ul>
     </div>
   </div>
-  <p style="text-align:center;color:var(--dim);font-size:12.5px;margin-top:18px">Clockwork is proprietary software — see the LICENSE in the repository. No payment is collected on this site yet.</p>
+  <p style="text-align:center;color:var(--dim);font-size:12.5px;margin-top:18px">Clockwork is proprietary software — previously FSL-1.1, now under the LICENSE in the repository. No payment is collected on this site yet.</p>
 </section>
 
 <footer class="wrap">
@@ -275,6 +314,46 @@
     es.forEach((e) => e.isIntersecting && e.target.classList.add('in'));
   }, { threshold: 0.12 });
   document.querySelectorAll('.reveal').forEach((el) => io.observe(el));
+
+  // Live hero calendar — real current month, real today, sample agent chips.
+  (function buildHeroCalendar() {
+    const body = document.getElementById('lc-body');
+    if (!body) return;
+    const now = new Date();
+    const y = now.getFullYear(), m = now.getMonth();
+    document.getElementById('lc-month').textContent =
+      now.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+    const first = new Date(y, m, 1);
+    const startDow = first.getDay();
+    const daysInMonth = new Date(y, m + 1, 0).getDate();
+    const today = now.getDate();
+    // Sample schedule so the grid reads as a working product, not a mock.
+    const events = {
+      4:  [['run', 'Dep audit · 09:00']],
+      7:  [['ok', 'Test sweep ✓']],
+      11: [['meet', 'Standup'], ['run', 'Docs check · 14:00']],
+      14: [['wait', 'Needs you ⚑']],
+      18: [['run', 'Dep audit · 09:00']],
+      21: [['ok', 'Nightly sweep ✓']],
+      25: [['meet', '1:1'], ['run', 'Health digest']],
+      28: [['run', 'Weekly review · 17:00']],
+    };
+    let html = '';
+    let day = 1 - startDow;
+    while (day <= daysInMonth) {
+      html += '<tr>';
+      for (let d = 0; d < 7; d++, day++) {
+        if (day < 1 || day > daysInMonth) { html += '<td></td>'; continue; }
+        const cls = day === today ? ' class="today"' : '';
+        const evs = (events[day] ?? [])
+          .map(([k, t]) => `<span class="chip ${k}">${t}</span>`)
+          .join('');
+        html += `<td${cls}>${day}${evs}</td>`;
+      }
+      html += '</tr>';
+    }
+    body.innerHTML = html;
+  })();
 </script>
 </body>
 </html>
