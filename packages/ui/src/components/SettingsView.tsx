@@ -366,7 +366,7 @@ function TriggersCard({ version }: { version: number }): JSX.Element {
 
       {created && (
         <div className="ok-banner mono" style={{ marginTop: 10 }}>
-          Webhook URL: <strong>POST /hooks/{created.id}</strong>
+          Webhook URL: <strong>{`${window.location.origin}/hooks/${created.id}`}</strong>
           {created.secret && <> · Secret (copy now — shown once): <strong>{created.secret}</strong></>}
           {!created.secret && source === 'webhook' && <> · No secret set — anyone who can reach this daemon can fire it.</>}
         </div>
@@ -389,7 +389,7 @@ function TriggersCard({ version }: { version: number }): JSX.Element {
                 ({t.source}{t.hasSecret ? ', authenticated' : ', no secret'}
                 {t.filter ? `, filter ${JSON.stringify(t.filter)}` : ''})
               </span>
-              <div className="hint mono" style={{ fontSize: 11 }}>POST /hooks/{t.id}</div>
+              <div className="hint mono" style={{ fontSize: 11 }}>{`${window.location.origin}/hooks/${t.id}`}</div>
             </div>
             <button
               className="btn"
