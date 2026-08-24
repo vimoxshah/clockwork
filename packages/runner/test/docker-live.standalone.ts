@@ -14,10 +14,17 @@ const ok = (name: string, cond: boolean): void => {
   if (!cond) issues += 1;
 };
 
-if (!(await isDockerAvailable())) {
+// Guard: this file is also picked up by vitest; when run under vitest the
+// top-level code executes and process.exit would kill the worker. Detect
+// vitest and bail out cleanly before any container work.
+const UNDER_VITEST = typeof (globalThis as { __vitest_worker__?: unknown }).__vitest_worker__ !== 'undefined';
+if (UNDER_VITEST) {
+  console.log('SKIP: docker-live test runs standalone (npx tsx), not under vitest');
+} else if (!(await isDockerAvailable())) {
   console.log('SKIP: docker daemon unavailable');
   process.exit(0);
 }
+if (!UNDER_VITEST) {
 
 // Pull a tiny image once (alpine ~3MB)
 try {
@@ -81,3 +88,4 @@ ok('fork bomb did not hang the runner', r5.error === 'timeout' || !r5.ok || r5.e
 
 console.log(`\n=== DOCKER RUNNER: ${issues === 0 ? 'ALL PASS' : issues + ' FAILURES'} ===`);
 process.exit(issues === 0 ? 0 : 1);
+}
