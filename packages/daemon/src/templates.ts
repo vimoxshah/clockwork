@@ -108,6 +108,27 @@ export function renderChainPrompt(
   });
 }
 
+/**
+ * Event placeholders (goal #27): render {{event.<dot.path>}} from the inbound
+ * trigger event stashed on the run spec. Unknown paths resolve to '(missing)'
+ * so a malformed filter never silently corrupts a prompt. Non-object payloads
+ * are wrapped so {{event.value}} still works for scalar bodies.
+ */
+export function renderEventPrompt(prompt: string, event: { source: string; payload: unknown; at: number } | null | undefined): string {
+  if (!prompt.includes('{{event')) return prompt;
+  const root = event && typeof event === 'object' ? (event.payload as Record<string, unknown>) : {};
+  const resolve = (path: string): string => {
+    const val = path
+      .split('.')
+      .reduce<unknown>((acc, key) => (acc && typeof acc === 'object' && key in (acc as Record<string, unknown>)
+        ? (acc as Record<string, unknown>)[key]
+        : undefined), root);
+    if (val === undefined || val === null) return '(missing)';
+    return typeof val === 'string' ? val : JSON.stringify(val);
+  };
+  return prompt.replace(/\{\{event\.([a-zA-Z0-9_.]+)\}\}/g, (_m, path: string) => resolve(path));
+}
+
 /** Path existence probe used by composer/preflight (shared by template apply). */
 export function pathExists(p: string | null | undefined): boolean {
   if (!p) return false;

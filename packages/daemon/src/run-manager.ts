@@ -151,6 +151,14 @@ export class RunManager {
     this.deps.keepAwake?.arm(row.id, spec.budget.timeoutSec + 300);
 
     try {
+      // Event placeholders (goal #27): materialize {{event.*}} from a trigger
+      // event BEFORE preflight so every runner sees the rendered prompt.
+      const ev = (spec as unknown as { event?: { source: string; payload: unknown; at: number } }).event;
+      if (ev && spec.prompt.includes('{{event')) {
+        const { renderEventPrompt } = await import('./templates.js');
+        spec.prompt = renderEventPrompt(spec.prompt, ev);
+      }
+
       // preflight (S-36/S-69/S-87)
       if (!spec.scratchPath) {
         const pf = preflightRepo(spec.repoPath!, spec.baseBranch);
@@ -590,6 +598,10 @@ export class RunManager {
       }
 
       const spec = this.buildChainedSpec(succ as unknown as Record<string, unknown>, runId, materializedPrompt, now);
+      // Carry the upstream event context (if any) so {{event.*}} still resolves
+      // in chained successors fired by a trigger.
+      const upEv = (upstreamSpec as unknown as { event?: unknown }).event;
+      if (upEv) (spec as unknown as { event?: unknown }).event = upEv;
       this.deps.db
         .prepare(
           `INSERT INTO runs (id, task_id, jobspec_json, state, state_changed_at, scheduled_for) VALUES (?, ?, ?, 'queued', ?, ?)`,

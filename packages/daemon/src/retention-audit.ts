@@ -90,6 +90,16 @@ export class RetentionAudit {
         .run(maxRuns);
       deleted += Number(info.changes ?? 0);
     }
+
+    // Trigger event log (goal #27): raw inbound payloads grow unboundedly and
+    // may embed third-party data — prune with the same window as runs.
+    if (runDays !== null) {
+      const cutoff = now - runDays * 86_400_000;
+      const info = this.db
+        .prepare('DELETE FROM trigger_events WHERE at < ?')
+        .run(cutoff);
+      deleted += Number(info.changes ?? 0);
+    }
     return deleted;
   }
 
