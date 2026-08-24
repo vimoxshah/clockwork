@@ -1,34 +1,49 @@
-# Privacy
+# Clockwork Privacy Policy
 
-**No Clockwork-hosted cloud. No Clockwork account. Local-first.**
+*Effective: 2026-08-24 · Version 1.0*
 
-Your data lives in `~/.clockwork/` on your machine. We can't read it, and
-there's no server to breach.
+Clockwork is **local-first**. This policy explains exactly what happens to
+data when you use it.
 
-## Where data goes when a run happens
+## What Clockwork stores, and where
 
-1. **Anthropic** — the prompt, attached context, and repo content the agent
-   reads are processed by Anthropic's API under your own login/API key. This is
-   inherent to running an agent; it's the same flow as your interactive Claude
-   Code sessions.
-2. **Deliveries you configure** — if you set up Telegram, a webhook, or email,
-   run reports go there. Nothing is delivered anywhere by default except local
-   OS notifications.
-3. **Update checks** — disabled by default in engineering builds.
+| Data | Where it lives | Who can see it |
+|---|---|---|
+| Tasks, schedules, profiles | `~/.clockwork/clockwork.sqlite` (your Mac) | You |
+| Run history, reports, transcripts | `~/.clockwork/runs/` (your Mac) | You |
+| Provider API keys | macOS Keychain (`clockwork-byok-*` entries) | Your user account only |
+| Daemon auth token | `~/.clockwork/api-token` (your Mac) | Local processes you run |
 
-We never claim "code never leaves your machine." The honest claim: **data goes
-only where you pointed it.**
+## What leaves your machine
+
+Only two categories of data ever leave your Mac:
+
+1. **Prompts and context you schedule**, sent to the AI provider you chose for
+   that task (Anthropic, OpenAI, a self-hosted endpoint, etc.). That provider's
+   privacy policy then applies to your prompts. Choose providers accordingly —
+   self-hosted endpoints keep prompts fully on-premises.
+2. **Delivery payloads you configure**: run-report notifications sent to
+   Telegram chats or webhook URLs you explicitly set up.
 
 ## What we collect
 
-Nothing in engineering builds. Planned beta builds ship consent-screened,
-structure-only telemetry (outcome counts, incident flags — never prompts,
-paths, or code) so kill-criteria metrics stay observable without reading your
-content (VISION §10). GA builds are opt-in.
+**Nothing.** The authors operate no telemetry, analytics, crash reporting, or
+phone-home service. The daemon listens only on `127.0.0.1` and makes no
+connections to infrastructure controlled by the authors.
 
-## Always-on, local-only safety journal
+## AI provider keys
 
-`~/.clockwork/safety-journal.jsonl` records deny-list hits, sandbox violations,
-budget hard-stops, and approval decisions. It exists so *you* — and only you —
-can audit what runs tried to do. One-click anonymized incident reporting builds
-on it from first beta.
+API keys you enter are written directly to your macOS Keychain by the Clockwork
+daemon and read back only at run start. They are never stored in the database,
+log files, or task payloads, and never transmitted anywhere except to the
+provider endpoint you configured.
+
+## Cloud execution
+
+If/when cloud execution targets ship, this policy will be updated before the
+feature ships to describe exactly what is sent where. No cloud execution
+occurs in the current version.
+
+## Contact
+
+Questions about this policy: open an issue on the repository.

@@ -843,6 +843,12 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
   // ---- policy engine (goal #38): enterprise guardrails ----
   app.get('/policies', async () => policies.get());
 
+  // ---- capability matrix (goal #43): honest feature gating ----
+  app.get('/capabilities', async () => {
+    const { capabilityMatrix, getTier } = await import('./features.js');
+    return { tier: getTier(), features: capabilityMatrix() };
+  });
+
   app.put('/policies', async (req, reply) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
     try {
