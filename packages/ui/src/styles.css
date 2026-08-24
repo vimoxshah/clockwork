@@ -324,3 +324,10 @@ label.f { display: block; color: var(--muted); font-size: 12px; margin: 12px 0 4
   .inbox-layout { grid-template-columns: 1fr; height: auto; }
   .inbox-list { border-right: none; max-height: 40vh; }
 }
+
+/* Accessibility (goal #73): honor reduced-motion preference in the app UI. */
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation-duration: 2.4s; }
+  .cal-event.st-needsyou, .chip.needs-you, .pulse-dot { animation: none; }
+  * { transition-duration: 0.01ms !important; }
+}
