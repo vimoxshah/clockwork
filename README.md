@@ -74,6 +74,19 @@ REPEAT  Make it weekly. Search every past run forever.
   ⌘K command palette everywhere
 - 💰 **Budget enforcement by the supervisor** — USD soft cap, turn limits,
   wall-clock timeouts enforced outside the model
+- 🔗 **Agent chains** — sequence agents (scan → fix → test → PR); each stage
+  waits for its upstream and receives its report via `{{previous.report}}`
+- 🔑 **Bring your own key** — OpenAI-compatible API providers (Anthropic,
+  OpenAI, Google, OpenRouter, xAI, Mistral, DeepSeek, Ollama, custom gateways)
+  with keys sealed in the macOS Keychain, connection validation, and clear
+  separation from CLI-subscription billing
+- 🐳 **Remote execution target** — run agents in ephemeral Docker containers
+  with filesystem isolation, no-network-by-default, CPU/memory/pids caps, and
+  runtime-only credential injection
+- 🏛 **Governance built-in** — policy engine (engine allow-lists, per-run cost
+  ceilings, approval thresholds), append-only audit log, retention sweeps
+- 📊 **Cost & reliability analytics** — spend by task/provider/day with
+  optimization suggestions that surface money-burning failures
 - 🏠 **Local-first** — SQLite in `~/.clockwork`, loopback-only API, no account,
   no cloud, no telemetry
 
@@ -258,13 +271,20 @@ themes, palette, providers, ICS overlay, 1000-task benchmarks).
 ## 🗺 Roadmap
 
 - [x] Multi-provider execution (Claude/Codex/OpenCode/Hermes)
+- [x] BYOK API providers (8 kinds, Keychain-stored, validated)
 - [x] Command palette + shortcut registry
 - [x] Human calendar overlay (ICS)
 - [x] 1000-task scale verification
-- [ ] RRULE expansion for external calendars
+- [x] Agent chains (chain-after + trigger states + `{{previous.report}}` hand-off)
+- [x] Docker execution target (ephemeral, network-isolated, resource-capped)
+- [x] Governance: policy engine, audit log, retention, capability matrix
+- [ ] Event-triggered agents (GitHub/Slack/webhook → task)
 - [ ] Chaining v2 (fan-in/out DAGs)
+- [ ] RRULE expansion for external calendars
 - [ ] Team delivery targets (Slack/Telegram webhooks GA)
 - [ ] Signed & notarized desktop builds
+- [ ] Kubernetes / cloud execution targets beyond Docker
+- [ ] SSO / SCIM for enterprise deployments
 
 ## License
 
