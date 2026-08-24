@@ -76,7 +76,24 @@ describe('S-72 chain validation (linear only)', () => {
       // a -> b would close the cycle a->b->a
       expect(validateChain(db, 'a', 'b')).toMatch(/cycle/);
       expect(validateChain(db, 'c', 'ghost')).toMatch(/not found/);
-      expect(validateChain(db, 'c', 'a')).toBeNull(); // legal linear
+      // c -> a is rejected: b already occupies a's single successor slot
+      expect(validateChain(db, 'c', 'a')).toMatch(/already has a chained successor/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a second successor on the same predecessor (linear invariant)', () => {
+    const { db, dir } = freshDb();
+    try {
+      const now = Date.now();
+      db.prepare(`INSERT INTO tasks (id, name, prompt, created_at, updated_at) VALUES ('a','a','p',?,?)`).run(now, now);
+      db.prepare(`INSERT INTO tasks (id, name, prompt, chain_after, created_at, updated_at) VALUES ('b','b','p','a',?,?)`).run(now, now);
+      db.prepare(`INSERT INTO tasks (id, name, prompt, created_at, updated_at) VALUES ('c','c','p',?,?)`).run(now, now);
+      // c also chaining to a would give a two children — fan-out is not supported
+      expect(validateChain(db, 'c', 'a')).toMatch(/already has a chained successor/);
+      // re-pointing b itself stays legal (id != self exemption)
+      expect(validateChain(db, 'b', 'a')).toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

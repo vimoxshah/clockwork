@@ -185,6 +185,15 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     }
     const v = validateAndMaterialize(parsed.data);
     if (!v.ok) return reply.code(422).send({ error: v.error });
+    // S-72: chain validation at creation too (linear, no cycles, one successor)
+    if (parsed.data.chainAfter) {
+      const { validateChain } = await import('./templates.js');
+      const cerr = validateChain(deps.db, '', parsed.data.chainAfter === '' ? null : parsed.data.chainAfter);
+      if (cerr && !cerr.includes('not found')) {
+        // empty taskId only skips the self-check; cycle/child rules still apply
+        if (cerr.includes('cycle') || cerr.includes('successor')) return reply.code(422).send({ error: cerr });
+      }
+    }
     // Policy gate (goal #38): reject policy-violating tasks at creation.
     const pv = evaluatePolicy(parsed.data.engine, parsed.data.byokId, parsed.data.budget.maxUsd);
     if (pv) {

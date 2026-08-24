@@ -60,11 +60,14 @@ export function validateTemplateApply(
 export function validateChain(db: DB, taskId: string, chainAfter: string | null): string | null {
   if (!chainAfter) return null;
   if (chainAfter === taskId) return 'a task cannot chain to itself';
-  // at most one predecessor AND at most one successor per task (linear)
+  // at most one successor per task (linear chains): the predecessor must not
+  // already have another enabled child waiting on it.
   const existingChild = db
-    .prepare('SELECT id FROM tasks WHERE chain_after=? AND deleted_at IS NULL')
-    .get(chainAfter);
-  void existingChild;
+    .prepare('SELECT id FROM tasks WHERE chain_after=? AND deleted_at IS NULL AND id != ?')
+    .get(chainAfter, taskId);
+  if (existingChild) {
+    return `task "${chainAfter}" already has a chained successor (${(existingChild as any).id}); a task can have only one`;
+  }
   // walk up from chainAfter; cycle => reject
   let cur = chainAfter;
   const seen = new Set<string>([taskId]);
