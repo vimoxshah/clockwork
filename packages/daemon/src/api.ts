@@ -12,6 +12,7 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { ByokStore, validateProvider, keychainGet } from './byok.js';
 import { RetentionAudit } from './retention-audit.js';
+import { PolicyEngine } from './policy-engine.js';
 import {
   TaskCreate,
   TaskPatch,
@@ -170,6 +171,12 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     }
     const v = validateAndMaterialize(parsed.data);
     if (!v.ok) return reply.code(422).send({ error: v.error });
+    // Policy gate (goal #38): reject policy-violating tasks at creation.
+    const pv = evaluatePolicy(parsed.data.engine, parsed.data.byokId, parsed.data.budget.maxUsd);
+    if (pv) {
+      audit('task.create_rejected', 'task', undefined, { ...pv, name: parsed.data.name });
+      return reply.code(403).send(pv);
+    }
     const row = tasks.create(parsed.data, v.profileId, v.nextFire);
     indexTask(deps.db, row.id, row.name, row.prompt);
     audit('task.create', 'task', row.id, { name: row.name, engine: parsed.data.engine ?? null, byokId: parsed.data.byokId ?? null });
@@ -217,6 +224,16 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     const res = tasks.patch((req.params as any).id, parsed.data, (req.body as any)?.version, nextFire ?? null);
     if (res === 'not_found') return reply.code(404).send({ error: 'not_found' });
     if (res === 'version_conflict') return reply.code(409).send({ error: 'version_conflict' }); // S-82
+    // Policy gate on edits that change engine/byok/budget.
+    const pvEdit = evaluatePolicy(
+      parsed.data.engine ?? (res as unknown as { engine?: string }).engine ?? undefined,
+      'byokId' in parsed.data ? ((parsed.data as unknown as { byokId?: string }).byokId ?? undefined) : undefined,
+      parsed.data.budget?.maxUsd ?? res.budget_usd,
+    );
+    if (pvEdit) {
+      audit('task.update_rejected', 'task', res.id, { ...pvEdit });
+      return reply.code(403).send(pvEdit);
+    }
     audit('task.update', 'task', res.id, { fields: Object.keys(parsed.data) });
     broadcast({ type: 'task.changed', taskId: res.id, at: Date.now() });
     const s = tasks.scheduleFor(res.id);
@@ -779,6 +796,13 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
 
   // ---- providers (ADR-026): detect installed CLIs + versions ----
   const retentionAudit = new RetentionAudit(deps.db);
+  const policies = new PolicyEngine(deps.db);
+
+  /** Policy gate (goal #38): fail-closed evaluation of a prospective job. */
+  const evaluatePolicy = (engine: string | null | undefined, byokId: string | null | undefined, budgetUsd: number): { violation: string } | null => {
+    const v = policies.evaluate({ engine: engine ?? 'cli', byokId: byokId ?? null, requestedBudgetUsd: budgetUsd });
+    return v ? { violation: `${v.code}: ${v.message}` } : null;
+  };
 
   /** Audit helper: record a control-plane mutation with result snapshot. */
   const audit = (action: string, targetType: string | undefined, targetId: string | undefined, detail?: Record<string, unknown>): void => {
@@ -814,6 +838,24 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     const limit = Math.min(500, Math.max(1, parseInt(String(q.limit ?? '200'), 10)));
     const offset = Math.max(0, parseInt(String(q.offset ?? '0'), 10));
     return { entries: retentionAudit.list(limit, offset) };
+  });
+
+  // ---- policy engine (goal #38): enterprise guardrails ----
+  app.get('/policies', async () => policies.get());
+
+  app.put('/policies', async (req, reply) => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    try {
+      policies.set({
+        ...(Array.isArray(b.allowedEngines) ? { allowedEngines: b.allowedEngines as string[] } : {}),
+        ...(b.maxCostPerRunUsd !== undefined ? { maxCostPerRunUsd: b.maxCostPerRunUsd as number | null } : {}),
+        ...(b.requireApprovalOverUsd !== undefined ? { requireApprovalOverUsd: b.requireApprovalOverUsd as number | null } : {}),
+      });
+      audit('policy.update', 'settings', 'policies', { ...b });
+      return policies.get();
+    } catch (e) {
+      return reply.code(422).send({ error: String((e as Error).message ?? e) });
+    }
   });
 
 
