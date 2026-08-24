@@ -35,6 +35,7 @@ import type { DB } from './db.js';
 import type { Clock } from './clock.js';
 import type { ChildToDaemon } from './runner-protocol.js';
 import { ByokStore, keychainGet } from './byok.js';
+import { buildJobSpec } from './scheduler.js';
 
 export interface RunManagerDeps {
   db: DB;
@@ -520,8 +521,93 @@ export class RunManager {
       outcome.state === 'completed' ? `Completed · $${(outcome.costUsd ?? 0).toFixed(2)} · ${outcome.turns ?? 0} turns` : `Ended ${outcome.state}${'failureReason' in outcome && outcome.failureReason ? ` (${outcome.failureReason})` : ''}`,
     );
 
+    // Agent chains (goal #28): fire downstream tasks waiting on this one.
+    try {
+      await this.fireChainedTasks(runId, spec, outcome.state, now);
+    } catch (e) {
+      this.recordEvent(now, runId, 'note', { chainError: String(e) });
+    }
+
     // pump successors waiting on the freed slot/mutex
     this.pump();
+  }
+
+  /**
+   * Chain firing (S-70/S-71, goal #28): any task with chain_after = completedTaskId
+   * gets enqueued when the upstream run hits its trigger state. The chained run's
+   * prompt is materialized through renderChainPrompt so {{previous.report}} /
+   * {{previous.artifacts}} carry the upstream output forward.
+   */
+  private async fireChainedTasks(
+    runId: string,
+    upstreamSpec: JobSpec,
+    terminalState: string,
+    now: number,
+  ): Promise<void> {
+    const successors = this.deps.db
+      .prepare('SELECT * FROM tasks WHERE chain_after = ? AND deleted_at IS NULL AND enabled = 1')
+      .all(upstreamSpec.taskId) as unknown as Array<Record<string, unknown>>;
+    if (successors.length === 0) return;
+
+    const triggerOk = terminalState === 'completed' || terminalState === 'budget_exceeded';
+    const anyTerminal = ['completed', 'failed', 'timed_out', 'cancelled', 'budget_exceeded'].includes(terminalState);
+
+    for (const succ of successors) {
+      const chainOn = String(succ.chain_on ?? 'completed');
+      const shouldFire = chainOn === 'any_terminal' ? anyTerminal : triggerOk;
+      if (!shouldFire) {
+        this.recordEvent(now, runId, 'chain_skipped', {
+          successor: String(succ.id),
+          reason: `upstream ended '${terminalState}', chain_on='${chainOn}'`,
+        });
+        continue;
+      }
+
+      const prevRun = this.deps.db
+        .prepare(
+          `SELECT report_json FROM runs WHERE task_id=? ORDER BY COALESCE(ended_at, scheduled_for) DESC LIMIT 1`,
+        )
+        .get(upstreamSpec.taskId) as unknown as { report_json: string | null } | undefined;
+
+      const { renderChainPrompt, pathExists } = await import('./templates.js');
+      const rawPrompt = String(succ.prompt ?? '');
+      // Only render the template if the successor actually uses placeholders;
+      // otherwise the user's own full prompt stands alone.
+      const materializedPrompt = rawPrompt.includes('{{previous')
+        ? renderChainPrompt(rawPrompt, prevRun)
+        : rawPrompt;
+
+      // Repo preflight for the successor (fail loudly, never half-fire).
+      const repoPath = (succ.repo_path as string | null) ?? '';
+      if (repoPath && !pathExists(repoPath)) {
+        this.failRun(
+          runId,
+          'chain_preflight',
+          `Successor "${succ.name}" repo missing: ${repoPath}`,
+          now,
+        );
+        continue;
+      }
+
+      const spec = this.buildChainedSpec(succ as unknown as Record<string, unknown>, runId, materializedPrompt, now);
+      this.deps.db
+        .prepare(
+          `INSERT INTO runs (id, task_id, jobspec_json, state, state_changed_at, scheduled_for) VALUES (?, ?, ?, 'queued', ?, ?)`,
+        )
+        .run(spec.runId, succ.id, JSON.stringify(spec), now, now);
+      this.recordEvent(now, spec.runId, 'state_changed', {
+        to: 'queued',
+        via: 'chain',
+        upstreamRunId: runId,
+        upstreamState: terminalState,
+      });
+    }
+  }
+
+  /** Build a JobSpec for a chain-triggered task (reuses scheduler's builder). */
+  private buildChainedSpec(succ: Record<string, unknown>, upstreamRunId: string, prompt: string, now: number): JobSpec {
+    const row = { ...succ, prompt } as unknown as Parameters<typeof buildJobSpec>[1];
+    return buildJobSpec(newId(), row, now, now, this.deps.db);
   }
 
   failRun(runId: string, reason: string, message: string, now: number): void {

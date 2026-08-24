@@ -263,6 +263,10 @@ export const TaskCreate = z.object({
   missedPolicy: MissedPolicy.default('run-late'),
   missedWindowSec: z.number().int().positive().default(21_600),
   retryOnTransient: z.boolean().default(false),
+  /** Agent chains (goal #28): run this task after the named upstream task completes */
+  chainAfter: z.string().optional(),
+  /** Chain trigger: 'completed' (default) or 'any_terminal' (completed or failed) */
+  chainOn: z.enum(['completed', 'any_terminal']).optional(),
   context: ContextAttachments.default({ files: [] }),
   delivery: DeliveryConfig.default({ osNotify: true }),
 });
@@ -271,6 +275,9 @@ export type TaskCreate = z.infer<typeof TaskCreate>;
 export const TaskPatch = z.object({
   engine: Engine.optional(),
   byokId: z.string().nullable().optional(),
+  /** Agent chains (goal #28) — nullable to allow unchaining */
+  chainAfter: z.string().nullable().optional(),
+  chainOn: z.enum(['completed', 'any_terminal']).optional(),
   name: z.string().min(1).max(120).optional(),
   prompt: z.string().min(1).max(32_000).optional(),
   profileId: z.string().nullable().optional(),

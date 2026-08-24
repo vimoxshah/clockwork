@@ -56,6 +56,20 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
   const tasks = new TaskRepo(deps.db);
   const profiles = new ProfileRepo(deps.db);
   const runs = new RunRepo(deps.db);
+  // Governance services (goals #38/#40/#41) — declared early so all routes can use them.
+  const retentionAudit = new RetentionAudit(deps.db);
+  const policies = new PolicyEngine(deps.db);
+  /** Audit helper: record a control-plane mutation with result snapshot. */
+  const audit = (action: string, targetType: string | undefined, targetId: string | undefined, detail?: Record<string, unknown>): void => {
+    try {
+      retentionAudit.log({ at: Date.now(), action, targetType, targetId, detail });
+    } catch { /* audit must never break the request path */ }
+  };
+  /** Policy gate (goal #38): fail-closed evaluation of a prospective job. */
+  const evaluatePolicy = (engine: string | null | undefined, byokId: string | null | undefined, budgetUsd: number): { violation: string } | null => {
+    const v = policies.evaluate({ engine: engine ?? 'cli', byokId: byokId ?? null, requestedBudgetUsd: budgetUsd });
+    return v ? { violation: `${v.code}: ${v.message}` } : null;
+  };
   const token = loadOrCreateToken(deps.dataDir);
   const sseClients = new Set<FastifyReply>();
 
@@ -828,21 +842,6 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
   });
 
   // ---- providers (ADR-026): detect installed CLIs + versions ----
-  const retentionAudit = new RetentionAudit(deps.db);
-  const policies = new PolicyEngine(deps.db);
-
-  /** Policy gate (goal #38): fail-closed evaluation of a prospective job. */
-  const evaluatePolicy = (engine: string | null | undefined, byokId: string | null | undefined, budgetUsd: number): { violation: string } | null => {
-    const v = policies.evaluate({ engine: engine ?? 'cli', byokId: byokId ?? null, requestedBudgetUsd: budgetUsd });
-    return v ? { violation: `${v.code}: ${v.message}` } : null;
-  };
-
-  /** Audit helper: record a control-plane mutation with result snapshot. */
-  const audit = (action: string, targetType: string | undefined, targetId: string | undefined, detail?: Record<string, unknown>): void => {
-    try {
-      retentionAudit.log({ at: Date.now(), action, targetType, targetId, detail });
-    } catch { /* audit must never break the request path */ }
-  };
 
   app.get('/retention', async () => retentionAudit.getPrefs());
 
