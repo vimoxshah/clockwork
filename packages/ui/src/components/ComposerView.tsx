@@ -77,12 +77,14 @@ export default function ComposerView({
 }): JSX.Element {
   const [profiles, setProfiles] = useState<ProfileRow[]>([]);
   const [providers, setProviders] = useState<Array<{ id: string; label: string; detected: boolean; version: string | null }>>([]);
+  const [byokConfigs, setByokConfigs] = useState<Array<{ id: string; label: string; default_model: string; last_error: string | null }>>([]);
   const [form, setForm] = useState(() => ({
     name: '',
     prompt: '',
     repoPath: '',
     profileId: '',
     providerId: 'claude',
+    byokId: '',
     permissionMode: 'acceptEdits' as 'plan' | 'acceptEdits',
     maxUsd: '2',
     maxTurns: '50',
@@ -105,6 +107,7 @@ export default function ComposerView({
   useEffect(() => {
     void api.profiles().then(setProfiles).catch(() => {});
     void api.providers().then(setProviders).catch(() => {});
+    void api.byok().then((b) => setByokConfigs((b as { configs: Array<{ id: string; label: string; default_model: string; last_error: string | null }> }).configs ?? [])).catch(() => {});
   }, []);
 
   // Calendar "Book a run this day" prefill arrives after mount.
@@ -163,6 +166,7 @@ export default function ComposerView({
     setBusy(true);
     try {
       const engine = form.providerId === 'claude' ? 'cli' : form.providerId;
+      const byok = byokConfigs.find((b) => b.id === form.byokId);
       await api.createTask({
         name: form.name.trim() || 'Untitled task',
         prompt: form.prompt,
@@ -177,6 +181,8 @@ export default function ComposerView({
         delivery: { osNotify: true },
         schedule,
         engine: engine as 'cli',
+        byokId: form.byokId || undefined,
+        model: byok?.default_model ?? undefined,
       });
       onDone();
     } catch (e) {
@@ -307,6 +313,29 @@ export default function ComposerView({
                     ? `${activeProvider.label} · ${activeProvider.version}`
                     : `${activeProvider.label} not installed`}
                 </p>
+              )}
+              {byokConfigs.length > 0 && (
+                <div className="mt-2">
+                  <Label htmlFor="c-byok">…or use an API provider (BYOK)</Label>
+                  <select
+                    id="c-byok"
+                    value={form.byokId}
+                    onChange={(e) => setForm({ ...form, byokId: e.target.value })}
+                    style={{ padding: '6px 8px', width: '100%' }}
+                  >
+                    <option value="">None — use CLI engine above</option>
+                    {byokConfigs.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.label} · {b.default_model}
+                      </option>
+                    ))}
+                  </select>
+                  {byokConfigs.find((b) => b.id === form.byokId) && (
+                    <p className="mt-1 text-xs text-dim">
+                      Runs via API with your key (billed to your provider account, separate from any subscription). Configure keys in Settings → API providers.
+                    </p>
+                  )}
+                </div>
               )}
             </Section>
 
