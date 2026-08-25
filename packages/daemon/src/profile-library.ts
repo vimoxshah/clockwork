@@ -11,6 +11,7 @@ const UNATTENDED = 'You are running unattended on a schedule inside an isolated 
 export const EXTRA_PROFILES: BundledProfile[] = [
   {
     slug: 'test-doctor',
+    category: 'Engineering',
     name: 'Test Doctor',
     color: '#F2A7B9',
     glyph: '✚',
@@ -20,6 +21,7 @@ export const EXTRA_PROFILES: BundledProfile[] = [
   },
   {
     slug: 'bug-hunter',
+    category: 'Engineering',
     name: 'Bug Hunter',
     color: '#E05C5C',
     glyph: '◎',
@@ -29,6 +31,7 @@ export const EXTRA_PROFILES: BundledProfile[] = [
   },
   {
     slug: 'code-reviewer',
+    category: 'Engineering',
     name: 'Code Reviewer',
     color: '#5EA7F0',
     glyph: '⌕',
@@ -38,6 +41,7 @@ export const EXTRA_PROFILES: BundledProfile[] = [
   },
   {
     slug: 'refactor-engineer',
+    category: 'Engineering',
     name: 'Refactor Engineer',
     color: '#7FD8C8',
     glyph: '⟐',
@@ -47,6 +51,7 @@ export const EXTRA_PROFILES: BundledProfile[] = [
   },
   {
     slug: 'perf-engineer',
+    category: 'Engineering',
     name: 'Performance Engineer',
     color: '#E8A33D',
     glyph: '⚡',
@@ -56,6 +61,8 @@ export const EXTRA_PROFILES: BundledProfile[] = [
   },
   {
     slug: 'security-auditor',
+    category: 'Security',
+    featured: true,
     name: 'Security Auditor',
     color: '#C85A5A',
     glyph: '⛨',
@@ -65,6 +72,8 @@ export const EXTRA_PROFILES: BundledProfile[] = [
   },
   {
     slug: 'release-engineer',
+    category: 'Engineering',
+    featured: true,
     name: 'Release Engineer',
     color: '#4BC97F',
     glyph: '▲',
@@ -74,6 +83,7 @@ export const EXTRA_PROFILES: BundledProfile[] = [
   },
   {
     slug: 'ci-investigator',
+    category: 'Operations',
     name: 'CI Investigator',
     color: '#9BA1B6',
     glyph: '⚙',
@@ -83,6 +93,7 @@ export const EXTRA_PROFILES: BundledProfile[] = [
   },
   {
     slug: 'repo-health-monitor',
+    category: 'Operations',
     name: 'Repo Health Monitor',
     color: '#B9A7F2',
     glyph: '♥',
@@ -92,6 +103,7 @@ export const EXTRA_PROFILES: BundledProfile[] = [
   },
   {
     slug: 'changelog-writer',
+    category: 'Documentation',
     name: 'Changelog Writer',
     color: '#7FA8F2',
     glyph: '≡',

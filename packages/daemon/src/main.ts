@@ -16,7 +16,11 @@ import { seedBuiltinProfiles, makeSkillResolver } from './profiles.js';
 import { Notifier } from './notifier.js';
 import { readPrefs } from './api.js';
 
-const DAEMON_VERSION = '0.1.0';
+// Single source of truth: the daemon package.json. Keeps --version, /health,
+// and the UI footer in lockstep with releases (no more hardcoded literals).
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const DAEMON_VERSION: string = require('../package.json').version;
 
 export async function main(argv: string[] = process.argv): Promise<number> {
   const dataDir = process.env.CLOCKWORK_HOME ?? `${process.env.HOME}/.clockwork`;
