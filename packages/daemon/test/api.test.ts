@@ -74,6 +74,22 @@ describe('auth', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual([]);
   });
+
+  it('rejects unauthenticated access to calendar ICS sources (data route)', async () => {
+    const res = await app.inject({ method: 'GET', url: '/calendars/ics' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('rejects unauthenticated template preview/import (control-plane routes)', async () => {
+    const preview = await app.inject({
+      method: 'POST',
+      url: '/templates/preview',
+      payload: { schema: 'clockwork.template.v1', name: 'x', prompt: 'y' },
+    });
+    expect(preview.statusCode).toBe(401);
+    const imp = await app.inject({ method: 'POST', url: '/templates/import', payload: {} });
+    expect(imp.statusCode).toBe(401);
+  });
 });
 
 describe('task CRUD + validation', () => {

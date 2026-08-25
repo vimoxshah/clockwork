@@ -87,6 +87,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     const needsAuth =
       /^\/(tasks|runs|approvals|profiles|search|widget|queue|onboarding|pause-all|resume|capacity)/.test(url) ||
       /^\/(analytics|retention|audit|policies|capabilities|targets|byok|triggers|trigger-events|ics|usage)/.test(url) ||
+      /^\/(calendars|templates)\//.test(url) || // S-audit: ICS export leaks task data; template preview is control plane
       url.startsWith('/events');
     if (!needsAuth) return; // /health + static UI assets carry no user data
     // SSE handled via query param (EventSource cannot set headers)
