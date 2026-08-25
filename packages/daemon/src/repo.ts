@@ -225,6 +225,9 @@ export interface ProfileRow {
   system_prompt_extra: string | null;
   delivery_json: string | null;
   builtin: number;
+  /** Agent Library grouping (migration 0006). */
+  category?: string | null;
+  featured?: number;
 }
 
 export class ProfileRepo {
@@ -257,6 +260,12 @@ export class ProfileRepo {
         p.context_roots_json, p.system_prompt_extra, p.delivery_json, p.builtin,
         Date.now(), Date.now(),
       );
+    // Agent Library metadata (0006): keep in sync without clobbering the row.
+    if (p.category !== undefined || p.featured !== undefined) {
+      this.db
+        .prepare('UPDATE profiles SET category=?, featured=? WHERE slug=?')
+        .run(p.category ?? null, p.featured ?? 0, p.slug);
+    }
   }
 }
 

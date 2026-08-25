@@ -25,6 +25,46 @@ const BUILTIN_EXPLAIN: Record<string, { what: string; use: string }> = {
     what: 'Documentation hygiene from evidence in the repo: fixes drift, keeps voice, never invents features. One commit per run.',
     use: 'Friday docs sweeps, README/CHANGELOG freshness.',
   },
+  'test-doctor': {
+    what: 'Flaky-test triage: classifies failures as broken, flaky, or obsolete; proposes minimal fixes and never weakens assertions to go green.',
+    use: 'Nightly CI hygiene on repos with noisy suites.',
+  },
+  'bug-hunter': {
+    what: 'Evidence-first defect investigation — forms hypotheses, gathers proof from code and logs, pinpoints root cause before touching anything.',
+    use: '“Why is this failing?” investigations you want done while you sleep.',
+  },
+  'code-reviewer': {
+    what: 'Read-only review of recent changes across correctness, security, error handling, and clarity — severity-rated findings with file:line evidence.',
+    use: 'Pre-PR review passes on every branch, before a human reviewer spends time.',
+  },
+  'refactor-engineer': {
+    what: 'Small, behavior-preserving refactors with tests proving equivalence. Rejects opportunistic rewrites by contract.',
+    use: 'Paying down tech debt one safe, reviewable step at a time.',
+  },
+  'perf-engineer': {
+    what: 'Measures before optimizing: profiles hotspots, quantifies wins, and only lands changes with before/after numbers.',
+    use: 'Scheduled performance patrols on latency-sensitive services.',
+  },
+  'security-auditor': {
+    what: 'Adversarial read of the codebase: injection, secrets handling, authz gaps, unsafe deserialization, supply-chain risk. Findings-only — never edits.',
+    use: 'Weekly security sweeps between real audits.',
+  },
+  'release-engineer': {
+    what: 'Release preparation: changelog drafts from history, version bumps, build verification, release-notes assembly. Never publishes on its own.',
+    use: 'Cutting predictable weekly releases without the ritual.',
+  },
+  'ci-investigator': {
+    what: 'CI failure triage: reads logs, isolates the failing step, distinguishes infra flakes from real breakage, proposes the smallest fix.',
+    use: 'Overnight red-build investigation so mornings start green.',
+  },
+  'repo-health-monitor': {
+    what: 'Read-only health patrol: stale branches, aging TODOs, failing schedules, dependency drift, unowned areas — a prioritized watchlist each run.',
+    use: 'A weekly pulse check for repos nobody has time to inspect.',
+  },
+  'changelog-writer': {
+    what: 'Turns commit history into an honest, human-readable changelog: user-facing changes first, internal churn summarized, nothing invented.',
+    use: 'Keeping CHANGELOG.md and release notes truthful automatically.',
+  },
 };
 
 interface ProfileRowT {
@@ -40,6 +80,8 @@ interface ProfileRowT {
   max_turns?: number | null;
   skills_json?: string;
   builtin?: number;
+  category?: string | null;
+  featured?: number;
 }
 
 const COLOR_SWATCHES = ['#E8A33D', '#7FD8C8', '#B9A7F2', '#5EA7F0', '#4BC97F', '#E05C5C', '#9BA1B6', '#F2D06B'];
@@ -48,14 +90,33 @@ const GLYPHS = ['◆', '✚', '✎', '⚡', '🛠', '🧪', '📊', '🤖'];
 export default function AgentsView({ version }: { version: number }): JSX.Element {
   const profiles = useAsync(() => api.profiles(), [version]);
   const [creating, setCreating] = useState(false);
+  const [query, setQuery] = useState('');
+  const [category, setCategory] = useState<string>('All');
+
+  const all = profiles.data ?? [];
+  const categories = ['All', ...Array.from(new Set(all.map((p) => p.category).filter((c): c is string => !!c))).sort()];
+  const q = query.trim().toLowerCase();
+  const visible = all.filter((p) => {
+    if (category !== 'All' && (p.category ?? 'Uncategorized') !== category) return false;
+    if (!q) return true;
+    return (
+      p.name.toLowerCase().includes(q) ||
+      p.slug.toLowerCase().includes(q) ||
+      (p.category ?? '').toLowerCase().includes(q) ||
+      (BUILTIN_EXPLAIN[p.slug]?.what ?? '').toLowerCase().includes(q)
+    );
+  });
+  // Featured first, then built-ins, then custom — stable within each tier.
+  const sorted = [...visible].sort((a, b) =>
+    (b.featured ?? 0) - (a.featured ?? 0) || (b.builtin ?? 0) - (a.builtin ?? 0) || a.name.localeCompare(b.name));
 
   return (
     <div className="agents-page">
       <div className="mb-3 flex items-center justify-between">
         <div>
-          <h2 className="text-base font-semibold">Agent profiles</h2>
+          <h2 className="text-base font-semibold">Agent Library</h2>
           <p className="text-xs text-muted">
-            A profile is a named persona: its skills load into every run booked with it, plus its own
+            A profile is a named persona: its instructions load into every run booked with it, plus its own
             model, permission mode, and budget defaults.
           </p>
         </div>
@@ -64,14 +125,42 @@ export default function AgentsView({ version }: { version: number }): JSX.Elemen
         </Button>
       </div>
 
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <Input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search agents — name, skill, or what they do…"
+          aria-label="Search agent library"
+          className="max-w-sm"
+        />
+        {categories.map((c) => (
+          <button
+            key={c}
+            onClick={() => setCategory(c)}
+            aria-pressed={category === c}
+            className={`rounded-full border px-3 py-1 text-xs transition-colors ${
+              category === c ? 'border-accent bg-surface-active text-fg' : 'border-border text-muted hover:bg-surface-hover'
+            }`}
+          >
+            {c}
+          </button>
+        ))}
+      </div>
+
       {profiles.loading && <p className="state-line">Loading…</p>}
       {profiles.error && <div className="error-banner">{profiles.error}</div>}
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-        {(profiles.data ?? []).map((p) => (
-          <ProfileCard key={p.id} p={p} />
-        ))}
-      </div>
+      {sorted.length === 0 && !profiles.loading ? (
+        <p className="state-line">
+          No agents match {q ? `“${query}”` : 'this filter'}. Clear the search or create a new profile.
+        </p>
+      ) : (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+          {sorted.map((p) => (
+            <ProfileCard key={p.id} p={p} />
+          ))}
+        </div>
+      )}
 
       <CreateProfileDialog
         open={creating}
@@ -105,6 +194,7 @@ function ProfileCard({ p }: { p: ProfileRowT }): JSX.Element {
             <div className="flex items-center gap-2">
               <strong className="truncate text-[13px]">{p.name}</strong>
               {!!p.builtin && <Badge variant="info">built-in</Badge>}
+              {p.category && <Badge variant="outline">{p.category}</Badge>}
             </div>
             <code className="text-xxs text-dim">@{p.slug}</code>
           </div>

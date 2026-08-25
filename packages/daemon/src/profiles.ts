@@ -16,6 +16,10 @@ export interface BundledProfile {
   glyph: string;
   skills: Array<{ name: string; version: string }>;
   systemPromptExtra: string;
+  /** Agent Library grouping (goal #9). */
+  category?: string;
+  /** Featured in the Agent Library grid. */
+  featured?: boolean;
 }
 
 const BUDGET_DISCIPLINE =
@@ -27,6 +31,8 @@ export const BUNDLED_PROFILES: BundledProfile[] = [
     name: 'Generalist',
     color: '#9BA1B6',
     glyph: '◦',
+    category: 'Engineering',
+    featured: true,
     skills: [],
     systemPromptExtra:
       `You are running unattended on a schedule. Work only inside the current repository scope. ${BUDGET_DISCIPLINE} Finish with a crisp summary of what you did, what you skipped, and why.`,
@@ -36,6 +42,8 @@ export const BUNDLED_PROFILES: BundledProfile[] = [
     name: 'Dep Surgeon',
     color: '#7FD8C8',
     glyph: '✚',
+    category: 'Engineering',
+    featured: true,
     skills: [{ name: 'dependency-triage', version: '1.0.0' }],
     systemPromptExtra:
       `You are the Dep Surgeon: conservative dependency hygiene. Patch/minor bumps only when tests prove them; majors get triage notes, never blind upgrades. ${BUDGET_DISCIPLINE} SCOPE: dependency manifests and lockfiles only — never edit workflows, docs, or source to accommodate an upgrade; note it instead. Never push or publish.`,
@@ -45,6 +53,7 @@ export const BUNDLED_PROFILES: BundledProfile[] = [
     name: 'Docs Scribe',
     color: '#B9A7F2',
     glyph: '✎',
+    category: 'Engineering',
     skills: [{ name: 'docs-writer', version: '1.0.0' }],
     systemPromptExtra:
       `You are the Docs Scribe: documentation hygiene from evidence in the repo. Fix drift, keep voice, never invent features. ${BUDGET_DISCIPLINE} SCOPE: docs files only.`,
@@ -53,7 +62,15 @@ export const BUNDLED_PROFILES: BundledProfile[] = [
 
 export function seedBuiltinProfiles(repo: ProfileRepo): void {
   for (const bp of [...BUNDLED_PROFILES, ...EXTRA_PROFILES]) {
-    if (repo.bySlug(bp.slug)) continue; // never clobber (possibly edited) rows
+    const existing = repo.bySlug(bp.slug);
+    if (existing) {
+      // Library metadata (category/featured) is app-owned, not user content:
+      // keep it in sync even when the profile row already exists.
+      if (bp.category !== undefined || bp.featured !== undefined) {
+        repo.upsert({ ...existing, category: bp.category ?? existing.category ?? null, featured: bp.featured !== undefined ? (bp.featured ? 1 : 0) : (existing.featured ?? 0) } as ProfileRow);
+      }
+      continue; // never clobber user-editable prompt/skill fields
+    }
     const row: ProfileRow = {
       id: newId(),
       slug: bp.slug,
@@ -72,7 +89,9 @@ export function seedBuiltinProfiles(repo: ProfileRepo): void {
       system_prompt_extra: bp.systemPromptExtra,
       delivery_json: JSON.stringify({ osNotify: true }),
       builtin: 1,
-    };
+    } as ProfileRow;
+    if (bp.category) (row as ProfileRow).category = bp.category;
+    if (bp.featured !== undefined) (row as ProfileRow).featured = bp.featured ? 1 : 0;
     repo.upsert(row);
   }
 }
