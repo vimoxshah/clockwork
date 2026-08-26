@@ -119,8 +119,10 @@ export class EntitlementService {
                        expires_at=excluded.expires_at, last_validated_at=excluded.last_validated_at`)
       .run(token, JSON.stringify(claims), claims.exp, now);
 
+    // S-review (OpenCode): reflect reality immediately — an already-expired
+    // token activates into grace, not "active".
+    this.cached = { claims, state: claims.exp >= now ? 'active' : 'grace' };
     setTier(claims.plan);
-    this.cached = { claims, state: 'active' };
     return claims;
   }
 
@@ -157,6 +159,11 @@ export class EntitlementService {
     if (!claims.sub || !claims.plan || typeof claims.iat !== 'number' || typeof claims.exp !== 'number') {
       return fail('This license key is missing required fields.');
     }
+    // S-review (OpenCode): plan must be a real tier — a malformed claim must
+    // never create a ghost tier.
+    if (!['pro', 'team', 'enterprise'].includes(claims.plan)) {
+      return fail('This license key references an unknown plan.');
+    }
     if (claims.exp < Date.now() - GRACE_PERIOD_MS) return fail('This license has expired and is beyond its offline grace period. Renew to reactivate.');
     return claims;
   }
@@ -183,9 +190,15 @@ export class EntitlementService {
     let state: EntitlementState;
     if (rollback) {
       state = 'expired';
-    } else if (claims.exp >= now && sinceValidation <= REVALIDATE_INTERVAL_MS * 4) {
+    } else if (claims.exp >= now) {
+      // S-review (OpenCode): the token's own expiry is the enforcement point.
+      // The revalidation window only gates POST-expiry grace, not an
+      // unexpired license — otherwise every subscription degrades to free
+      // ~48h after activation because no revalidation caller exists yet.
       state = 'active';
     } else if (claims.exp >= now - GRACE_PERIOD_MS && sinceValidation <= REVALIDATE_INTERVAL_MS * 4) {
+      // Post-expiry grace requires the cache to be recent: a long-absent
+      // install cannot resurrect a lapsed license by staying offline.
       state = 'grace';
     } else {
       state = 'expired';

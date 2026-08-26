@@ -33,7 +33,9 @@ function priceLine(m: SelectorModel): string {
   if (m.inPerM == null && m.outPerM == null) return m.id;
   const parts: string[] = [];
   if (m.context) parts.push(`${Math.round(m.context / 1000)}k ctx`);
-  if (m.inPerM != null && m.outPerM != null) parts.push(`$${m.inPerM}/M in · $${m.outPerM}/M out`);
+  // S-review (Hermes): guard against malformed registry numbers.
+  const fin = (v: number | undefined): v is number => typeof v === 'number' && Number.isFinite(v);
+  if (fin(m.inPerM) && fin(m.outPerM)) parts.push(`$${m.inPerM}/M in · $${m.outPerM}/M out`);
   return parts.join(' · ');
 }
 

@@ -125,7 +125,11 @@ function ConnectedProviderRow({ cfg, onChanged }: { cfg: ByokConfig; onChanged: 
     try {
       await api.byokDelete(cfg.id);
       await onChanged();
-    } finally { setBusy(null); }
+    } catch (e) {
+      setTestErr(String((e as Error).message ?? e));
+    } finally {
+      setBusy(null);
+    }
   };
 
   const doSetDefault = async (): Promise<void> => {
@@ -133,7 +137,11 @@ function ConnectedProviderRow({ cfg, onChanged }: { cfg: ByokConfig; onChanged: 
     try {
       await api.byokSetDefault(cfg.id);
       await onChanged();
-    } finally { setBusy(null); }
+    } catch (e) {
+      setTestErr(String((e as Error).message ?? e));
+    } finally {
+      setBusy(null);
+    }
   };
 
   const connected = Boolean(cfg.last_validated_at) && !cfg.last_error;

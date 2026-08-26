@@ -103,12 +103,26 @@ export async function validateProvider(kind: ByokKind, baseUrl: string, credenti
       if (!res.ok) return `HTTP ${res.status}: ${(await res.text()).slice(0, 160)}`;
       return undefined;
     }
-    // OpenAI-compatible shape covers openai/openrouter/google(v1beta/openai)/mistral/deepseek/xai/custom
+    // OpenAI-compatible shape covers openai/openrouter/google(v1beta/openai)/mistral/deepseek/xai/zai/custom
     const res = await fetch(baseUrl + '/models', {
       headers: { Authorization: 'Bearer ' + credential },
       signal: AbortSignal.timeout(12_000),
     });
-    if (!res.ok) return `HTTP ${res.status}: ${(await res.text()).slice(0, 160)}`;
+    if (!res.ok) {
+      const body = (await res.text()).slice(0, 160);
+      // S-review (Hermes): some custom gateways reject Bearer outright.
+      // Retry once with x-api-key before blaming the user's key, so the
+      // friendly error reflects reality instead of a scheme mismatch.
+      if (kind === 'custom_openai' && (res.status === 401 || res.status === 403) && credential) {
+        const retry = await fetch(baseUrl + '/models', {
+          headers: { 'x-api-key': credential },
+          signal: AbortSignal.timeout(12_000),
+        });
+        if (!retry.ok) return `HTTP ${retry.status}: ${(await retry.text()).slice(0, 160)}`;
+        return undefined;
+      }
+      return `HTTP ${res.status}: ${body}`;
+    }
     return undefined;
   } catch (e) {
     return String((e as Error).message ?? e).slice(0, 200);
