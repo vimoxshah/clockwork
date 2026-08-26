@@ -347,23 +347,25 @@ export default function ComposerView({
               )}
               {profiles.length > 1 && (
                 <div className="mt-2">
-                  <Label htmlFor="c-chain-after">Chain after (optional)</Label>
-                  <select
-                    id="c-chain-after"
-                    value={form.chainAfter}
-                    onChange={(e) => setForm({ ...form, chainAfter: e.target.value })}
-                    aria-label="Chain after task"
-                    style={{ padding: '6px 8px', width: '100%' }}
+                  <Label>Chain after (optional)</Label>
+                  <Select
+                    value={form.chainAfter || '__independent__'}
+                    onValueChange={(v) => setForm({ ...form, chainAfter: v === '__independent__' ? '' : v })}
                   >
-                    <option value="">— run independently —</option>
-                    {profiles
-                      .filter((p) => p.id !== form.profileId)
-                      .map((p) => (
-                        <option key={p.id} value={p.id}>
-                          After profile: {p.name}
-                        </option>
-                      ))}
-                  </select>
+                    <SelectTrigger aria-label="Chain after task">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__independent__">— run independently —</SelectItem>
+                      {profiles
+                        .filter((p) => p.id !== form.profileId)
+                        .map((p) => (
+                          <SelectItem key={p.id} value={p.id}>
+                            After profile: {p.name}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
                   <p className="mt-1 text-xs text-dim">
                     Chained tasks wait for the upstream task to finish, then run with its report injected via {'{{previous.report}}'}.
                   </p>
