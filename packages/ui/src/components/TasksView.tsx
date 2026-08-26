@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api, type TaskViewT } from '../api';
 import { useAsync } from '../useAsync';
+import { Select, SelectValue, SelectTrigger, SelectContent, SelectItem } from './ui/select';
 
 type StatusFilter = 'all' | 'active' | 'paused';
 type SortKey = 'name' | 'recent';
@@ -92,16 +93,15 @@ export default function TasksView({ version }: { version: number }): JSX.Element
             </button>
           ))}
         </div>
-        <select
-          value={sort}
-          onChange={(e) => setSort(e.target.value as SortKey)}
-          aria-label="Sort tasks"
-          className="btn small"
-          style={{ padding: '6px 10px' }}
-        >
-          <option value="recent">Newest first</option>
-          <option value="name">Name A→Z</option>
-        </select>
+        <Select value={sort} onValueChange={(v) => setSort(v as SortKey)}>
+          <SelectTrigger aria-label="Sort tasks" className="w-auto h-8 text-[12px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="recent">Newest first</SelectItem>
+            <SelectItem value="name">Name A→Z</SelectItem>
+          </SelectContent>
+        </Select>
         <span className="chip" style={{ whiteSpace: 'nowrap' }} data-testid="task-count">
           {q.trim() || status !== 'all'
             ? `${filtered.length} of ${tasks.data?.length ?? 0}`
@@ -316,31 +316,39 @@ function EditDialog({
           </div>
         </div>
         <label className="f">Permission mode</label>
-        <select value={permissionMode} onChange={(e) => setPermissionMode(e.target.value)}>
-          <option value="plan">plan (dry-run)</option>
-          <option value="acceptEdits">acceptEdits</option>
-        </select>
+        <Select value={permissionMode} onValueChange={setPermissionMode}>
+          <SelectTrigger aria-label="Permission mode"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="plan">plan (dry-run)</SelectItem>
+            <SelectItem value="acceptEdits">acceptEdits</SelectItem>
+          </SelectContent>
+        </Select>
 
         <label className="f">Chain after (run when that task finishes)</label>
-        <select
-          value={chainAfter ?? ''}
-          onChange={(e) => setChainAfter(e.target.value || null)}
-          aria-label="Chain after"
+        <Select
+          value={chainAfter ?? '__none__'}
+          onValueChange={(v) => setChainAfter(v === '__none__' ? null : v)}
         >
-          <option value="">— none —</option>
-          {allTasks
-            .filter((t) => t.id !== task.id)
-            .map((t) => (
-              <option key={t.id} value={t.id}>{t.name}</option>
-            ))}
-        </select>
+          <SelectTrigger aria-label="Chain after"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__none__">— none —</SelectItem>
+            {allTasks
+              .filter((t) => t.id !== task.id)
+              .map((t) => (
+                <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+              ))}
+          </SelectContent>
+        </Select>
         {chainAfter && (
           <>
             <label className="f">Fire when upstream is…</label>
-            <select value={chainOn} onChange={(e) => setChainOn(e.target.value)} aria-label="Chain trigger">
-              <option value="completed">completed (recommended)</option>
-              <option value="any_terminal">any terminal state</option>
-            </select>
+            <Select value={chainOn} onValueChange={setChainOn}>
+              <SelectTrigger aria-label="Chain trigger"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="completed">completed (recommended)</SelectItem>
+                <SelectItem value="any_terminal">any terminal state</SelectItem>
+              </SelectContent>
+            </Select>
           </>
         )}
         {err && <div className="error-banner">{err}</div>}
