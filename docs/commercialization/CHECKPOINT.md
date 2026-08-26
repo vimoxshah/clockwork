@@ -1,6 +1,41 @@
-# Commercialization Gauntlet — Checkpoint 3
+# Commercialization Gauntlet — Checkpoint 4 (FINAL engineering state)
 
-Branch: feature/commercial-byok-ux (pushed through d7010e1). PR #2 open.
+Branch: feature/commercial-byok-ux (pushed through dd967cc). PR #2 open.
+
+## SESSION TOTALS
+
+- BYOK rebuild, EntitlementService + enforcement, UpgradeHint, onboarding v2,
+  support bundle, pricing/landing/docs, webhook wiring design.
+- §39 executed: Hermes AND OpenCode independently reviewed security-critical
+  files; both returned FIX-FIRST; 12 findings triaged — high/med all fixed
+  (auth-hook gap, phantom-48h-degradation, honest grace activation, plan enum
+  validation, x-api-key retry), lows fixed or dispositioned with rationale.
+  Full table: docs/commercialization/VALIDATOR-REVIEWS.md.
+- Adversarial self-review (§51): 8 lenses walked; 2 material issues found+fixed;
+  record in ADVERSARIAL-REVIEW.md.
+
+## TEST RESULTS
+
+158/158 (22 files) post-fixes. Build green. Lint 0 errors. Secret scan clean.
+Live Playwright verified earlier: connect flow vs real provider APIs, license
+rejection paths, CSP sweep 0 violations.
+
+## BLOCKED ON USER (hard stops)
+
+1. PR #2 review + merge — https://github.com/vimoxshah/clockwork/pull/2
+2. Lemon Squeezy seller approval (manual; identity/banking). Unblocks:
+   key generation -> ENTITLEMENT_PUBLIC_KEY_HEX -> webhook receiver per
+   docs/commercialization/WEBHOOKS.md (design final, implementation mechanical).
+3. Optional visual QA when vision tooling restored (screenshots queued in
+   ~/Desktop/clockwork-byok-audit/).
+
+## DEFERRED WITH RATIONALE
+
+- SSE query-param auth, hard device binding (needs OS keystore): accepted v1
+  risks, documented in VALIDATOR-REVIEWS.md.
+- Composer native selects (engine/chain/BYOK): functional; picker polish queued.
+- Provider-body friendly-mapping tables: needs per-provider phrase research.
+
 
 ## COMPLETED THIS SESSION (on top of Checkpoint 2)
 
