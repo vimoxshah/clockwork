@@ -16,7 +16,7 @@
   --surface-active: #1f2536;
   --fg: #e9ebf3;
   --muted: #9ba1b6;
-  --dim: #6a7189;
+  --dim: #838ba4; /* WCAG AA on dark surface (was #6a7189 = 3.58:1) */
   --border: #232a3d;
   --border-strong: #2a3247;
 
@@ -51,7 +51,7 @@
   --surface-active: #e4e7ee;
   --fg: #191d27;
   --muted: #575e70;
-  --dim: #868da0;
+  --dim: #667082; /* WCAG AA on light surface (was #868da0 = 3.32:1) */
   --border: #e2e5ec;
   --border-strong: #ccd1dc;
 
