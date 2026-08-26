@@ -52,6 +52,21 @@ or `~/.clockwork/delivery-creds.json`) and network reachability.
 The UI needs the API token: `cat ~/.clockwork/api-token` and paste it into the
 connect screen. Tokens rotate if you delete the file and restart the daemon.
 
+## License / plan problems
+
+- **"License verification is not yet enabled in this build"** — the public
+  key isn't configured in this binary (pre-release builds). Nothing is wrong
+  with your key; wait for a build that supports activation.
+- **"This license key is not genuine"** — the token doesn't match Clockwork's
+  signing key. Re-download from the official site; if it persists, contact
+  support with your order id.
+- **App shows "Reconnecting needed"** — your subscription couldn't be
+  revalidated recently. Everything still works during grace; reconnect to the
+  internet and restart the app to clear it.
+- **Back on Free after an expiry** — renew, then Settings → Plan & license →
+  activate the fresh key from your receipt. Tasks, runs, keys, and history are
+  never touched by licensing state.
+
 ## Reset everything (nuclear)
 
 ```bash
