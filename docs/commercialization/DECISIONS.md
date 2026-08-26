@@ -29,10 +29,27 @@ reports "verification not yet enabled".
 
 Offline-first per gauntlet §8-9: verify signature locally, cache in SQLite,
 72h grace past expiry, revalidation window, clock-rollback guard.
-Keygen/LicenseSpring rejected: another vendor + per-license cost for a loop
-we can close with one public key and 200 lines (INFERENCE from R2 patterns;
-R2's key findings — grace periods, device limits, rollback defenses — are
-encoded in the service).
+Keygen/LicenseSpring rejected as vendors: another dependency + per-license
+cost for a loop we can close with one public key and 200 lines.
+
+R2 corroboration (transcript-sourced, official docs; researcher timed out
+before writing its summary — findings salvaged from its live trace):
+- Public-key embedding client-side is explicitly safe per Keygen docs
+  (VERIFIED: keygen.sh docs "Public IDs and Keys Embedding") — validates
+  shipping ENTITLEMENT_PUBLIC_KEY_HEX in the binary.
+- Signed license files carry cert + issued + expiry attributes
+  (VERIFIED: keygen-sh/keygen-go `license_file.go` struct) — same shape as
+  our claims {iat, exp} payload.
+- Max-time-offline is governed by a grace period tied to failed online
+  checks; policies expose activation limits + device-transfer limits
+  (VERIFIED: docs.licensespring.com grace-period + license-policies pages).
+- Clock rollback is defended in practice by persisting an inconspicuous
+  high-water timestamp to disk and checking it periodically
+  (VERIFIED: keygen.sh anti-tampering docs) — our `high_water_ms` column
+  implements exactly this.
+Device binding: we bind device_id at activation; transfers happen via
+deactivate → reactivate (matches LicenseSpring's transfer-limit concept,
+simpler policy for v1).
 
 ## D3. Pricing ladder (PROPOSED — copy-ready, checkout pending)
 
