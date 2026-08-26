@@ -4,6 +4,7 @@
  */
 import { useEffect, useState } from 'react';
 import { api } from '../api';
+import { Select, SelectValue, SelectTrigger, SelectContent, SelectItem } from './ui/select';
 
 interface Analytics {
   range: { from: number; to: number; days: number };
@@ -35,11 +36,16 @@ export default function AnalyticsView({ version }: { version: number }): JSX.Ele
       <div className="tasks-toolbar">
         <h3 className="section-title" style={{ margin: 0 }}>Analytics</h3>
         <span className="grow" />
-        <select value={days} onChange={(e) => setDays(Number(e.target.value))} aria-label="Time range" className="btn small" style={{ padding: '6px 10px' }}>
-          <option value={7}>Last 7 days</option>
-          <option value={30}>Last 30 days</option>
-          <option value={90}>Last 90 days</option>
-        </select>
+        <Select value={String(days)} onValueChange={(v) => setDays(Number(v))}>
+          <SelectTrigger aria-label="Time range" className="w-auto h-8 text-[12px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="7">Last 7 days</SelectItem>
+            <SelectItem value="30">Last 30 days</SelectItem>
+            <SelectItem value="90">Last 90 days</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       {err && <div className="error-banner" role="alert">{err}</div>}
