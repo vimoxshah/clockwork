@@ -246,11 +246,26 @@ function OnboardingGate({ version, onBook }: { version: number; onBook: () => vo
         <li>{status.claudeAuthed ? '✅' : '⚠️'} Claude auth detected {status.claudeAuthed ? '(subscription login — no API key needed)' : '(run `claude` interactively once to authenticate)'}</li>
         <li>{status.gitInstalled ? '✅' : '❌'} git available</li>
         <li>ℹ️ MCP config {status.mcpDetected ? 'detected' : 'not found (optional)'}</li>
+        {status.hasProvider
+          ? <li>✅ Provider ready — you can book work now</li>
+          : <li>⚠️ No AI provider connected yet — bring an API key or use your Claude subscription</li>}
       </ul>
+      {!status.hasProvider && (
+        <p className="hint" style={{ margin: '6px 0 0' }}>
+          Prefer a different model? Settings → API providers connects Anthropic, OpenAI, Google,
+          DeepSeek, and more in under a minute — keys stay in your Keychain, billed by the provider,
+          never by Clockwork.
+        </p>
+      )}
       <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
         {!status.hasTasks && (
           <button className="btn primary small" onClick={onBook}>
             Book your first run
+          </button>
+        )}
+        {!status.hasProvider && (
+          <button className="btn small" onClick={() => { window.location.hash = '#settings'; setDismissed(true); sessionStorage.setItem('cw.onboard.dismissed', '1'); }}>
+            Connect a provider
           </button>
         )}
         <button
