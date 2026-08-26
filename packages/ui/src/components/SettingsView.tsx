@@ -9,6 +9,7 @@ import { Switch } from './ui/switch';
 import { Badge } from './ui/card';
 import { ByokCard } from './ByokCard';
 import { LicenseCard } from './LicenseCard';
+import { UpgradeHint } from './UpgradeHint';
 import { api } from '../api';
 import { useAsync } from '../useAsync';
 
@@ -307,11 +308,13 @@ function TriggersCard({ version }: { version: number }): JSX.Element {
   const [secret, setSecret] = useState('');
   const [created, setCreated] = useState<{ id: string; secret?: string } | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [gate, setGate] = useState<{ feature?: string; requiresPlan?: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
   const create = async (): Promise<void> => {
     setBusy(true);
     setErr(null);
+    setGate(null);
     try {
       const res = await api.createTrigger({
         name,
@@ -324,16 +327,30 @@ function TriggersCard({ version }: { version: number }): JSX.Element {
       setSecret('');
       triggers.reload();
     } catch (e) {
-      setErr(String((e as Error).message ?? e));
+      const apiErr = e as { status?: number; details?: { feature?: string; requiresPlan?: string } };
+      if (apiErr.status === 402) {
+        setGate(apiErr.details ?? {});
+      } else {
+        setErr(String((e as Error).message ?? e));
+      }
     } finally {
       setBusy(false);
     }
   };
 
-  if (triggers.error) return <div className="error-banner">{triggers.error}</div>;
-
   return (
     <div>
+      {gate && (
+        <div style={{ marginBottom: 10 }}>
+          <UpgradeHint
+            message={`You already have ${triggers.data?.length ?? 0} of the free plan's triggers.`}
+            feature={gate.feature ?? 'event_triggers'}
+            requiresPlan={gate.requiresPlan}
+            onDismiss={() => setGate(null)}
+          />
+        </div>
+      )}
+      {err && <div className="error-banner" role="alert">{err}</div>}
       {/* creation form */}
       <div className="row3" style={{ alignItems: 'end' }}>
         <div>
