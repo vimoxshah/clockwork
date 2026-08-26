@@ -38,6 +38,22 @@ daemon and read back only at run start. They are never stored in the database,
 log files, or task payloads, and never transmitted anywhere except to the
 provider endpoint you configured.
 
+## Purchasing a Clockwork plan (licensing)
+
+Clockwork plans (Free / Pro / Team) are sold through **Lemon Squeezy**, a
+merchant of record. When you buy:
+
+- **What Lemon Squeezy receives**: your email and payment details, for
+  checkout, tax handling, and invoices — under their privacy policy. Clockwork's
+  authors never see card numbers.
+- **What we send back to you**: a signed license token by email.
+- **What the app does with it**: verifies the signature locally against a
+  public key embedded in the binary and caches the result in
+  `~/.clockwork/clockwork.sqlite`. Everyday use requires no connection to us;
+  an expired subscription keeps working through a 72-hour offline grace period,
+  then the app returns to the Free tier. Your tasks, runs, keys, and history
+  are never deleted or reduced by licensing state.
+
 ## Cloud execution
 
 If/when cloud execution targets ship, this policy will be updated before the
