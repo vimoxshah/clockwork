@@ -377,16 +377,17 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       const src = String(trg.source);
       const sig = req.headers['x-hub-signature-256'] as string | undefined;
       if (src === 'github') {
-        // For GitHub we re-derive the secret by comparing against the stored hash:
-        // the raw HMAC check needs the plaintext, so GitHub triggers REQUIRE that
-        // Clockwork can verify without it — instead we accept only when the header
-        // is present AND the stored hash matches a locally configured env fallback.
+        // S-audit fix (fail closed): GitHub signatures can only be verified
+        // against a plaintext secret via CLOCKWORK_GITHUB_WEBHOOK_SECRET.
+        // With no secret configured there is NO verification path — a request
+        // carrying any self-asserted header previously passed both checks and
+        // fired the task. Now: reject regardless of header presence.
         const envSecret = process.env.CLOCKWORK_GITHUB_WEBHOOK_SECRET;
-        if (envSecret && !verifyGithubSignature(raw, sig, envSecret)) {
-          return respond(401, { error: 'bad signature' }, false, 'bad_signature');
+        if (!envSecret) {
+          return respond(503, { error: 'github trigger has no verification secret configured' }, false, 'server_not_configured');
         }
-        if (!envSecret && !sig) {
-          return respond(401, { error: 'missing signature' }, false, 'missing_signature');
+        if (!verifyGithubSignature(raw, sig, envSecret)) {
+          return respond(401, { error: 'bad signature' }, false, 'bad_signature');
         }
       } else if (trg.secret_hash && !verifyWebhookSecret(req.headers['x-clockwork-secret'] as string | undefined, String(trg.secret_hash))) {
         return respond(401, { error: 'bad secret' }, false, 'bad_secret');

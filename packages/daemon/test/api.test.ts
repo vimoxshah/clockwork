@@ -90,6 +90,50 @@ describe('auth', () => {
     const imp = await app.inject({ method: 'POST', url: '/templates/import', payload: {} });
     expect(imp.statusCode).toBe(401);
   });
+
+  it('github-source hook fails closed when no verification secret is configured', async () => {
+    delete process.env.CLOCKWORK_GITHUB_WEBHOOK_SECRET;
+    await app.inject(
+      auth({
+        method: 'POST',
+        url: '/profiles',
+        payload: { slug: 'hook-fixture', name: 'Hook Fixture', engine: 'cli', permissionMode: 'acceptEdits', budget: { maxUsd: 1, maxTurns: 5, timeoutSec: 60 }, skills: [], mcpAllow: [], contextRoots: [] },
+      }),
+    );
+    const profilesRes = await app.inject(auth({ method: 'GET', url: '/profiles' }));
+    const fixtureProfile = (profilesRes.json() as Array<{ id: string }>).find((p) => p.id) ?? { id: 'missing' };
+
+    const taskRes = await app.inject(
+      auth({
+        method: 'POST',
+        url: '/tasks',
+        payload: { ...VALID_ONCE_TASK, name: 'Hook task', profileId: fixtureProfile.id, schedule: { kind: 'queue', tz: 'UTC' } },
+      }),
+    );
+    expect(taskRes.statusCode).toBe(201);
+    const taskId = (taskRes.json() as { id: string }).id;
+
+    const trgRes = await app.inject(
+      auth({
+        method: 'POST',
+        url: '/triggers',
+        payload: { name: 'gh-bypass-regression', source: 'github', taskId },
+      }),
+    );
+    expect(trgRes.statusCode).toBe(201);
+    const triggerId = (trgRes.json() as { id: string }).id;
+    expect(triggerId).toBeTruthy();
+
+    // The actual regression: with NO secret configured, a request carrying any
+    // self-asserted GitHub signature header must NOT fire the task.
+    const bypass = await app.inject({
+      method: 'POST',
+      url: `/hooks/${triggerId}`,
+      headers: { 'content-type': 'application/json', 'x-hub-signature-256': 'sha256=' + 'a'.repeat(64) },
+      payload: { action: 'opened', pull_request: { number: 1 } },
+    });
+    expect([401, 503]).toContain(bypass.statusCode);
+  });
 });
 
 describe('task CRUD + validation', () => {

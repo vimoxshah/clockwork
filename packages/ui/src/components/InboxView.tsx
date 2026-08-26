@@ -147,7 +147,6 @@ export default function InboxView({ version }: { version: number }): JSX.Element
             ⌘K
           </kbd>
         </div>
-        <script dangerouslySetInnerHTML={{ __html: '' }} />
         <KeyFocus />
         {q.trim() && (
           <p className="mb-2 text-xs text-dim">
