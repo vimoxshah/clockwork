@@ -251,6 +251,15 @@ Full list: [docs/SHORTCUTS.md](docs/SHORTCUTS.md)
 
 Details: [docs/security.md](docs/security.md) · [docs/privacy.md](docs/privacy.md)
 
+## 📚 Guides
+
+- [BYOK guide](docs/byok-guide.md) — connect Anthropic, OpenAI, Google,
+  DeepSeek, Z.ai, and more; key storage, defaults, error decoding
+- [Plans & licensing](docs/commercialization/DECISIONS.md) — pricing model and
+  how offline license verification works
+- [Troubleshooting](docs/troubleshooting.md) — daemon, auth, scheduling, and
+  license/plan problems
+
 ## 🧪 Development
 
 ```bash
