@@ -10,6 +10,7 @@ import { Button } from './ui/button';
 import { Input, Textarea, Label } from './ui/input';
 import { Card, CardContent } from './ui/card';
 import { Segmented } from './ui/segmented';
+import { Select, SelectValue, SelectTrigger, SelectContent, SelectItem } from './ui/select';
 import { AgentPicker } from './AgentPicker';
 import { DateTimePicker } from './ui/datetime-picker';
 import { Badge } from './ui/card';
@@ -318,22 +319,25 @@ export default function ComposerView({
               )}
               {byokConfigs.length > 0 && (
                 <div className="mt-2">
-                  <Label htmlFor="c-byok">…or use an API provider (BYOK)</Label>
-                  <select
-                    id="c-byok"
-                    value={form.byokId}
-                    onChange={(e) => setForm({ ...form, byokId: e.target.value })}
-                    style={{ padding: '6px 8px', width: '100%' }}
+                  <Label>…or use an API provider (BYOK)</Label>
+                  <Select
+                    value={form.byokId || '__engine__'}
+                    onValueChange={(v) => setForm({ ...form, byokId: v === '__engine__' ? '' : v })}
                   >
-                    <option value="">
-                      Engine above{defaultByok ? ` · or pick ${defaultByok.label} below (default)` : ' — no API key needed'}
-                    </option>
-                    {byokConfigs.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.label}{b.is_default ? ' (default)' : ''} · {b.model_label ?? b.default_model}
-                      </option>
-                    ))}
-                  </select>
+                    <SelectTrigger aria-label="API provider (BYOK)" data-testid="composer-byok-select">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__engine__">
+                        Engine above{defaultByok ? ` · or pick ${defaultByok.label} below (default)` : ' — no API key needed'}
+                      </SelectItem>
+                      {byokConfigs.map((b) => (
+                        <SelectItem key={b.id} value={b.id}>
+                          {b.label}{b.is_default ? ' (default)' : ''} · {b.model_label ?? b.default_model}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                   {byokConfigs.find((b) => b.id === form.byokId) && (
                     <p className="mt-1 text-xs text-dim">
                       Runs via API with your key (billed to your provider account, separate from any subscription). Configure keys in Settings → API providers.
