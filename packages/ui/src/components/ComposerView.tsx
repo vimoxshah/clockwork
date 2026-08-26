@@ -326,7 +326,7 @@ export default function ComposerView({
                     style={{ padding: '6px 8px', width: '100%' }}
                   >
                     <option value="">
-                      {defaultByok ? `Default — ${defaultByok.label} (${defaultByok.model_label ?? defaultByok.default_model})` : 'None — use CLI engine above'}
+                      Engine above{defaultByok ? ` · or pick ${defaultByok.label} below (default)` : ' — no API key needed'}
                     </option>
                     {byokConfigs.map((b) => (
                       <option key={b.id} value={b.id}>
