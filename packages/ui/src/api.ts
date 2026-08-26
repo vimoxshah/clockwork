@@ -130,6 +130,9 @@ export const api = {
   byokValidate: (b: { kind: string; base_url?: string; secret?: string }) => req<{ ok: boolean; error: string | null }>('POST', '/byok/validate', b),
   byokDelete: (id: string) => req<unknown>('DELETE', `/byok/${id}`),
   byokSetDefault: (id: string) => req<{ ok: boolean }>('POST', `/byok/${id}/default`),
+  capabilities: () => req<{ tier: string; features: Array<{ key: string; label: string; category: string; enabled: boolean; limit?: string; status: string }>; entitlement: { tier: string; state: string; plan?: string; expiresAt?: number; graceEndsAt?: number; subject?: string } }>('GET', '/capabilities'),
+  licenseActivate: (token: string) => req<{ ok: boolean; entitlement: unknown }>('POST', '/license/activate', { token }),
+  licenseDeactivate: () => req<{ ok: boolean }>('POST', '/license/deactivate'),
   analytics: (days: number) => req<AnalyticsT>('GET', `/analytics?days=${days}`),
   triggers: () => req<Array<{ id: string; name: string; source: string; filter: Record<string, unknown> | null; hasSecret: boolean; taskId: string; enabled: boolean }>>('GET', '/triggers'),
   createTrigger: (body: { name: string; source: string; taskId: string; secret?: string; filter?: Record<string, unknown> }) =>

@@ -1030,7 +1030,29 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
   // ---- capability matrix (goal #43): honest feature gating ----
   app.get('/capabilities', async () => {
     const { capabilityMatrix, getTier } = await import('./features.js');
-    return { tier: getTier(), features: capabilityMatrix() };
+    return { tier: getTier(), features: capabilityMatrix(), entitlement: entitlements.status() };
+  });
+
+  // ---- license activation / deactivation (commercial gauntlet §8-10) ----
+  app.post('/license/activate', async (req, reply) => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const token = typeof b.token === 'string' ? b.token.trim() : '';
+    if (!token) return reply.code(422).send({ error: 'Paste the license key from your purchase receipt.' });
+    try {
+      const claims = entitlements.activate(token);
+      audit('license.activate', 'entitlement', claims.sub, { plan: claims.plan });
+      broadcast({ type: 'entitlement', entitlement: entitlements.status() });
+      return { ok: true, entitlement: entitlements.status() };
+    } catch (e) {
+      return reply.code(422).send({ error: String((e as Error).message ?? e) });
+    }
+  });
+
+  app.post('/license/deactivate', async () => {
+    audit('license.deactivate', 'entitlement', undefined, {});
+    entitlements.deactivate();
+    broadcast({ type: 'entitlement', entitlement: entitlements.status() });
+    return { ok: true };
   });
 
   // ---- execution targets (goals #12/#15): local + docker now, cloud later ----
@@ -1090,6 +1112,8 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
 
   // ---- BYOK provider configs (ADR-027) ----
   const byok = new ByokStore({ db: deps.db });
+  const { EntitlementService } = await import('./entitlements.js');
+  const entitlements = new EntitlementService(deps.db);
 
   app.get('/byok', async () => {
     return { configs: byok.list(), meta: PROVIDER_KIND_META };
