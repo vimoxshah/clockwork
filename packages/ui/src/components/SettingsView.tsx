@@ -116,6 +116,37 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
         </div>
       </div>
 
+      <h3 className="section-title" style={{ marginTop: 20 }}>Support</h3>
+      <div className="tasklist-row">
+        <div className="grow">
+          <strong>Export diagnostics</strong>
+          <div className="hint">
+            Downloads a JSON bundle (versions, provider connection states, engine detection,
+            counts) for bug reports. Contains no credentials — API keys never leave the Keychain.
+          </div>
+        </div>
+        <button
+          className="btn small"
+          data-testid="export-support-bundle"
+          onClick={async () => {
+            try {
+              const bundle = await api.supportBundle();
+              const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `clockwork-diagnostics-${new Date().toISOString().slice(0, 10)}.json`;
+              a.click();
+              URL.revokeObjectURL(url);
+            } catch (e) {
+              setErr(String((e as Error).message ?? e));
+            }
+          }}
+        >
+          Export bundle
+        </button>
+      </div>
+
       <h3 className="section-title" style={{ marginTop: 20 }}>Plan &amp; license</h3>
       <LicenseCard version={version} />
 

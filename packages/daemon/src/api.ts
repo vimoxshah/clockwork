@@ -136,6 +136,57 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     };
   });
 
+  // ---- support bundle (commercial gauntlet §36): sanitized diagnostics ----
+  // Everything needed to debug a user report; NOTHING secret. No API keys
+  // (keychain never read here), no tokens, no prompts, no repo contents.
+  app.get('/support/bundle', async () => {
+    const os = await import('node:os');
+    const count = (sql: string): number =>
+      (deps.db.prepare(sql).get() as any)?.c ?? 0;
+    const providerRows = byok.list().map((p) => ({
+      kind: p.kind,
+      auth: p.auth,
+      connected: Boolean(p.last_validated_at) && !p.last_error,
+      lastError: p.last_error ? p.last_error.slice(0, 120) : null, // provider HTTP text only — no credential material
+      modelLabel: p.model_label ?? undefined,
+    }));
+    const engines = await (async () => {
+      try {
+        const { PROVIDERS } = await import('@clockwork/shared');
+        const { resolveOnAugmentedPath } = await import('@clockwork/runner');
+        return PROVIDERS.map((pr: { id: string }) => {
+          try {
+            const bin = resolveOnAugmentedPath(pr.id);
+            return { id: pr.id, onPath: Boolean(bin) };
+          } catch {
+            return { id: pr.id, onPath: false };
+          }
+        });
+      } catch {
+        return [];
+      }
+    })();
+    return {
+      generatedAt: new Date().toISOString(),
+      app: { daemonVersion: deps.version, apiVersion: API_VERSION },
+      platform: { os: os.platform(), release: os.release(), arch: os.arch(), node: process.version },
+      counts: {
+        tasks: count("SELECT COUNT(*) c FROM tasks WHERE deleted_at IS NULL"),
+        runs: count('SELECT COUNT(*) c FROM runs'),
+        triggers: count('SELECT COUNT(*) c FROM triggers'),
+        providersConfigured: providerRows.length,
+      },
+      scheduling: { paused },
+      providers: providerRows,
+      engines,
+      entitlement: entitlements.status(),
+      notes: [
+        'This bundle contains no credentials: API keys live in the macOS Keychain and are never read into diagnostics.',
+        'Run reports/transcripts stay local unless you attach them yourself.',
+      ],
+    };
+  });
+
   // ---- tasks ----
   const validateAndMaterialize = (input: TaskCreate): { ok: true; nextFire: number | null; profileId: string | null } | { ok: false; error: string } => {
     // @mention resolution (FR-28)

@@ -136,6 +136,7 @@ export const api = {
   byokDelete: (id: string) => req<unknown>('DELETE', `/byok/${id}`),
   byokSetDefault: (id: string) => req<{ ok: boolean }>('POST', `/byok/${id}/default`),
   capabilities: () => req<{ tier: string; features: Array<{ key: string; label: string; category: string; enabled: boolean; limit?: string; status: string }>; entitlement: { tier: string; state: string; plan?: string; expiresAt?: number; graceEndsAt?: number; subject?: string } }>('GET', '/capabilities'),
+  supportBundle: () => req<Record<string, unknown>>('GET', '/support/bundle'),
   licenseActivate: (token: string) => req<{ ok: boolean; entitlement: unknown }>('POST', '/license/activate', { token }),
   licenseDeactivate: () => req<{ ok: boolean }>('POST', '/license/deactivate'),
   analytics: (days: number) => req<AnalyticsT>('GET', `/analytics?days=${days}`),
