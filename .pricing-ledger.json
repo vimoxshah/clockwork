@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "id": 1,
+      "url": "https://www.typingmind.com/buy",
+      "title": "TypingMind Pricing",
+      "accessed": "2026-08-26"
+    },
+    {
+      "id": 2,
+      "url": "https://docs.typingmind.com/quickstart/typingmind-license-plans",
+      "title": "TypingMind Docs Plans",
+      "accessed": "2026-08-26"
+    },
+    {
+      "id": 3,
+      "url": "https://lmstudio.ai/pricing",
+      "title": "LM Studio Pricing",
+      "accessed": "2026-08-26"
+    },
+    {
+      "id": 4,
+      "url": "https://lmstudio.ai/blog/free-for-work",
+      "title": "LM Studio free for work blog",
+      "accessed": "2026-08-26"
+    },
+    {
+      "id": 5,
+      "url": "https://cursor.com/pricing",
+      "title": "Cursor Pricing",
+      "accessed": "2026-08-26"
+    },
+    {
+      "id": 6,
+      "url": "https://cursor.com/docs/models-and-pricing",
+      "title": "Cursor Models & Pricing Docs",
+      "accessed": "2026-08-26"
+    },
+    {
+      "id": 7,
+      "url": "https://cursor.com/help/account-and-billing/pricing.md",
+      "title": "Cursor Help Pricing",
+      "accessed": "2026-08-26"
+    }
+  ]
+}
