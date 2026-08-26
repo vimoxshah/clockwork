@@ -309,6 +309,18 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       if (!name || !taskId) return reply.code(422).send({ error: 'name and taskId required' });
       if (!['webhook', 'github'].includes(source)) return reply.code(422).send({ error: 'invalid source' });
       if (!tasks.get(taskId)) return reply.code(404).send({ error: 'task not found' });
+      // Entitlement (gauntlet §7): free tier caps event triggers ("2 triggers").
+      const triggerCap = entitlements.limitFor('event_triggers');
+      if (triggerCap !== undefined) {
+        const count = (deps.db.prepare('SELECT COUNT(*) c FROM triggers').get() as any).c as number;
+        if (count >= triggerCap) {
+          return reply.code(402).send({
+            error: `The free plan includes ${triggerCap} event triggers; you have ${count}. Clockwork Pro raises the cap to 50.`,
+            feature: 'event_triggers',
+            requiresPlan: entitlements.gate('event_triggers').requiresPlan,
+          });
+        }
+      }
       const id = newTriggerId();
       const secret = typeof b?.secret === 'string' && b.secret.length >= 8 ? b.secret : null;
       deps.db
@@ -1009,8 +1021,21 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
   app.put('/retention', async (req, reply) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
     try {
+      // Entitlement (gauntlet §7/§6): free tier keeps history windows within
+      // its registry limit ("30 days"); paid tiers may extend.
+      const cap = entitlements.limitFor('retention');
+      let runDays = b.runDays === null || b.runDays === undefined ? null : Number(b.runDays);
+      if (runDays !== null && cap !== undefined) {
+        if (runDays > cap) {
+          return reply.code(402).send({
+            error: `The free plan keeps history up to ${cap} days. Clockwork Pro extends retention.`,
+            feature: 'retention',
+            requiresPlan: entitlements.gate('retention').requiresPlan,
+          });
+        }
+      }
       retentionAudit.setPrefs(
-        b.runDays === null || b.runDays === undefined ? null : Number(b.runDays),
+        runDays,
         b.maxRuns === null || b.maxRuns === undefined ? null : Number(b.maxRuns),
       );
       audit('retention.update', 'settings', 'retention', { runDays: b.runDays ?? null, maxRuns: b.maxRuns ?? null });
@@ -1026,15 +1051,34 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     return { deleted };
   });
 
-  app.get('/audit', async (req) => {
-    const q = req.query as Record<string, string>;
+  app.get('/audit', async (_req, reply) => {
+    // Entitlement (gauntlet §7): audit log is a governance feature.
+    const gate = entitlements.gate('audit_log');
+    if (!gate.allowed) {
+      return reply.code(402).send({
+        error: `The audit log is included with Clockwork ${gate.requiresPlan}. Your run history stays fully intact — this only controls the tamper-evident event ledger.`,
+        feature: 'audit_log',
+        requiresPlan: gate.requiresPlan,
+      });
+    }
+    const q = _req.query as Record<string, string>;
     const limit = Math.min(500, Math.max(1, parseInt(String(q.limit ?? '200'), 10)));
     const offset = Math.max(0, parseInt(String(q.offset ?? '0'), 10));
     return { entries: retentionAudit.list(limit, offset) };
   });
 
   // ---- policy engine (goal #38): enterprise guardrails ----
-  app.get('/policies', async () => policies.get());
+  app.get('/policies', async (_req, reply) => {
+    const gate = entitlements.gate('policy_engine');
+    if (!gate.allowed) {
+      return reply.code(402).send({
+        error: `Policy guardrails are included with Clockwork ${gate.requiresPlan}.`,
+        feature: 'policy_engine',
+        requiresPlan: gate.requiresPlan,
+      });
+    }
+    return policies.get();
+  });
 
   // ---- capability matrix (goal #43): honest feature gating ----
   app.get('/capabilities', async () => {

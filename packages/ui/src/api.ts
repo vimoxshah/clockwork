@@ -50,6 +50,11 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     const msg = (err as any).error ?? `${res.status}`;
+    // Entitlement gates (402) carry feature + plan so views can render an
+    // honest, actionable upgrade explanation (gauntlet §12).
+    if (res.status === 402 && typeof msg === 'string') {
+      throw new ApiError(402, msg, { feature: (err as any).feature, requiresPlan: (err as any).requiresPlan });
+    }
     const details = (err as any).details;
     throw new ApiError(res.status, typeof msg === 'string' ? msg : JSON.stringify(msg), details);
   }

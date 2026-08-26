@@ -21,7 +21,7 @@
  */
 import { createPublicKey, randomUUID, sign as cryptoSign, verify as cryptoVerify } from 'node:crypto';
 import type { DB } from './db.js';
-import { setTier, getTier, type Tier } from './features.js';
+import { FEATURES, numericLimit, setTier, getTier, type Tier } from './features.js';
 
 export const GRACE_PERIOD_MS = 72 * 3600_000;
 export const REVALIDATE_INTERVAL_MS = 12 * 3600_000;
@@ -213,6 +213,43 @@ export class EntitlementService {
     };
     if (state === 'grace') out.graceEndsAt = (r.last_validated_at ?? 0) + GRACE_PERIOD_MS;
     return out;
+  }
+
+  /**
+   * Central gate (gauntlet §7): resolve a feature key against the current
+   * tier WITHOUT scattering plan checks at call sites.
+   * Returns { allowed, limit, requiresPlan } — limit is a number when the
+   * registry expresses one ("2 triggers", "30 days"), else undefined.
+   * `allowed=false` always carries the plan name that unlocks it.
+   */
+  gate(featureKey: string): { allowed: boolean; limit?: number; requiresPlan?: Tier } {
+    this.refreshFromCache(); // keeps getTier() authoritative for this call
+    const f = FEATURES.find((x) => x.key === featureKey);
+    if (!f) return { allowed: false, requiresPlan: 'pro' };
+    const tier = getTier();
+    if (f.tiers[tier]?.available) return { allowed: true };
+    // Find the cheapest plan that unlocks it, for honest upgrade copy.
+    const order: Tier[] = ['free', 'pro', 'team', 'enterprise'];
+    const idx = order.indexOf(tier);
+    const unlocker = order.slice(idx + 1).find((t) => f.tiers[t]?.available) ?? 'enterprise';
+    return { allowed: false, requiresPlan: unlocker };
+  }
+
+  /** Parse a registry limit string like "2 triggers" or "90 days" into a number. */
+  static limitNumber(limit: string | undefined): number | undefined {
+    if (!limit) return undefined;
+    const m = /(\d+)/.exec(limit);
+    const g = m?.[1];
+    return g ? parseInt(g, 10) : undefined;
+  }
+
+  /**
+   * Convenience: machine-readable cap for a feature on the current tier.
+   * Reads the NUMERIC_LIMITS map — never parses display prose.
+   */
+  limitFor(featureKey: string): number | undefined {
+    this.refreshFromCache();
+    return numericLimit(featureKey);
   }
 }
 

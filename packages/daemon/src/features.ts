@@ -73,6 +73,22 @@ export function featureLimit(key: string): string | undefined {
   return FEATURES.find((x) => x.key === key)?.tiers[currentTier]?.limit;
 }
 
+/**
+ * Machine-readable caps (gauntlet §7). Display strings in FEATURES stay
+ * human copy; this map is what enforcement actually reads. Absent entry =
+ * unlimited on that tier.
+ */
+export const NUMERIC_LIMITS: Record<string, Partial<Record<Tier, number>>> = {
+  /** history retention window in days */
+  retention: { free: 30, pro: 365, team: 730 },
+  /** maximum enabled+total event triggers */
+  event_triggers: { free: 2, pro: 50 },
+};
+
+export function numericLimit(key: string): number | undefined {
+  return NUMERIC_LIMITS[key]?.[currentTier];
+}
+
 export function capabilityMatrix(): Array<{ key: string; label: string; category: string; enabled: boolean; limit?: string; status: string }> {
   return FEATURES.map((f) => ({
     key: f.key,

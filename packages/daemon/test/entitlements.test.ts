@@ -145,3 +145,45 @@ describe('EntitlementService — verified-key lifecycle', () => {
   });
 });
 
+describe('EntitlementService — central gate + numeric limits', () => {
+  const DAY = 86_400_000;
+  let db3: DB;
+  let publicKeyHex: string;
+  let privateKeyPem: string;
+  let svc: EntitlementService;
+
+  beforeAll(() => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'cw-entl3-'));
+    db3 = openDatabase(dir).db;
+    const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+    publicKeyHex = publicKey.export({ type: 'spki', format: 'der' }).toString('hex');
+    privateKeyPem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+    svc = new EntitlementService(db3, { publicKeyHex });
+  });
+
+  it('denies gated features on free with an honest unlock plan', () => {
+    const g = svc.gate('audit_log');
+    expect(g.allowed).toBe(false);
+    expect(g.requiresPlan).toBe('pro');
+    expect(svc.gate('policy_engine').requiresPlan).toBe('pro');
+    expect(svc.limitFor('retention')).toBe(30);
+    expect(svc.limitFor('event_triggers')).toBe(2);
+    // Free features pass through.
+    expect(svc.gate('byok_providers').allowed).toBe(true);
+  });
+
+  it('opens the same gates once a real entitlement lifts the tier', () => {
+    const token = signEntitlement(
+      { sub: 'acc_gate', plan: 'pro', iat: Date.now(), exp: Date.now() + DAY },
+      privateKeyPem,
+    );
+    svc.activate(token);
+    expect(svc.gate('audit_log').allowed).toBe(true);
+    expect(svc.gate('policy_engine').allowed).toBe(true);
+    // Pro limits come from NUMERIC_LIMITS, not parsed display prose.
+    expect(svc.limitFor('retention')).toBe(365);
+    expect(svc.limitFor('event_triggers')).toBe(50);
+  });
+});
+
+
