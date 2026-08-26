@@ -1,10 +1,13 @@
 /**
- * ByokCard (ADR-027): BYOK provider management UI.
- * Add → choose kind → auth mode → credential (sent once to daemon keychain,
- * never persisted client-side) → default model → validate/rotate/remove.
+ * ByokCard (ADR-027 + commercial gauntlet §14/21): BYOK provider management.
+ * "Connect a provider" opens ProviderConnectFlow (guided, test-before-save).
+ * Existing connections render as status cards with Test / Set default / Rotate
+ * / Remove actions. Raw keys never touch the client after submit.
  */
 import { useEffect, useState } from 'react';
+import { KeyRound, Loader2, Star } from 'lucide-react';
 import { api } from '../api';
+import { ProviderConnectFlow, friendlyByokError } from './ProviderConnectFlow';
 
 interface ByokConfig {
   id: string;
@@ -15,6 +18,8 @@ interface ByokConfig {
   hint?: string;
   env_var?: string;
   default_model: string;
+  model_label?: string;
+  is_default?: boolean;
   last_validated_at: number | null;
   last_error: string | null;
 }
@@ -22,14 +27,23 @@ interface ByokConfig {
 type KindMeta = Record<string, {
   label: string;
   defaultBaseUrl: string;
-  authOptions: Array<{ mode: string; label: string; detail: string }>;
-  models: Array<{ id: string; context: number; inPerM: number; outPerM: number }>;
+  models: Array<{ id: string; name?: string; context?: number; inPerM?: number; outPerM?: number }>;
 }>;
+
+function relTime(ts: number): string {
+  const s = Math.max(1, Math.round((Date.now() - ts) / 1000));
+  if (s < 90) return `${s}s ago`;
+  const m = Math.round(s / 60);
+  if (m < 90) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 36) return `${h}h ago`;
+  return new Date(ts).toLocaleDateString();
+}
 
 export function ByokCard({ version }: { version: number }): JSX.Element {
   const [data, setData] = useState<{ configs: ByokConfig[]; meta: KindMeta } | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [adding, setAdding] = useState(false);
+  const [flowOpen, setFlowOpen] = useState(false);
 
   const load = async (): Promise<void> => {
     try {
@@ -47,42 +61,44 @@ export function ByokCard({ version }: { version: number }): JSX.Element {
       {!data && !err && <div className="state-line"><span className="spinner" /> Loading providers…</div>}
       {data && (
         <>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-            <span className="hint" style={{ margin: 0 }}>
-              Bring your own keys — stored in your Mac's Keychain, billed directly by each provider. Clockwork never sees or stores the raw key.
-            </span>
-            <button className="btn small primary" onClick={() => setAdding((v) => !v)}>
-              {adding ? 'Cancel' : '+ Add provider'}
-            </button>
-          </div>
+          <p className="hint" style={{ marginTop: 0 }}>
+            Bring your own keys — billed directly by each provider, never by Clockwork. Keys live in
+            this Mac's Keychain; Clockwork stores only a redacted hint.
+          </p>
 
-          {adding && data.meta && (
-            <ByokAddForm
-              meta={data.meta}
-              onDone={() => { setAdding(false); void load(); }}
-            />
-          )}
+          {data.configs.map((c) => (
+            <ConnectedProviderRow key={c.id} cfg={c} onChanged={load} />
+          ))}
 
-          {data.configs.length === 0 && !adding && (
+          {data.configs.length === 0 && (
             <div className="empty" style={{ padding: 20 }}>
-              No API providers configured yet. CLI engines below use their own logins; add an API provider to run tasks with your own keys.
+              No API providers connected yet. CLI engines below use their own logins; connect a
+              provider to schedule work on models you already pay for.
             </div>
           )}
 
-          {data.configs.map((c) => (
-            <ByokRow key={c.id} cfg={c} onChanged={load} />
-          ))}
+          <button className="btn small primary" style={{ marginTop: 8 }} onClick={() => setFlowOpen(true)} data-testid="connect-provider-btn">
+            {data.configs.length === 0 ? 'Connect your first provider' : '+ Connect another provider'}
+          </button>
+
+          <ProviderConnectFlow
+            meta={data.meta}
+            open={flowOpen}
+            onOpenChange={setFlowOpen}
+            onDone={() => void load()}
+          />
         </>
       )}
     </div>
   );
 }
 
-function ByokRow({ cfg, onChanged }: { cfg: ByokConfig; onChanged: () => Promise<void> }): JSX.Element {
+function ConnectedProviderRow({ cfg, onChanged }: { cfg: ByokConfig; onChanged: () => Promise<void> }): JSX.Element {
   const [busy, setBusy] = useState<string | null>(null);
   const [testErr, setTestErr] = useState<string | null>(null);
   const [rotating, setRotating] = useState(false);
   const [newKey, setNewKey] = useState('');
+  const [showNewKey, setShowNewKey] = useState(false);
 
   const doTest = async (): Promise<void> => {
     setBusy('test'); setTestErr(null);
@@ -97,204 +113,91 @@ function ByokRow({ cfg, onChanged }: { cfg: ByokConfig; onChanged: () => Promise
   const doRotate = async (): Promise<void> => {
     setBusy('rotate');
     try {
-      await api.byokRotate(cfg.id, newKey);
+      await api.byokRotate(cfg.id, newKey.trim());
       setNewKey(''); setRotating(false);
       await onChanged();
-    } catch (e) { setTestErr(String((e as Error).message ?? e)); }
+    } catch (e) { setTestErr(friendlyByokError(String((e as Error).message ?? e))); }
     setBusy(null);
   };
 
   const doDelete = async (): Promise<void> => {
     setBusy('delete');
-    await api.byokDelete(cfg.id);
-    await onChanged();
+    try {
+      await api.byokDelete(cfg.id);
+      await onChanged();
+    } finally { setBusy(null); }
   };
 
-  const validated = cfg.last_validated_at
-    ? new Date(cfg.last_validated_at).toLocaleString()
-    : null;
+  const doSetDefault = async (): Promise<void> => {
+    setBusy('default');
+    try {
+      await api.byokSetDefault(cfg.id);
+      await onChanged();
+    } finally { setBusy(null); }
+  };
+
+  const connected = Boolean(cfg.last_validated_at) && !cfg.last_error;
+  const stateChip = cfg.last_error ? 'invalid' : cfg.last_validated_at ? 'connected' : 'untested';
 
   return (
-    <div className="tasklist-row" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+    <div className="tasklist-row" style={{ flexDirection: 'column', alignItems: 'stretch', marginBottom: 8 }} data-testid={`byok-row-${cfg.kind}`}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <KeyRound className="h-4 w-4 text-dim" aria-hidden />
         <strong>{cfg.label}</strong>
-        <span className={`chip ${cfg.last_error || (!validated && cfg.auth === 'keychain') ? 'failed' : validated ? 'completed' : ''}`}>
-          {cfg.last_error ? 'invalid' : validated ? 'connected' : 'untested'}
-        </span>
+        {cfg.is_default && (
+          <span className="chip completed" title="Used when a task does not pick a provider">
+            <Star className="mr-1 inline h-3 w-3" aria-hidden />default
+          </span>
+        )}
+        <span className={`chip ${cfg.last_error ? 'failed' : connected ? 'completed' : ''}`}>{stateChip}</span>
         <span className="hint mono" style={{ margin: 0 }}>
-          {cfg.kind} · {cfg.default_model} · {cfg.auth === 'keychain' ? (cfg.hint ?? '••••') : `$${cfg.env_var}`}
+          {cfg.model_label ?? cfg.default_model} · {cfg.auth === 'keychain' ? (cfg.hint ?? '••••') : `$${cfg.env_var}`}
         </span>
-        {validated && <span className="hint" style={{ margin: 0 }}>validated {validated}</span>}
+        {cfg.last_validated_at && !cfg.last_error && (
+          <span className="hint" style={{ margin: 0 }}>validated {relTime(cfg.last_validated_at)}</span>
+        )}
         <span className="grow" />
+        {!cfg.is_default && (
+          <button className="btn small" disabled={busy !== null} onClick={() => void doSetDefault()} title="Use this provider when a task doesn't specify one">
+            Set default
+          </button>
+        )}
         <button className="btn small" disabled={busy !== null} onClick={() => void doTest()}>
-          {busy === 'test' ? 'Testing…' : 'Test connection'}
+          {busy === 'test' ? <Loader2 className="mr-1 inline h-3 w-3 animate-spin" /> : null}
+          Test
         </button>
         {cfg.auth === 'keychain' && (
-          <button className="btn small" onClick={() => setRotating((v) => !v)}>Rotate key</button>
+          <button className="btn small" onClick={() => setRotating((v) => !v)}>Replace key</button>
         )}
         <button className="btn danger small" disabled={busy !== null} onClick={() => void doDelete()}>Remove</button>
       </div>
+
       {rotating && (
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-          <input
-            type="password"
-            placeholder="Paste new API key"
-            value={newKey}
-            onChange={(e) => setNewKey(e.target.value)}
-            style={{ flex: 1 }}
-            aria-label={`New key for ${cfg.label}`}
-          />
-          <button className="btn small primary" disabled={newKey.length < 8 || busy !== null} onClick={() => void doRotate()}>Save</button>
+          <div className="relative" style={{ flex: 1 }}>
+            <input
+              type={showNewKey ? 'text' : 'password'}
+              placeholder="Paste new API key"
+              value={newKey}
+              onChange={(e) => setNewKey(e.target.value)}
+              aria-label={`New key for ${cfg.label}`}
+              autoComplete="off"
+              className="w-full rounded-md border border-strong bg-bg px-2 py-1.5 pr-9 font-mono text-[12px]"
+            />
+            <button type="button" onClick={() => setShowNewKey((v) => !v)} aria-label={showNewKey ? 'Hide key' : 'Show key'} className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-dim hover:text-fg">
+              {showNewKey ? 'hide' : 'show'}
+            </button>
+          </div>
+          <button className="btn small primary" disabled={newKey.trim().length < 8 || busy !== null} onClick={() => void doRotate()}>Save key</button>
         </div>
       )}
+
       {(testErr ?? cfg.last_error) && (
         <div className="error-banner" role="alert" style={{ marginTop: 6 }}>
-          {testErr ?? cfg.last_error}
+          {friendlyByokError(testErr ?? cfg.last_error)}
         </div>
       )}
     </div>
   );
 }
 
-function ByokAddForm({ meta, onDone }: { meta: KindMeta; onDone: () => void }): JSX.Element {
-  const kinds = Object.keys(meta);
-  const [kind, setKind] = useState(kinds[0]);
-  const [label] = useState('');
-  const [baseUrl, setBaseUrl] = useState('');
-  const [authMode, setAuthMode] = useState<'subscription_cli' | 'api_key'>('api_key');
-  const [secret, setSecret] = useState('');
-  const [envVar, setEnvVar] = useState('');
-  const [model, setModel] = useState('');
-  const [customModel, setCustomModel] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [formErr, setFormErr] = useState<string | null>(null);
-
-  const m = meta[kind];
-  const cliEngineFor = m.defaultBaseUrl.includes('anthropic') ? "the 'claude' CLI engine below" : m.defaultBaseUrl.includes('openai') ? "the 'codex' CLI engine below" : null;
-
-  const submit = async (): Promise<void> => {
-    setBusy(true); setFormErr(null);
-    try {
-      await api.byokCreate({
-        kind,
-        label: label.trim() || undefined,
-        base_url: baseUrl.trim() || undefined,
-        auth: 'keychain',
-        secret: secret || undefined,
-        env_var: envVar || undefined,
-        default_model: model,
-      });
-      onDone();
-    } catch (e) {
-      setFormErr(String((e as Error).message ?? e).replace(/^.*error.?[:"]*/i, ''));
-    }
-    setBusy(false);
-  };
-
-  return (
-    <div className="tasklist-row" style={{ flexDirection: 'column', gap: 12, marginBottom: 14 }}>
-      {/* step 1: pick provider */}
-      <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        <span className="hint">Provider</span>
-        <select value={kind} onChange={(e) => { setKind(e.target.value); setCustomModel(false); setAuthMode('api_key'); }} style={{ padding: '6px 8px' }}>
-          {kinds.map((k) => <option key={k} value={k}>{meta[k].label}</option>)}
-        </select>
-      </label>
-
-      {/* step 2: how do you want to use it? */}
-      <div>
-        <span className="hint">How do you want to use {m.label}?</span>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
-          {m.authOptions.map((ao) => (
-            <label key={ao.mode + ao.label} style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
-              <input
-                type="radio"
-                name={`auth-${kind}`}
-                checked={authMode === ao.mode}
-                onChange={() => setAuthMode(ao.mode as 'subscription_cli' | 'api_key')}
-                disabled={ao.mode === 'subscription_cli'}
-              />
-              <span>
-                <strong>{ao.label}</strong>{' '}
-                <span className="hint">{ao.detail}</span>
-              </span>
-            </label>
-          ))}
-        </div>
-        {m.authOptions.some((a) => a.mode === 'subscription_cli') && (
-          <div className="hint" style={{ marginTop: 4 }}>
-            Subscription usage runs through the installed CLI engine{cliEngineFor ? ` (${cliEngineFor})` : ''} — configure nothing here.
-            {' '}API-key usage is a separate billing system from any subscription you may have.
-          </div>
-        )}
-      </div>
-
-      {authMode === 'api_key' && (
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <span className="hint">
-            {kind === 'custom_openai' ? 'API key (leave empty if your endpoint needs none)' : 'API key'} — sent once to this Mac's Keychain
-          </span>
-          <div style={{ display: 'flex', gap: 8 }}>
-              <select
-                value={secret ? 'enter' : envVar ? 'env' : ''}
-                onChange={(e) => {
-                  if (e.target.value === 'enter') { setEnvVar(''); }
-                  else if (e.target.value === 'env') { setSecret(''); setEnvVar(envVar || 'MY_API_KEY_ENV_VAR'); }
-                  else { setSecret(''); setEnvVar(''); }
-                }}
-                style={{ width: 150, padding: '6px 8px' }}
-                aria-label="Credential source"
-              >
-                <option value="">Choose…</option>
-                <option value="enter">Enter key now</option>
-                <option value="env">Read from env var</option>
-              </select>
-              {envVar ? (
-                <input value={envVar} onChange={(e) => setEnvVar(e.target.value.toUpperCase())} placeholder="ENV_VAR_NAME" style={{ flex: 1 }} aria-label="Environment variable name" />
-              ) : (
-                <input type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="sk-…" style={{ flex: 1 }} autoComplete="off" aria-label="API key" />
-              )}
-            </div>
-        </label>
-      )}
-
-      {(kind === 'custom_openai' || ['openrouter'].includes(kind)) && (
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <span className="hint">Base URL {kind === 'custom_openai' ? '(required)' : '(optional override)'}</span>
-          <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={m.defaultBaseUrl} style={{ fontFamily: 'var(--mono, monospace)' }} />
-        </label>
-      )}
-
-      {/* step 3: default model */}
-      <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        <span className="hint">Default model</span>
-        {m.models.length > 0 && !customModel ? (
-          <select value={model} onChange={(e) => setModel(e.target.value)} style={{ maxWidth: 420, padding: '6px 8px' }}>
-            <option value="">Choose a model…</option>
-            {m.models.map((mo) => (
-              <option key={mo.id} value={mo.id}>
-                {mo.id} · {(mo.context / 1000).toFixed(0)}k ctx · ${mo.inPerM}/M in · ${mo.outPerM}/M out
-              </option>
-            ))}
-          </select>
-        ) : null}
-        {m.models.length > 0 && (
-          <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            <input type="checkbox" checked={customModel} onChange={(e) => { setCustomModel(e.target.checked); setModel(''); }} />
-            <span className="hint">Enter a custom model id instead</span>
-          </label>
-        )}
-        {(customModel || m.models.length === 0) && (
-          <input value={model} onChange={(e) => setModel(e.target.value)} placeholder={kind === 'custom_openai' ? 'llama3.2' : 'model-id'} style={{ maxWidth: 420 }} />
-        )}
-      </label>
-
-      {formErr && <div className="error-banner" role="alert">{formErr}</div>}
-      <div style={{ display: 'flex', gap: 8 }}>
-        <button className="btn small primary" disabled={busy || !model.trim()} onClick={() => void submit()}>
-          {busy ? 'Saving & validating…' : 'Save provider'}
-        </button>
-      </div>
-    </div>
-  );
-}

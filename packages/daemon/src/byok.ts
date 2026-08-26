@@ -13,7 +13,7 @@ const KEYCHAIN_SERVICE_PREFIX = 'clockwork-byok-';
 
 export interface ByokStoreDeps {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  db: { prepare: (sql: string) => { run: (...a: any[]) => unknown; get: (...a: any[]) => unknown; all: (...a: any[]) => any[] } };
+  db: { prepare: (sql: string) => { run: (...a: any[]) => unknown; get: (...a: any[]) => unknown; all: (...a: any[]) => any[] }; transaction?: (fn: () => void) => unknown };
 }
 
 interface ConfigRow {
@@ -25,6 +25,8 @@ interface ConfigRow {
   hint: string | null;
   env_var: string | null;
   default_model: string;
+  model_label: string | null;
+  is_default: number;
   created_at: number;
   last_validated_at: number | null;
   last_error: string | null;
@@ -40,6 +42,8 @@ function toConfig(r: ConfigRow): ProviderConfig {
     ...(r.hint ? { hint: r.hint } : {}),
     ...(r.env_var ? { env_var: r.env_var } : {}),
     default_model: r.default_model,
+    ...(r.model_label ? { model_label: r.model_label } : {}),
+    is_default: r.is_default === 1,
     created_at: r.created_at,
     last_validated_at: r.last_validated_at,
     last_error: r.last_error,
@@ -124,16 +128,48 @@ export class ByokStore {
       hint TEXT,
       env_var TEXT,
       default_model TEXT NOT NULL,
+      model_label TEXT,
+      is_default INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
       last_validated_at INTEGER,
       last_error TEXT
     )`).run();
+    // Installations predating migration 0007.
+    const cols = this.deps.db.prepare(`PRAGMA table_info(byok_configs)`).all() as unknown as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === 'model_label')) {
+      this.deps.db.prepare('ALTER TABLE byok_configs ADD COLUMN model_label TEXT').run();
+    }
+    if (!cols.some((c) => c.name === 'is_default')) {
+      this.deps.db.prepare('ALTER TABLE byok_configs ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0').run();
+    }
   }
 
   list(): ProviderConfig[] {
     this.ensureSchema();
-    const rows = this.deps.db.prepare('SELECT * FROM byok_configs ORDER BY created_at').all() as unknown as ConfigRow[];
+    const rows = this.deps.db.prepare('SELECT * FROM byok_configs ORDER BY is_default DESC, created_at').all() as unknown as ConfigRow[];
     return rows.map(toConfig);
+  }
+
+  /** The user-chosen default config, or undefined when none is set. */
+  getDefault(): ProviderConfig | undefined {
+    this.ensureSchema();
+    const r = this.deps.db.prepare('SELECT * FROM byok_configs WHERE is_default=1 LIMIT 1').get() as unknown as ConfigRow | undefined;
+    return r ? toConfig(r) : undefined;
+  }
+
+  /** Set the default config; clears the flag on all others (transactional). */
+  setDefault(id: string): void {
+    this.ensureSchema();
+    if (!this.get(id)) throw new Error('config not found');
+    this.deps.db.transaction?.(() => {
+      this.deps.db.prepare('UPDATE byok_configs SET is_default=0 WHERE is_default=1').run();
+      this.deps.db.prepare('UPDATE byok_configs SET is_default=1 WHERE id=?').run(id);
+    });
+    if (!this.deps.db.transaction) {
+      // Fallback when no transactional handle: order still leaves default set.
+      this.deps.db.prepare('UPDATE byok_configs SET is_default=0 WHERE is_default=1').run();
+      this.deps.db.prepare('UPDATE byok_configs SET is_default=1 WHERE id=?').run(id);
+    }
   }
 
   get(id: string): ProviderConfig | undefined {
@@ -150,6 +186,8 @@ export class ByokStore {
     secret?: string;
     envVar?: string;
     defaultModel: string;
+    /** cached display name for defaultModel ("Claude Sonnet"); id stays authoritative */
+    modelLabel?: string;
   }): ProviderConfig {
     this.ensureSchema();
     const id = newId();
@@ -162,8 +200,9 @@ export class ByokStore {
       if (!input.envVar || !/^[A-Z_][A-Z0-9_]*$/.test(input.envVar)) throw new Error('valid env_var required');
     }
     const now = Date.now();
+    const isFirst = (this.deps.db.prepare('SELECT COUNT(*) AS n FROM byok_configs').get() as unknown as { n: number }).n === 0;
     this.deps.db.prepare(
-      'INSERT INTO byok_configs (id, kind, label, base_url, auth, hint, env_var, default_model, created_at, last_validated_at, last_error) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
+      'INSERT INTO byok_configs (id, kind, label, base_url, auth, hint, env_var, default_model, model_label, is_default, created_at, last_validated_at, last_error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)'
     ).run(
       id,
       input.kind,
@@ -173,6 +212,8 @@ export class ByokStore {
       hint,
       input.envVar ?? null,
       input.defaultModel,
+      input.modelLabel ?? null,
+      isFirst ? 1 : 0,
       now,
       null,
       null,

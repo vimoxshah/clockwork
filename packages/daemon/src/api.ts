@@ -1106,6 +1106,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
         secret: typeof b.secret === 'string' ? b.secret : undefined,
         envVar: typeof b.env_var === 'string' ? b.env_var : undefined,
         defaultModel: String(b.default_model ?? ''),
+        modelLabel: typeof b.model_label === 'string' && b.model_label.trim() ? b.model_label.trim().slice(0, 60) : undefined,
       });
       // optional immediate validation
       if (b.validate_now !== false && cfg.auth === 'keychain') {
@@ -1144,6 +1145,29 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
   app.delete('/byok/:id', async (req, reply) => {
     byok.delete(String((req.params as any).id));
     return reply.code(204).send();
+  });
+
+  app.post('/byok/validate', async (req, reply) => {
+    // Dry-run credential check used by the connect flow BEFORE anything is saved.
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const kind = String(b.kind ?? '') as keyof typeof PROVIDER_KIND_META;
+    if (!PROVIDER_KIND_META[kind]) return reply.code(422).send({ error: 'unknown provider kind' });
+    const baseUrl = typeof b.base_url === 'string' && b.base_url.trim() ? b.base_url.trim() : PROVIDER_KIND_META[kind].defaultBaseUrl;
+    const secret = typeof b.secret === 'string' ? b.secret : '';
+    if (!secret && kind !== 'custom_openai') return reply.code(422).send({ ok: false, error: 'API key required' });
+    const err = await validateProvider(kind as never, baseUrl, secret);
+    return err ? { ok: false, error: err } : { ok: true };
+  });
+
+  app.post('/byok/:id/default', async (req, reply) => {
+    try {
+      const id = String((req.params as any).id);
+      byok.setDefault(id);
+      audit('byok.set_default', 'byok_config', id, {});
+      return { ok: true };
+    } catch (e) {
+      return reply.code(404).send({ error: String((e as Error).message ?? e) });
+    }
   });
 
   // ---- filesystem browse (repo picker; read-only, home-scoped) ----

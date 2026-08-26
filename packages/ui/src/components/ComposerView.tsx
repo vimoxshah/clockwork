@@ -77,7 +77,8 @@ export default function ComposerView({
 }): JSX.Element {
   const [profiles, setProfiles] = useState<ProfileRow[]>([]);
   const [providers, setProviders] = useState<Array<{ id: string; label: string; detected: boolean; version: string | null }>>([]);
-  const [byokConfigs, setByokConfigs] = useState<Array<{ id: string; label: string; default_model: string; last_error: string | null }>>([]);
+  const [byokConfigs, setByokConfigs] = useState<Array<{ id: string; label: string; default_model: string; model_label?: string; is_default?: boolean; last_error: string | null }>>([]);
+  const defaultByok = byokConfigs.find((b) => b.is_default);
   const [form, setForm] = useState(() => ({
     name: '',
     prompt: '',
@@ -324,10 +325,12 @@ export default function ComposerView({
                     onChange={(e) => setForm({ ...form, byokId: e.target.value })}
                     style={{ padding: '6px 8px', width: '100%' }}
                   >
-                    <option value="">None — use CLI engine above</option>
+                    <option value="">
+                      {defaultByok ? `Default — ${defaultByok.label} (${defaultByok.model_label ?? defaultByok.default_model})` : 'None — use CLI engine above'}
+                    </option>
                     {byokConfigs.map((b) => (
                       <option key={b.id} value={b.id}>
-                        {b.label} · {b.default_model}
+                        {b.label}{b.is_default ? ' (default)' : ''} · {b.model_label ?? b.default_model}
                       </option>
                     ))}
                   </select>

@@ -33,6 +33,7 @@ export const byokKinds = [
   'mistral',
   'deepseek',
   'xai',
+  'zai',
   'custom_openai',
 ] as const;
 export const ByokKind = z.enum(byokKinds);
@@ -58,6 +59,10 @@ export const ProviderConfig = z.object({
   /** env mode: variable name to read */
   env_var: z.string().regex(/^[A-Z_][A-Z0-9_]*$/).optional(),
   default_model: z.string().min(1),
+  /** cached friendly label, e.g. "Claude Sonnet" — the id remains authoritative */
+  model_label: z.string().max(60).optional(),
+  /** exactly one config may be default; enforced in ByokStore */
+  is_default: z.boolean().optional(),
   created_at: z.number().int(),
   last_validated_at: z.number().int().nullable(),
   last_error: z.string().nullable(),
@@ -68,7 +73,7 @@ export const PROVIDER_KIND_META: Record<ByokKind, {
   label: string;
   defaultBaseUrl: string;
   authOptions: Array<{ mode: 'subscription_cli' | 'api_key'; label: string; detail: string }>;
-  models: Array<{ id: string; context: number; inPerM: number; outPerM: number; vision: boolean; tools: boolean; reasoning: boolean }>;
+  models: Array<{ id: string; name: string; context: number; inPerM: number; outPerM: number; vision: boolean; tools: boolean; reasoning: boolean }>;
 }> = {
   anthropic: {
     label: 'Anthropic',
@@ -78,9 +83,9 @@ export const PROVIDER_KIND_META: Record<ByokKind, {
       { mode: 'api_key', label: 'API key', detail: 'Billed per-token to your Anthropic API account.' },
     ],
     models: [
-      { id: 'claude-sonnet-4-5', context: 200000, inPerM: 3, outPerM: 15, vision: true, tools: true, reasoning: false },
-      { id: 'claude-haiku-4-5', context: 200000, inPerM: 1, outPerM: 5, vision: true, tools: true, reasoning: false },
-      { id: 'claude-opus-4-1', context: 200000, inPerM: 15, outPerM: 75, vision: true, tools: true, reasoning: false },
+      { id: 'claude-sonnet-4-5', name: 'Claude Sonnet 4.5', context: 200000, inPerM: 3, outPerM: 15, vision: true, tools: true, reasoning: false },
+      { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', context: 200000, inPerM: 1, outPerM: 5, vision: true, tools: true, reasoning: false },
+      { id: 'claude-opus-4-1', name: 'Claude Opus 4.1', context: 200000, inPerM: 15, outPerM: 75, vision: true, tools: true, reasoning: false },
     ],
   },
   openai: {
@@ -91,9 +96,9 @@ export const PROVIDER_KIND_META: Record<ByokKind, {
       { mode: 'api_key', label: 'API key', detail: 'Billed per-token to your OpenAI platform account.' },
     ],
     models: [
-      { id: 'gpt-5.2-codex', context: 400000, inPerM: 1.25, outPerM: 10, vision: true, tools: true, reasoning: true },
-      { id: 'gpt-5-mini', context: 400000, inPerM: 0.25, outPerM: 2, vision: true, tools: true, reasoning: true },
-      { id: 'gpt-4.1-mini', context: 1000000, inPerM: 0.4, outPerM: 1.6, vision: true, tools: true, reasoning: false },
+      { id: 'gpt-5.2-codex', name: 'GPT-5.2 Codex', context: 400000, inPerM: 1.25, outPerM: 10, vision: true, tools: true, reasoning: true },
+      { id: 'gpt-5-mini', name: 'GPT-5 mini', context: 400000, inPerM: 0.25, outPerM: 2, vision: true, tools: true, reasoning: true },
+      { id: 'gpt-4.1-mini', name: 'GPT-4.1 mini', context: 1000000, inPerM: 0.4, outPerM: 1.6, vision: true, tools: true, reasoning: false },
     ],
   },
   openrouter: {
@@ -101,34 +106,43 @@ export const PROVIDER_KIND_META: Record<ByokKind, {
     defaultBaseUrl: 'https://openrouter.ai/api/v1',
     authOptions: [{ mode: 'api_key', label: 'API key', detail: 'One key, hundreds of models — usage billed through OpenRouter.' }],
     models: [
-      { id: 'anthropic/claude-sonnet-4.5', context: 200000, inPerM: 3, outPerM: 15, vision: true, tools: true, reasoning: false },
-      { id: 'google/gemini-2.5-pro', context: 1048576, inPerM: 1.25, outPerM: 10, vision: true, tools: true, reasoning: true },
-      { id: 'deepseek/deepseek-chat-v3.1', context: 163840, inPerM: 0.2, outPerM: 0.8, vision: false, tools: true, reasoning: false },
+      { id: 'anthropic/claude-sonnet-4.5', name: 'Claude Sonnet 4.5 (via OpenRouter)', context: 200000, inPerM: 3, outPerM: 15, vision: true, tools: true, reasoning: false },
+      { id: 'google/gemini-2.5-pro', name: 'Gemini 2.5 Pro (via OpenRouter)', context: 1048576, inPerM: 1.25, outPerM: 10, vision: true, tools: true, reasoning: true },
+      { id: 'deepseek/deepseek-chat-v3.1', name: 'DeepSeek V3.1 (via OpenRouter)', context: 163840, inPerM: 0.2, outPerM: 0.8, vision: false, tools: true, reasoning: false },
     ],
   },
   google: {
     label: 'Google AI',
     defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
     authOptions: [{ mode: 'api_key', label: 'API key', detail: 'Gemini API billing.' }],
-    models: [{ id: 'gemini-2.5-pro', context: 1048576, inPerM: 1.25, outPerM: 10, vision: true, tools: true, reasoning: true }],
+    models: [{ id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', context: 1048576, inPerM: 1.25, outPerM: 10, vision: true, tools: true, reasoning: true }],
   },
   mistral: {
     label: 'Mistral',
     defaultBaseUrl: 'https://api.mistral.ai/v1',
     authOptions: [{ mode: 'api_key', label: 'API key', detail: 'La Plateforme billing.' }],
-    models: [{ id: 'mistral-large-latest', context: 128000, inPerM: 2, outPerM: 6, vision: false, tools: true, reasoning: false }],
+    models: [{ id: 'mistral-large-latest', name: 'Mistral Large', context: 128000, inPerM: 2, outPerM: 6, vision: false, tools: true, reasoning: false }],
   },
   deepseek: {
     label: 'DeepSeek',
     defaultBaseUrl: 'https://api.deepseek.com/v1',
     authOptions: [{ mode: 'api_key', label: 'API key', detail: 'DeepSeek platform billing.' }],
-    models: [{ id: 'deepseek-chat', context: 131072, inPerM: 0.28, outPerM: 0.42, vision: false, tools: true, reasoning: false }],
+    models: [{ id: 'deepseek-chat', name: 'DeepSeek Chat', context: 131072, inPerM: 0.28, outPerM: 0.42, vision: false, tools: true, reasoning: false }],
   },
   xai: {
     label: 'xAI',
     defaultBaseUrl: 'https://api.x.ai/v1',
     authOptions: [{ mode: 'api_key', label: 'API key', detail: 'xAI API billing.' }],
-    models: [{ id: 'grok-4-fast', context: 2000000, inPerM: 0.2, outPerM: 0.5, vision: true, tools: true, reasoning: true }],
+    models: [{ id: 'grok-4-fast', name: 'Grok 4 Fast', context: 2000000, inPerM: 0.2, outPerM: 0.5, vision: true, tools: true, reasoning: true }],
+  },
+  zai: {
+    label: 'Z.ai',
+    defaultBaseUrl: 'https://api.z.ai/api/paas/v4',
+    authOptions: [{ mode: 'api_key', label: 'API key', detail: 'Z.ai open-platform billing (GLM models).' }],
+    models: [
+      { id: 'glm-4.6', name: 'GLM-4.6', context: 200000, inPerM: 0.6, outPerM: 2.2, vision: false, tools: true, reasoning: true },
+      { id: 'glm-4.5-air', name: 'GLM-4.5 Air', context: 128000, inPerM: 0.2, outPerM: 1.1, vision: false, tools: true, reasoning: false },
+    ],
   },
   custom_openai: {
     label: 'Custom OpenAI-compatible',

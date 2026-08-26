@@ -127,7 +127,9 @@ export const api = {
   byokCreate: (b: unknown) => req<unknown>('POST', '/byok', b),
   byokRotate: (id: string, secret: string) => req<{ ok: boolean; hint?: string }>('POST', `/byok/${id}/rotate`, { secret }),
   byokTest: (id: string) => req<{ ok: boolean; error: string | null }>('POST', `/byok/${id}/test`),
+  byokValidate: (b: { kind: string; base_url?: string; secret?: string }) => req<{ ok: boolean; error: string | null }>('POST', '/byok/validate', b),
   byokDelete: (id: string) => req<unknown>('DELETE', `/byok/${id}`),
+  byokSetDefault: (id: string) => req<{ ok: boolean }>('POST', `/byok/${id}/default`),
   analytics: (days: number) => req<AnalyticsT>('GET', `/analytics?days=${days}`),
   triggers: () => req<Array<{ id: string; name: string; source: string; filter: Record<string, unknown> | null; hasSecret: boolean; taskId: string; enabled: boolean }>>('GET', '/triggers'),
   createTrigger: (body: { name: string; source: string; taskId: string; secret?: string; filter?: Record<string, unknown> }) =>
