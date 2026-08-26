@@ -166,6 +166,8 @@ export const api = {
       mcpDetected: boolean;
       hasTasks: boolean;
       readyToBook: boolean;
+      hasProvider: boolean;
+      byokCount: number;
     }>('GET', '/onboarding/status'),
   runs: (filter: { state?: string; taskId?: string; limit?: number } = {}) => {
     const qs = new URLSearchParams();

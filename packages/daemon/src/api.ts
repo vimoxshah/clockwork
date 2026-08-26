@@ -856,6 +856,13 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     })();
     const mcpConfigured = existsSync(`${home}/.claude.json`);
     const hasTasks = (deps.db.prepare('SELECT COUNT(*) c FROM tasks WHERE deleted_at IS NULL').get() as any).c > 0;
+    // Commercial onboarding (gauntlet §32/33): surface provider readiness too.
+    let byokCount = 0;
+    try {
+      byokCount = (deps.db.prepare('SELECT COUNT(*) c FROM byok_configs').get() as any).c > 0
+        ? (deps.db.prepare('SELECT COUNT(*) c FROM byok_configs').get() as any).c
+        : 0;
+    } catch { /* table not created yet */ }
     return {
       claudeInstalled: claudeOk,
       claudeAuthed: authOk,
@@ -863,6 +870,8 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       mcpDetected: mcpConfigured,
       hasTasks,
       readyToBook: claudeOk && authOk && gitOk,
+      hasProvider: byokCount > 0 || (claudeOk && authOk),
+      byokCount,
     };
   });
 
