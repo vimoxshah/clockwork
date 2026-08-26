@@ -10,6 +10,7 @@ import { Badge } from './ui/card';
 import { ByokCard } from './ByokCard';
 import { LicenseCard } from './LicenseCard';
 import { UpgradeHint } from './UpgradeHint';
+import { Select, SelectValue, SelectTrigger, SelectContent, SelectItem } from './ui/select';
 import { api } from '../api';
 import { useAsync } from '../useAsync';
 
@@ -390,19 +391,28 @@ function TriggersCard({ version }: { version: number }): JSX.Element {
         </div>
         <div>
           <label className="f" htmlFor="trg-src">Source</label>
-          <select id="trg-src" value={source} onChange={(e) => setSource(e.target.value as 'webhook' | 'github')}>
-            <option value="webhook">Webhook (generic)</option>
-            <option value="github">GitHub</option>
-          </select>
+          <Select value={source} onValueChange={(v) => setSource(v as 'webhook' | 'github')}>
+            <SelectTrigger id="trg-src"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="webhook">Webhook (generic)</SelectItem>
+              <SelectItem value="github">GitHub</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <div>
-          <label className="f" htmlFor="trg-task">Fire task</label>
-          <select id="trg-task" value={taskId} onChange={(e) => setTaskId(e.target.value)}>
-            <option value="">— pick a task —</option>
-            {(tasks.data ?? []).map((t) => (
-              <option key={t.id} value={t.id}>{t.name}</option>
-            ))}
-          </select>
+          <label className="f">Fire task</label>
+          <Select
+            value={taskId || '__none__'}
+            onValueChange={(v) => setTaskId(v === '__none__' ? '' : v)}
+          >
+            <SelectTrigger data-testid="trigger-task-select"><SelectValue placeholder="— pick a task —" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__">— pick a task —</SelectItem>
+              {(tasks.data ?? []).map((t) => (
+                <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
         <div>
           <label className="f" htmlFor="trg-secret">{source === 'github' ? 'Note' : 'Shared secret (optional)'}</label>
