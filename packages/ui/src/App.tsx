@@ -264,7 +264,7 @@ function OnboardingGate({ version, onBook }: { version: number; onBook: () => vo
           </button>
         )}
         {!status.hasProvider && (
-          <button className="btn small" onClick={() => { window.location.hash = '#settings'; setDismissed(true); sessionStorage.setItem('cw.onboard.dismissed', '1'); }}>
+          <button className="btn small" onClick={() => { window.location.hash = '#/settings'; setDismissed(true); sessionStorage.setItem('cw.onboard.dismissed', '1'); }}>
             Connect a provider
           </button>
         )}
