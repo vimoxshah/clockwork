@@ -103,3 +103,79 @@ Sequencing, cheapest-first:
 - **It is unvalidated.** No user has asked for this. It resolves a
   contradiction we identified ourselves. Whether developers want it is
   exactly what the interviews should establish before any of it is built.
+
+---
+
+# Amendment after security review (§65/§66)
+
+Hermes reviewed this design and returned **REDESIGN**. It is right, and the
+sequencing above is wrong. Recorded rather than quietly edited, because the
+error is instructive.
+
+## The design solved the wrong problem
+
+Hermes: *"The design treats this as a transport security problem and ignores
+that it's an endpoint security and authorization problem... The daemon's job
+is to execute arbitrary code on a host that holds a secret. The security
+model should start with 'what is the minimum privilege the daemon needs, how
+is it constrained, what happens when auth fails, and how is abuse detected?'
+Instead the design starts with 'how do we let the desktop app reach the
+daemon over the network.'"*
+
+Every step in the sequence above — bind flag, SSE fix, TLS, pairing, host
+display — secures the *connection*. **None of them constrain what happens
+once a connection is established.** Building them first would feel like
+progress while the real risk was untouched.
+
+`Severity: high.`
+
+## Blast radius, stated plainly
+
+`Severity: critical.` If someone reaches this daemon they get arbitrary code
+execution on a host that holds a provider API key, with the daemon's full
+filesystem privileges. Nothing in the design limits that. The worktree
+sandbox constrains *the agent's* workspace; it does not constrain an attacker
+who reaches the control plane and can simply book a task.
+
+This is materially worse than the loopback case, where reaching the daemon
+already implies local access.
+
+## The consideration that was entirely absent
+
+The desktop app is a local tool. **A remote daemon is a long-lived network
+service** that must be patched, updated and monitored on a machine the user
+may forget exists. It needs its own update mechanism — and that mechanism is
+itself a supply-chain path to every connected client. Nothing above
+acknowledged this.
+
+## Corrected sequence
+
+Authorization and containment come first; transport is necessary but not
+sufficient.
+
+1. **Threat model the daemon as a network-exposed code-execution service**,
+   not as an app with an HTTP interface. This reframing drives the rest.
+2. **Least privilege.** Dedicated non-root user, constrained by sandbox or
+   container, explicit filesystem and network policy.
+3. **Authorization scope.** Today the bearer token is all-or-nothing: holding
+   it means booking arbitrary code execution. Remote exposure needs scoped
+   capabilities and a token lifecycle — expiry, rotation, revocation — none
+   of which exist.
+4. **Audit and anomaly detection.** Every executed command attributable. An
+   `audit_log` feature already exists in the registry; this is where it earns
+   its place.
+5. **Update mechanism** for the daemon, designed before exposure, treating
+   the update channel as the high-value target it is.
+6. *Then* transport: SSE auth fix, TLS, pairing, bind flag, host display —
+   with SSE still strictly before any non-loopback bind.
+
+## Status
+
+**This design is not ready to build.** The reframing is sound — remote daemon
+rather than remote executor genuinely preserves the key promise — but it sits
+on an incomplete security model. Steps 1–5 must be designed before step 6 is
+worth writing.
+
+It also remains unvalidated as a *product*: no user has asked for it. It
+resolves a contradiction we identified ourselves, and whether developers want
+it is what the interviews should establish first.
