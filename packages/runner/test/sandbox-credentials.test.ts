@@ -150,6 +150,18 @@ describe.skipIf(!onMac)('sandbox credential containment', () => {
     expect(missing, `credential paths lost their deny rule: ${missing.map((m) => m.replace(os.homedir(), '~')).join(', ')}`).toEqual([]);
   });
 
+  // The pinned list guards against DELETION. This guards the other direction:
+  // a path added to the product but never added here would be protected by the
+  // sandbox yet attacked by no test — silently outside coverage. Recorded as a
+  // known limit in iteration 10; closed here.
+  it('every CREDENTIAL_PATHS entry is on the pinned list', () => {
+    const unpinned = CREDENTIAL_PATHS.filter((c) => !MUST_BE_DENIED.includes(c));
+    expect(
+      unpinned,
+      `added to the product but not to MUST_BE_DENIED, so nothing tests them: ${unpinned.map((m) => m.replace(os.homedir(), '~')).join(', ')}`,
+    ).toEqual([]);
+  });
+
   it('CREDENTIAL_PATHS has not quietly shrunk below the pinned list', () => {
     const gone = MUST_BE_DENIED.filter((c) => !CREDENTIAL_PATHS.includes(c));
     expect(gone, `removed from CREDENTIAL_PATHS: ${gone.map((m) => m.replace(os.homedir(), '~')).join(', ')}`).toEqual([]);
