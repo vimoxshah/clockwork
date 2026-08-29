@@ -1,56 +1,89 @@
 /**
- * Break-it test for a claim the landing page and README both make in absolute
- * terms: "SSH keys unreadable".
+ * Break-it tests for the credential containment the product advertises
+ * ("SSH keys unreadable"). These shell out to the real `sandbox-exec`, so they
+ * assert what macOS enforces, not what the profile text says.
  *
- * That is a security guarantee, and until now it rested on the PRESENCE of
- * deny rules rather than on anything trying to defeat them. The profile allows
- * `file-read*` broadly — a documented macOS/dyld constraint (ADR-023) — and
- * relies on specific `(deny file-read* (subpath ...))` rules winning by rule
- * specificity. That is exactly the kind of assumption worth attacking.
+ * The profile allows `file-read*` broadly — a documented macOS/dyld constraint
+ * (ADR-023) — and relies on specific `(deny file-read* (subpath ...))` rules
+ * beating it by specificity. That is the assumption under attack here.
  *
- * These tests shell out to the real `sandbox-exec`, so they assert what macOS
- * actually enforces, not what the profile text says.
+ * TWO EARLIER MISTAKES, both caught by deleting the deny rule and watching the
+ * suite stay green — never by reading it:
+ *   1. The victim was `readdirSync(SSH)[0]`, which on the author's machine is
+ *      a DIRECTORY. `cat` on a directory fails with "Is a directory" whatever
+ *      the sandbox does, so five of six tests asserted nothing.
+ *   2. `skipIf(!hasSsh)` meant a machine with no credential paths skipped every
+ *      vector and still reported green.
+ * Hence: every victim is proven to be a readable regular file OUTSIDE the
+ * sandbox first, and the suite FAILS if it finds nothing to attack.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, existsSync, readdirSync, symlinkSync, statSync } from 'node:fs';
+import {
+  mkdtempSync, rmSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync, symlinkSync,
+} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { generateSeatbeltProfile, wrapWithSandbox, CREDENTIAL_PATHS } from '../src/sandbox.js';
 
-const SSH = path.join(os.homedir(), '.ssh');
-
 /**
- * A real, readable, regular FILE inside ~/.ssh.
+ * Independently pinned expectation — NOT derived from CREDENTIAL_PATHS.
  *
- * The first version of this used readdirSync(SSH)[0], which on this machine is
- * a DIRECTORY (`conductor_config.d`). `cat` on a directory fails with "Is a
- * directory" whether or not the sandbox denies anything, so five of these
- * tests passed with ~/.ssh REMOVED from CREDENTIAL_PATHS — they were asserting
- * nothing. Caught by deleting the deny rule and watching them stay green.
+ * The previous version enumerated targets from CREDENTIAL_PATHS itself, so
+ * deleting an entry removed the deny rule AND the check for it: the suite
+ * passed with ~/.aws silently unprotected. A guard that reads its expectations
+ * from the thing it guards cannot detect a deletion. Caught by planting.
+ *
+ * Adding a path here is a deliberate act; removing one from the product now
+ * fails this list.
  */
-function victimKey(): string | null {
-  if (!existsSync(SSH)) return null;
-  const preferred = ['id_ed25519', 'id_rsa', 'known_hosts', 'config'];
-  const files = readdirSync(SSH).filter((f) => {
-    try { return statSync(path.join(SSH, f)).isFile(); } catch { return false; }
-  });
-  const pick = preferred.find((p) => files.includes(p)) ?? files[0];
-  return pick ? path.join(SSH, pick) : null;
-}
-const VICTIM = victimKey();
-const hasSsh = VICTIM !== null;
+const MUST_BE_DENIED = [
+  '.ssh', '.aws', '.gnupg', '.config/gcloud',
+  'Library/Cookies', 'Library/Application Support/Google/Chrome',
+  'Library/Application Support/Firefox',
+  '.zsh_history', '.zhistory', '.bash_history',
+].map((p) => path.join(os.homedir(), p));
+
 const onMac = process.platform === 'darwin';
+
+interface Target { label: string; credPath: string; victim: string; isDir: boolean }
 
 let dir: string;
 let profilePath: string;
 let allowedFile: string;
+let targets: Target[] = [];
+let synthesised: string | null = null;
 
-/** Run argv inside the sandbox; return {ok, out}. Never throws. */
+/** A readable regular file at or inside a credential path, else null. */
+function victimIn(credPath: string): { victim: string; isDir: boolean } | null {
+  if (!existsSync(credPath)) return null;
+  let st;
+  try { st = statSync(credPath); } catch { return null; }
+  if (st.isFile()) return st.size > 0 ? { victim: credPath, isDir: false } : null;
+  if (!st.isDirectory()) return null;
+  // macOS TCC makes some of these unreadable to US (~/Library/Cookies throws
+  // EPERM on scandir). Those are not useful targets — if we cannot read it
+  // outside the sandbox, a denial inside proves nothing — so skip them here
+  // rather than letting the throw take down the whole suite.
+  let entries: string[];
+  try { entries = readdirSync(credPath); } catch { return null; }
+  for (const f of entries) {
+    const p = path.join(credPath, f);
+    try {
+      const s = statSync(p);
+      if (s.isFile() && s.size > 0) {
+        execFileSync('/bin/cat', [p], { stdio: 'ignore' }); // must be readable by us
+        return { victim: p, isDir: true };
+      }
+    } catch { /* unreadable or vanished — try the next */ }
+  }
+  return null;
+}
+
 function inSandbox(argv: string[]): { ok: boolean; out: string } {
-  const wrapped = wrapWithSandbox(argv, profilePath);
+  const w = wrapWithSandbox(argv, profilePath);
   try {
-    const out = execFileSync(wrapped[0]!, wrapped.slice(1), { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 20_000 });
+    const out = execFileSync(w[0]!, w.slice(1), { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 20_000 });
     return { ok: true, out };
   } catch (e) {
     const err = e as { stdout?: string; stderr?: string };
@@ -65,60 +98,89 @@ beforeAll(() => {
   const { profile } = generateSeatbeltProfile({ writePaths: [dir], readPaths: [dir] });
   profilePath = path.join(dir, 'profile.sb');
   writeFileSync(profilePath, profile);
+
+  for (const c of MUST_BE_DENIED) {
+    const v = victimIn(c);
+    if (v) targets.push({ label: c.replace(os.homedir(), '~'), credPath: c, victim: v.victim, isDir: v.isDir });
+  }
+
+  // Never skip. A machine with no credential paths gets a synthetic one so the
+  // vectors still run, and it is removed again in afterAll.
+  if (targets.length === 0) {
+    const ssh = path.join(os.homedir(), '.ssh');
+    if (!existsSync(ssh)) mkdirSync(ssh, { mode: 0o700 });
+    synthesised = path.join(ssh, 'clockwork-test-key');
+    writeFileSync(synthesised, 'SYNTHETIC KEY FOR SANDBOX TEST\n', { mode: 0o600 });
+    targets.push({ label: '~/.ssh (synthesised)', credPath: ssh, victim: synthesised, isDir: true });
+  }
 });
 
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
+afterAll(() => {
+  if (synthesised) rmSync(synthesised, { force: true });
+  rmSync(dir, { recursive: true, force: true });
+});
 
 describe.skipIf(!onMac)('sandbox credential containment', () => {
-  // CONTROL. Without this, "cannot read ~/.ssh" proves nothing — a broken
-  // sandbox-exec would fail every command and the suite would look green.
+  // Without this the denials below prove nothing: a broken sandbox-exec would
+  // fail every command and the suite would look green.
   it('control: a non-credential file IS readable inside the sandbox', () => {
     const r = inSandbox(['/bin/cat', allowedFile]);
-    expect(r.ok, `sandbox denied an allowed read, so the denials below prove nothing: ${r.out}`).toBe(true);
+    expect(r.ok, `sandbox denied an allowed read, so nothing below is meaningful: ${r.out}`).toBe(true);
     expect(r.out).toContain('readable-by-design');
   });
 
-  it('~/.ssh is in the credential deny list at all', () => {
-    expect(CREDENTIAL_PATHS).toContain(SSH);
+  it('found something to attack — never silently skips', () => {
+    expect(targets.length, 'no credential path was exercised; this suite would have proved nothing').toBeGreaterThan(0);
   });
 
-  it.skipIf(!hasSsh)('the victim really is a readable regular file OUTSIDE the sandbox', () => {
-    // Without this, a denial inside the sandbox proves nothing — the file
-    // might simply be unreadable, or not a file at all.
-    const raw = execFileSync('/bin/cat', [VICTIM!], { encoding: 'utf8' });
-    expect(raw.length).toBeGreaterThan(0);
+  it('denies every path on the pinned list, whatever CREDENTIAL_PATHS says', () => {
+    const { profile } = generateSeatbeltProfile({ writePaths: [dir], readPaths: [dir] });
+    const missing = MUST_BE_DENIED.filter((c) => !profile.includes(`(deny file-read* (subpath "${c}"))`));
+    expect(missing, `credential paths lost their deny rule: ${missing.map((m) => m.replace(os.homedir(), '~')).join(', ')}`).toEqual([]);
   });
 
-  it.skipIf(!hasSsh)('cannot read a real key file with cat', () => {
-    const r = inSandbox(['/bin/cat', VICTIM!]);
-    expect(r.ok, `SSH key was READABLE inside the sandbox: ${VICTIM}`).toBe(false);
+  it('CREDENTIAL_PATHS has not quietly shrunk below the pinned list', () => {
+    const gone = MUST_BE_DENIED.filter((c) => !CREDENTIAL_PATHS.includes(c));
+    expect(gone, `removed from CREDENTIAL_PATHS: ${gone.map((m) => m.replace(os.homedir(), '~')).join(', ')}`).toEqual([]);
   });
 
-  it.skipIf(!hasSsh)('cannot list the directory', () => {
-    expect(inSandbox(['/bin/ls', SSH]).ok).toBe(false);
+  describe('per credential path', () => {
+    it('runs the vectors against each path that exists', () => {
+      const failures: string[] = [];
+      for (const t of targets) {
+        // Control per target: it must be readable OUTSIDE the sandbox, or a
+        // denial inside is meaningless.
+        try {
+          execFileSync('/bin/cat', [t.victim], { stdio: 'ignore' });
+        } catch {
+          failures.push(`${t.label}: victim not readable outside the sandbox — test is void`);
+          continue;
+        }
+        if (inSandbox(['/bin/cat', t.victim]).ok) failures.push(`${t.label}: cat READ it`);
+        if (inSandbox(['/bin/sh', '-c', `cat ${JSON.stringify(t.victim)}`]).ok) failures.push(`${t.label}: shell READ it`);
+        if (inSandbox(['/bin/sh', '-c', `cp ${JSON.stringify(t.victim)} ${JSON.stringify(path.join(dir, 'stolen'))}`]).ok) {
+          failures.push(`${t.label}: copied out`);
+        }
+        if (t.isDir && inSandbox(['/bin/ls', t.credPath]).ok) failures.push(`${t.label}: listed the directory`);
+      }
+      expect(failures, `credential containment broke:\n${failures.join('\n')}`).toEqual([]);
+    });
   });
 
-  // The bypasses an agent would actually reach for.
-  it.skipIf(!hasSsh)('cannot read it through a shell subprocess', () => {
-    const r = inSandbox(['/bin/sh', '-c', `cat ${JSON.stringify(VICTIM!)}`]);
-    expect(r.ok, `shell subprocess READ the key: ${r.out.slice(0, 120)}`).toBe(false);
+  // Bypasses an agent would actually reach for, against the primary target.
+  it('cannot reach a credential through a relative path from $HOME', () => {
+    const t = targets[0]!;
+    const rel = path.relative(os.homedir(), t.victim);
+    const r = inSandbox(['/bin/sh', '-c', `cd ${JSON.stringify(os.homedir())} && cat ${JSON.stringify(rel)}`]);
+    expect(r.ok, `relative path READ ${t.label}`).toBe(false);
   });
 
-  it.skipIf(!hasSsh)('cannot reach it through a relative path from home', () => {
-    const r = inSandbox(['/bin/sh', '-c', `cd ${JSON.stringify(os.homedir())} && cat .ssh/${path.basename(VICTIM!)}`]);
-    expect(r.ok, `relative path READ the key: ${r.out.slice(0, 120)}`).toBe(false);
-  });
-
-  it.skipIf(!hasSsh)('cannot reach it through a symlink created inside the run scope', () => {
-    const link = path.join(dir, 'link-to-ssh');
-    try { symlinkSync(SSH, link); } catch { /* already there */ }
-    const r = inSandbox(['/bin/sh', '-c', `cat ${JSON.stringify(path.join(link, path.basename(VICTIM!)))}`]);
-    expect(r.ok, `symlink into the run scope READ the key: ${r.out.slice(0, 120)}`).toBe(false);
-  });
-
-  it.skipIf(!hasSsh)('cannot copy it into the writable run scope', () => {
-    const r = inSandbox(['/bin/sh', '-c', `cp ${JSON.stringify(VICTIM!)} ${JSON.stringify(path.join(dir, 'stolen'))}`]);
-    expect(r.ok, 'exfiltration into the run scope succeeded').toBe(false);
-    expect(existsSync(path.join(dir, 'stolen'))).toBe(false);
+  it('cannot reach a credential through a symlink planted in the run scope', () => {
+    const t = targets[0]!;
+    const link = path.join(dir, 'link');
+    try { symlinkSync(t.credPath, link); } catch { /* already exists */ }
+    const inner = t.isDir ? path.join(link, path.basename(t.victim)) : link;
+    const r = inSandbox(['/bin/sh', '-c', `cat ${JSON.stringify(inner)}`]);
+    expect(r.ok, `symlink READ ${t.label}`).toBe(false);
   });
 });
