@@ -226,15 +226,77 @@ export const api = {
   putPrefs: (p: { soundMode: string; volumePct: number }) => req<unknown>('PUT', '/prefs', p),
 };
 
-export function openEventStream(onEvent: (e: any) => void): EventSource {
-  const es = new EventSource(`/events?token=${encodeURIComponent(getToken())}`);
-  es.onmessage = (m) => {
+export interface EventStream {
+  close(): void;
+  onerror: ((e: unknown) => void) | null;
+}
+
+/**
+ * Live daemon events.
+ *
+ * S-audit: this used `EventSource`, which cannot set headers, so the bearer
+ * token rode in the query string — where it reaches proxy logs, browser
+ * history and Referer headers. Streaming the response body via `fetch`
+ * carries a real Authorization header instead, at the cost of reimplementing
+ * the reconnect that EventSource gave for free (below, with backoff).
+ */
+export function openEventStream(onEvent: (e: any) => void): EventStream {
+  let closed = false;
+  let ctrl: AbortController | null = null;
+  const handle: EventStream = {
+    close() {
+      closed = true;
+      ctrl?.abort();
+    },
+    onerror: null,
+  };
+
+  const emit = (raw: string): void => {
     try {
-      const parsed = JSON.parse(m.data);
+      const parsed = JSON.parse(raw);
       // fan-out for any component that needs SSE without prop drilling
       window.dispatchEvent(new CustomEvent('clockwork:sse', { detail: parsed }));
       onEvent(parsed);
     } catch {}
   };
-  return es;
+
+  const connect = async (backoff: number): Promise<void> => {
+    if (closed) return;
+    ctrl = new AbortController();
+    try {
+      const res = await fetch('/events', {
+        headers: { Authorization: `Bearer ${getToken()}` },
+        signal: ctrl.signal,
+      });
+      if (!res.ok || !res.body) throw new Error(`events ${res.status}`);
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        // SSE frames are separated by a blank line; a frame may carry several
+        // `data:` lines, and a chunk may split mid-frame — hence the buffer.
+        let sep = buf.indexOf('\n\n');
+        while (sep !== -1) {
+          const frame = buf.slice(0, sep);
+          buf = buf.slice(sep + 2);
+          for (const line of frame.split('\n')) {
+            if (line.startsWith('data:')) emit(line.slice(5).trim());
+          }
+          sep = buf.indexOf('\n\n');
+        }
+      }
+      // Server closed a healthy stream — reconnect promptly.
+      if (!closed) setTimeout(() => void connect(1000), 1000);
+    } catch (e) {
+      if (closed) return; // abort() during close is not an error
+      handle.onerror?.(e);
+      setTimeout(() => void connect(Math.min(backoff * 2, 30_000)), backoff);
+    }
+  };
+
+  void connect(1000);
+  return handle;
 }

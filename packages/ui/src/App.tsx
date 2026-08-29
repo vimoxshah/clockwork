@@ -89,7 +89,7 @@ export default function App(): JSX.Element {
       setDataVersion((v) => v + 1);
     });
     es.onerror = () => {
-      /* EventSource auto-reconnects; health poll covers outages */
+      /* the stream reconnects with backoff; health poll covers outages */
     };
     return () => es.close();
   }, [unauthorized]);

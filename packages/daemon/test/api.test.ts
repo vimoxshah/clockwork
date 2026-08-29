@@ -53,6 +53,26 @@ afterAll(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+describe('SSE auth (S-audit)', () => {
+  // /events used to accept ?token= because EventSource cannot set headers.
+  // A bearer token in a URL reaches proxy logs, history and Referer headers.
+  // The client now streams via fetch with a real Authorization header, so the
+  // query-param path must stay closed — this is the regression guard.
+  //
+  // Only the rejection path is asserted here: the success path hijacks the
+  // reply and streams indefinitely, which would hang inject(). It is covered
+  // live in packages/ui/e2e/verify-sse.ts.
+  it('rejects a VALID token supplied as a query parameter', async () => {
+    const res = await app.inject({ method: 'GET', url: `/events?token=${encodeURIComponent(token)}` });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('rejects /events with no credentials at all', async () => {
+    const res = await app.inject({ method: 'GET', url: '/events' });
+    expect(res.statusCode).toBe(401);
+  });
+});
+
 function auth(json: any): { method: string; url: string; payload?: any; headers: Record<string, string> } {
   return { ...json, headers: { authorization: `Bearer ${token}` } };
 }

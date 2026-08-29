@@ -91,12 +91,14 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       /^\/(calendars|templates)\//.test(url) || // S-audit: ICS export leaks task data; template preview is control plane
       url.startsWith('/events');
     if (!needsAuth) return; // /health + static UI assets carry no user data
-    // SSE handled via query param (EventSource cannot set headers)
+    // S-audit: /events used to accept ?token= because EventSource cannot set
+    // headers. A bearer token in a URL reaches proxy logs, browser history and
+    // Referer headers — tolerable on loopback, disqualifying for any remote
+    // bind (docs/architecture/byo-runner.md). The client now streams /events
+    // via fetch + ReadableStream, which does carry a header, so there is no
+    // longer a query-param path to authenticate.
     const header = req.headers.authorization;
-    const qpToken = url.startsWith('/events')
-      ? new URL(req.raw.url ?? '', 'http://x').searchParams.get('token')
-      : null;
-    if (header !== `Bearer ${token}` && qpToken !== token) {
+    if (header !== `Bearer ${token}`) {
       await reply.code(401).send({ error: 'unauthorized' });
     }
   });
