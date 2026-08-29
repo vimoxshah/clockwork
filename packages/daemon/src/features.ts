@@ -47,7 +47,13 @@ export const FEATURES: FeatureDef[] = [
   { key: 'policy_engine',       label: 'Policy engine',                category: 'governance', tiers: { free: { available: false }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'enforced' },
   { key: 'webhooks',            label: 'Webhook delivery',             category: 'integrations', tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'available' },
   { key: 'event_triggers',      label: 'Event-triggered agents',       category: 'integrations', tiers: { free: { available: true, limit: '2 triggers' }, pro: { available: true, limit: '50 triggers' }, team: { available: true }, enterprise: { available: true } }, status: 'available' },
-  { key: 'cloud_agents',        label: 'Cloud execution targets',      category: 'execution',  tiers: { free: { available: false }, pro: { available: false }, team: { available: true, limit: 'fair use' }, enterprise: { available: true } }, status: 'planned' },
+  // Was `cloud_agents` (Clockwork-hosted execution, planned, team+). Removed:
+  // hosted execution was dropped in iteration 3 because a hosted runner needs
+  // the user's provider key, negating the keychain promise
+  // (docs/architecture/byo-runner.md). Advertising a feature we have decided
+  // NOT to build is exactly the 'fake gate' this registry forbids. Replaced by
+  // the execution target that actually exists today — see GET /targets.
+  { key: 'container_execution', label: 'Isolated container execution', category: 'execution', tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'available' },
   { key: 'agent_chains',        label: 'Agent chains',                 category: 'execution',  tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'available' },
   { key: 'sso_scim',            label: 'SSO / SCIM',                   category: 'governance', tiers: { enterprise: { available: true } }, status: 'planned' },
 ];
