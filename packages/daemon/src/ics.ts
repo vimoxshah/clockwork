@@ -163,14 +163,34 @@ export interface IcsSourceResult {
 }
 
 /** Fetch a subscribed ICS URL over HTTPS with size + timeout bounds. */
-export async function fetchIcs(url: string, timeoutMs = 15_000): Promise<IcsSourceResult> {
+/**
+ * `fetchImpl` exists so the post-redirect branch below is reachable in a test.
+ * Serving real HTTPS locally needs a certificate; without this seam the only
+ * tests possible enter over http, fire the guard above, and never exercise the
+ * redirect check at all — verified by deleting that check and watching the
+ * tests stay green.
+ */
+export async function fetchIcs(
+  url: string,
+  timeoutMs = 15_000,
+  fetchImpl: typeof fetch = fetch,
+): Promise<IcsSourceResult> {
   const at = Date.now();
   if (!/^https:\/\//i.test(url)) return { ok: false, error: 'only https ICS URLs are accepted', fetchedAt: at };
   try {
-    const res = await fetch(url, {
+    const res = await fetchImpl(url, {
       signal: AbortSignal.timeout(timeoutMs),
       headers: { accept: 'text/calendar' },
     });
+    // S-audit: the https check above runs ONCE, before the request. Node's
+    // fetch follows redirects by default (verified), so an https feed that
+    // 302s to http:// would still be fetched — the classic SSRF shape, and
+    // the way a plain-HTTP internal endpoint becomes reachable. Re-check the
+    // scheme the response actually came from. A legitimate calendar feed
+    // never needs to downgrade to http.
+    if (!/^https:\/\//i.test(res.url || url)) {
+      return { ok: false, error: 'feed redirected away from https', fetchedAt: at };
+    }
     if (!res.ok) return { ok: false, error: `feed returned ${res.status}`, fetchedAt: at };
     const text = await res.text();
     if (text.length > 5_000_000) return { ok: false, error: 'feed exceeds 5MB', fetchedAt: at };
