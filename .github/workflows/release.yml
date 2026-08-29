@@ -91,6 +91,12 @@ jobs:
           VER="${TAG#v}"
           NOTE="## Clockwork ${TAG}
 
+          ### Verify before installing
+          Checksums are published with this release. Verify the download:
+          \`\`\`
+          shasum -a 256 -c checksums-sha256.txt
+          \`\`\`
+
           ### Install
           1. Download Clockwork_${VER}_aarch64.dmg (Apple Silicon)
           2. Open the DMG and drag Clockwork to Applications
