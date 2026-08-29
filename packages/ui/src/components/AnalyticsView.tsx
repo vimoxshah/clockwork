@@ -37,7 +37,7 @@ export default function AnalyticsView({ version }: { version: number }): JSX.Ele
         <h3 className="section-title" style={{ margin: 0 }}>Analytics</h3>
         <span className="grow" />
         <Select value={String(days)} onValueChange={(v) => setDays(Number(v))}>
-          <SelectTrigger aria-label="Time range" className="w-auto h-8 text-xs">
+          <SelectTrigger aria-label="Time range" className="w-auto h-8 text-caption">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>

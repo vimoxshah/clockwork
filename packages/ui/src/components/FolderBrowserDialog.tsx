@@ -70,7 +70,7 @@ export function FolderBrowserDialog({
               <button
                 key={e.name}
                 onClick={() => load(`${path}/${e.name}`)}
-                className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-ui hover:bg-surface-hover"
+                className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-compact hover:bg-surface-hover"
               >
                 {e.isGit ? (
                   <GitBranch className="h-4 w-4 shrink-0 text-accent" />

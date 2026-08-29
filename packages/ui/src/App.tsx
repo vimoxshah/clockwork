@@ -135,7 +135,7 @@ export default function App(): JSX.Element {
         ) : (
           <>
             <header className="flex h-12 items-center gap-4 border-b border-border bg-surface px-4">
-              <div className="wordmark text-ui">
+              <div className="wordmark text-compact">
                 CLOCK<b>WORK</b>
               </div>
               <nav className="tabs flex gap-1" aria-label="Sections">
@@ -143,7 +143,7 @@ export default function App(): JSX.Element {
                   <button
                     key={t}
                     className={
-                      'rounded-lg px-3 py-1.5 text-ui transition-colors ' +
+                      'rounded-lg px-3 py-1.5 text-compact transition-colors ' +
                       (tab === t
                         ? 'bg-surface-active font-medium text-fg'
                         : 'text-muted hover:bg-surface-hover hover:text-fg')
@@ -211,7 +211,7 @@ export default function App(): JSX.Element {
                   }}
                   className="w-72 rounded-xl border border-strong bg-surface p-3 text-left shadow-2xl transition-transform hover:scale-[1.02]"
                 >
-                  <div className="text-ui font-semibold text-fg">🔔 {t.title}</div>
+                  <div className="text-compact font-semibold text-fg">🔔 {t.title}</div>
                   <div className="mt-0.5 text-xs text-muted">{t.body}</div>
                 </button>
               ))}

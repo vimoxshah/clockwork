@@ -31,11 +31,11 @@ describe('type scale', () => {
         if (m) offenders.push(`${f.replace(SRC, 'src')}:${i + 1} ${m.join(' ')}`);
       });
     }
-    expect(offenders, `Use a scale token (text-micro/xxs/xs/ui/sm/base) instead:\n${offenders.join('\n')}`).toEqual([]);
+    expect(offenders, `Use a scale token (text-micro/xxs/caption/compact/sm/base) instead:\n${offenders.join('\n')}`).toEqual([]);
   });
 
   it('does not reintroduce a second spelling for a scale size', () => {
-    // 11px is text-xxs and 13px is text-ui. A raw arbitrary value for either
+    // 11px is text-xxs and 13px is text-compact. A raw arbitrary value for either
     // is the exact duplication this sweep removed.
     const dupes: string[] = [];
     for (const f of files) {

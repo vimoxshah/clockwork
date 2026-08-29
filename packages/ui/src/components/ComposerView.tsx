@@ -61,7 +61,7 @@ function Section({
         <span className="flex h-6 w-6 items-center justify-center rounded-md bg-surface-active text-dim [&_svg]:h-3.5 [&_svg]:w-3.5">
           {icon}
         </span>
-        <h3 className="text-ui font-semibold text-fg">{title}</h3>
+        <h3 className="text-compact font-semibold text-fg">{title}</h3>
         {n && <span className="rounded-full bg-surface-active px-1.5 text-xxs text-dim">{n}</span>}
       </div>
       {children}
@@ -423,7 +423,7 @@ export default function ComposerView({
                 <span className="flex h-6 w-6 items-center justify-center rounded-md bg-surface-active text-dim [&_svg]:h-3.5 [&_svg]:w-3.5">
                   <Bot />
                 </span>
-                <h3 className="text-ui font-semibold">Agent profile</h3>
+                <h3 className="text-compact font-semibold">Agent profile</h3>
               </div>
               <div role="radiogroup" aria-label="Agent profile" className="space-y-2">
                 <PersonaCard
@@ -464,7 +464,7 @@ export default function ComposerView({
                 <span className="flex h-6 w-6 items-center justify-center rounded-md bg-surface-active text-dim [&_svg]:h-3.5 [&_svg]:w-3.5">
                   <CalendarClock />
                 </span>
-                <h3 className="text-ui font-semibold">Schedule</h3>
+                <h3 className="text-compact font-semibold">Schedule</h3>
               </div>
               <Segmented
                 aria-label="Schedule type"
@@ -549,7 +549,7 @@ export default function ComposerView({
                       <input
                         id="c-rtime"
                         type="time"
-                        className="mono h-9 w-32 rounded-lg border border-strong bg-bg px-3 text-ui text-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                        className="mono h-9 w-32 rounded-lg border border-strong bg-bg px-3 text-compact text-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
                         value={form.rruleTime}
                         onChange={(e) => setForm({ ...form, rruleTime: e.target.value })}
                       />
@@ -633,7 +633,7 @@ function PersonaCard({
         {glyph}
       </span>
       <span className="min-w-0">
-        <span className="block text-ui font-medium text-fg">{name}</span>
+        <span className="block text-compact font-medium text-fg">{name}</span>
         <span className="block truncate text-xs text-dim">
           {slug ? `@${slug}` : description ?? 'Default profile'}
         </span>

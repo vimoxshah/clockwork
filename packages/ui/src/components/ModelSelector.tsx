@@ -110,7 +110,7 @@ export function ModelSelector({
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         className={cn(
-          'flex h-9 w-full items-center justify-between rounded-lg border border-strong bg-bg px-3 py-2 text-ui text-fg',
+          'flex h-9 w-full items-center justify-between rounded-lg border border-strong bg-bg px-3 py-2 text-compact text-fg',
           'focus:outline-none focus:ring-2 focus:ring-accent',
         )}
         aria-label="Model selector"
@@ -140,7 +140,7 @@ export function ModelSelector({
             onKeyDown={onKeyDown}
             placeholder="Search models…"
             aria-label="Search models"
-            className="w-full bg-transparent text-ui outline-none placeholder:text-dim"
+            className="w-full bg-transparent text-compact outline-none placeholder:text-dim"
           />
         </div>
 
@@ -158,7 +158,7 @@ export function ModelSelector({
                 onMouseEnter={() => setActive(i)}
                 onClick={() => pick(m)}
                 className={cn(
-                  'flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-ui',
+                  'flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-compact',
                   i === active ? 'bg-surface-hover' : '',
                   m.id === value ? 'ring-1 ring-accent' : '',
                 )}
@@ -189,7 +189,7 @@ export function ModelSelector({
               onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); submitCustom(); } }}
               placeholder={customPlaceholder}
               aria-label="Custom model ID"
-              className="h-8 w-full rounded-md border border-strong bg-bg px-2 font-mono text-xs outline-none focus:ring-2 focus:ring-accent"
+              className="h-8 w-full rounded-md border border-strong bg-bg px-2 font-mono text-caption outline-none focus:ring-2 focus:ring-accent"
             />
             <button className="btn small primary" onClick={submitCustom}>Use</button>
           </div>
@@ -197,7 +197,7 @@ export function ModelSelector({
           allowCustom && (
             <button
               onClick={() => setCustomMode(true)}
-              className="w-full border-t border-border px-3 py-2 text-left text-xs text-dim hover:bg-surface-hover hover:text-fg"
+              className="w-full border-t border-border px-3 py-2 text-left text-caption text-dim hover:bg-surface-hover hover:text-fg"
             >
               Use a custom model ID… <span className="text-xxs">(advanced)</span>
             </button>

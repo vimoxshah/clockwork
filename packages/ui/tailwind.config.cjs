@@ -40,19 +40,26 @@ const config: Config = {
         strong: 'var(--border-strong)',
       },
       /**
-       * App type scale. Sizes are font-size ONLY (no paired line-height) so
-       * each token is a drop-in for the arbitrary value it replaces — body
-       * sets no line-height, so these inherit `normal` exactly as the
-       * hand-written text-[13px] etc. did. Leading stays a component concern.
-       * Named `ui` not `body`: 13px is the dense-UI size, while the actual
-       * <body> is 14px — S-review (Hermes) flagged `body` as misleading.
-       * xxs previously paired 14px leading; it is font-size only now so that
-       * 11px has ONE spelling instead of two.
+       * App type scale. Every token pairs an explicit line-height at exactly
+       * 1.5x, which is what these sizes already rendered at: Tailwind's
+       * preflight sets line-height:1.5 on <html> and body sets none, so the
+       * hand-written text-[13px] inherited 19.5px. Pairing at 1.5x therefore
+       * changes nothing visually while making the contract uniform.
+       *
+       * S-review: both validators flagged a font-size-only scale sitting
+       * beside Tailwind's paired text-xs/sm/base as an inconsistent contract
+       * ("same prefix, opposite behaviour"). Hence 12px is `caption` here
+       * rather than remapping to text-xs, whose 16px leading would have
+       * silently tightened 16 sites by 2px.
+       *
+       * Named `compact` not `body`/`ui`: 13px is the dense-UI size while the
+       * real <body> is 14px.
        */
       fontSize: {
-        micro: '10px',
-        xxs: '11px',
-        ui: '13px',
+        micro: ['10px', '15px'],
+        xxs: ['11px', '16.5px'],
+        caption: ['12px', '18px'],
+        compact: ['13px', '19.5px'],
       },
     },
   },
