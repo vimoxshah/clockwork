@@ -13,7 +13,8 @@
  *
  * SCOPE — what this does NOT catch, so "we have a test" is never mistaken for
  * "the page is honest":
- *   - claims with no data-feature attribute at all (prose, headlines, the hero)
+ *   - most prose and headline claims. ONE prose rule exists (permanence vs
+ *     retention); the rest of the copy is unchecked.
  *   - whether FEATURES itself is truthful; the page is held to the registry,
  *     and the registry is held to nothing here
  *   - the PRICE. $99/year has no machine-readable source of truth to check
@@ -28,6 +29,7 @@ import { FEATURES, type Tier } from '../src/features.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PAGE = resolve(HERE, '../../../landing-page/index.html');
+const README = resolve(HERE, '../../../README.md');
 
 /** Pricing cards in document order: [tier, cardHtml]. */
 function cards(): Array<{ tier: Tier; html: string }> {
@@ -90,6 +92,39 @@ describe('landing page honesty', () => {
       }
     }
     expect(offenders, `absolute claim over a limited tier:\n${offenders.join('\n')}`).toEqual([]);
+  });
+
+  // S-audit iteration 8: the rules above only inspect pricing <li> elements
+  // carrying data-feature. The PROSE was unguarded, and it claimed "Search
+  // every past run forever" — false on two counts, because retention-audit.ts
+  // prunes terminal runs by BOTH a time window (default 90 days, free capped
+  // at 30) and a count cap (default 1000 runs).
+  //
+  // `retention` carries a limit on every tier, so no permanence claim about
+  // history is true anywhere on the page. "unlimited" is deliberately NOT
+  // banned outright — "unlimited recurring schedules" is true, because
+  // `scheduling` has no cap on any tier.
+  it('makes no permanence claim about history that retention contradicts', () => {
+    const retention = FEATURES.find((f) => f.key === 'retention');
+    const everyTierCapped =
+      retention !== undefined &&
+      (['free', 'pro', 'team', 'enterprise'] as Tier[]).every((t) => Boolean(retention.tiers[t]?.limit));
+    expect(everyTierCapped, 'retention is no longer capped on every tier — revisit this rule').toBe(true);
+
+    const raw = readFileSync(PAGE, 'utf8')
+      .replace(/<style[\s\S]*?<\/style>/g, '')
+      .replace(/<script[\s\S]*?<\/script>/g, '')
+      .replace(/<!--[\s\S]*?-->/g, '');
+    const text = raw.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+    const PERMANENCE = /\b(forever|never deleted|never expires?|permanently|kept for good|all time)\b/i;
+    const hit = text.match(PERMANENCE);
+    expect(hit?.[0] ?? null, `page claims permanence but retention prunes on every tier: "${hit?.[0] ?? ''}"`).toBeNull();
+
+    // The README makes the same pitch to the same reader and carried the same
+    // claim ("Search every past run forever"), so it is held to the same rule.
+    const readme = readFileSync(README, 'utf8');
+    const rHit = readme.match(PERMANENCE);
+    expect(rHit?.[0] ?? null, `README claims permanence but retention prunes: "${rHit?.[0] ?? ''}"`).toBeNull();
   });
 
   it('says so when a feature is only planned', () => {
