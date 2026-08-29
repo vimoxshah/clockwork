@@ -1,7 +1,9 @@
 # Design system — type scale
 
-Status: **type scale done and enforced.** Colour was already systematized.
-Radius, shadow, spacing and motion are not yet tokenized (see Open below).
+Status: **done.** Colour was already systematized, the type scale was rebuilt
+and enforced, and radius/shadow/spacing/motion were measured in iteration 17
+and found already consistent — see below. Every layer now has either a token
+set or a measured reason it needs none.
 
 ## Type
 
@@ -46,15 +48,36 @@ Named for size and density, never for a place. `compact` is 13px because
 that is the dense-UI size — the real `<body>` is 14px, so calling it `body`
 was misleading, and `ui` said nothing at all. Both were rejected in review.
 
-## Open — not tokenized
+## The rest of the system — measured, not assumed
 
-| Area | State |
-| --- | --- |
-| Colour | **Done.** 25 semantic vars, `[data-theme]` flipped, Tailwind-wired. |
-| Radius | 4 values, 54 uses. Consistent in practice, no semantic names. |
-| Shadow | 4 values, 8 uses. Low surface; leave. |
-| Spacing | Tailwind defaults throughout. Arguably correct; no action. |
-| Motion | Durations/easings ad hoc. Nothing tokenized. |
+| Area | State | Action |
+| --- | --- | --- |
+| Colour | 25 semantic vars, `[data-theme]` flipped, Tailwind-wired | none needed |
+| Type | rebuilt into a scale, 0 arbitrary values, guarded | done |
+| Radius | 4 values (`md`/`lg`/`xl`/`full`), 54 uses, **0 arbitrary** | guarded |
+| Motion | Tailwind defaults only — **0 custom easings, 0 arbitrary durations** | guarded |
+| Shadow | 4 values, 8 uses | leave |
+| Spacing | Tailwind defaults throughout | leave |
 
-Radius and motion are the next candidates. Neither is visibly broken, so
-neither should jump the queue ahead of product work.
+An earlier version of this file listed radius and motion as "not tokenized"
+and named them the next candidates. **That was an assumption, and measuring it
+showed it was wrong.** Radius already resolves to four consistent steps with
+no arbitrary values, and motion uses Tailwind's defaults with nothing custom
+at all. Inventing semantic aliases (`rounded-card`, `duration-fast`) would
+have been churn against a defect that does not exist.
+
+What was added instead is two regression guards in
+`packages/ui/test/design-system.test.ts`, matching the type guard: no
+arbitrary `rounded-[…]`, and no arbitrary `duration-[…]` / `ease-[…]`. Both
+proven by planting each violation and watching the matching test fail.
+
+### A measurement error worth recording
+
+The first pass at this audit grepped `ease-[a-z]+` and reported two custom
+easings, `ease-notes` and `ease-engineer`. Neither exists. The pattern had
+matched inside **prose** — the words "release-notes" and "release-engineer" in
+agent-profile copy. Nothing appeared in the built CSS.
+
+The motion guard therefore matches only bracketed forms (`ease-[…]`), which
+cannot occur in ordinary text. A grep that scans source for class names will
+find them in strings that merely look like class names.

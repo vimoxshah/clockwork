@@ -19,6 +19,42 @@ const walk = (dir: string, out: string[] = []): string[] => {
   return out;
 };
 
+describe('radius and motion', () => {
+  const files = walk(SRC);
+
+  // Measured in iteration 17: radius already uses four consistent values with
+  // ZERO arbitrary ones, and motion uses Tailwind defaults with no custom
+  // easings or durations. design-system.md had listed both as "not tokenized",
+  // which was an assumption rather than a measurement. Nothing is invented
+  // here — these guards keep a clean state clean.
+  it('has no arbitrary border radii', () => {
+    const offenders: string[] = [];
+    for (const f of files) {
+      const src = readFileSync(f, 'utf8');
+      src.split('\n').forEach((line, i) => {
+        const m = line.match(/rounded-\[[^\]]+\]/g);
+        if (m) offenders.push(`${f.replace(SRC, 'src')}:${i + 1} ${m.join(' ')}`);
+      });
+    }
+    expect(offenders, `use a radius step (rounded-md/lg/xl/full) instead:\n${offenders.join('\n')}`).toEqual([]);
+  });
+
+  it('has no arbitrary transition durations or easings', () => {
+    const offenders: string[] = [];
+    for (const f of files) {
+      const src = readFileSync(f, 'utf8');
+      src.split('\n').forEach((line, i) => {
+        // Only class positions, not prose: `duration-[..]`/`ease-[..]` with a
+        // bracket are unambiguous, unlike a bare ease-\w+ which matches words
+        // like "release-notes" inside copy — a false positive this suite hit.
+        const m = line.match(/\b(duration|ease)-\[[^\]]+\]/g);
+        if (m) offenders.push(`${f.replace(SRC, 'src')}:${i + 1} ${m.join(' ')}`);
+      });
+    }
+    expect(offenders, `arbitrary motion values:\n${offenders.join('\n')}`).toEqual([]);
+  });
+});
+
 describe('type scale', () => {
   const files = walk(SRC);
 
