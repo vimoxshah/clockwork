@@ -82,7 +82,7 @@ export function AgentPicker({
             <button
               key={p.id}
               onClick={() => { onChange(p.id); setQ(''); }}
-              className="flex w-full items-center gap-2 rounded-lg border border-border px-3 py-2 text-left text-[13px] hover:bg-surface-hover"
+              className="flex w-full items-center gap-2 rounded-lg border border-border px-3 py-2 text-left text-body hover:bg-surface-hover"
             >
               <span aria-hidden>{p.avatar ?? '◆'}</span>
               <strong>{p.name}</strong>
@@ -99,7 +99,7 @@ export function AgentPicker({
             const sel = profiles.find((p) => p.id === value);
             if (!sel) return null;
             return (
-              <div className="flex items-center gap-2 rounded-lg border border-strong bg-surface-active px-3 py-2 text-[13px]" data-testid="selected-agent">
+              <div className="flex items-center gap-2 rounded-lg border border-strong bg-surface-active px-3 py-2 text-body" data-testid="selected-agent">
                 <span aria-hidden>{sel.avatar ?? '◆'}</span>
                 <strong>{sel.name}</strong>
                 <span className="chip completed" style={{ marginLeft: 'auto' }}>selected</span>
@@ -118,11 +118,11 @@ export function AgentPicker({
                     key={p.id}
                     onClick={() => onChange(p.id)}
                     title={intent}
-                    className="rounded-lg border border-border px-3 py-2 text-left text-[13px] hover:border-strong hover:bg-surface-hover"
+                    className="rounded-lg border border-border px-3 py-2 text-left text-body hover:border-strong hover:bg-surface-hover"
                   >
                     <span aria-hidden className="mr-1.5">{glyph}</span>
                     {p.name}
-                    <div className="text-[11px] text-dim">{intent}</div>
+                    <div className="text-xxs text-dim">{intent}</div>
                   </button>
                 ))}
               </div>
@@ -132,7 +132,7 @@ export function AgentPicker({
           {/* browse all */}
           <button
             onClick={() => setShowAll((s) => !s)}
-            className="text-[13px] text-muted underline-offset-2 hover:text-fg hover:underline"
+            className="text-body text-muted underline-offset-2 hover:text-fg hover:underline"
             aria-expanded={showAll}
           >
             {showAll ? '↑ Hide all agents' : `Browse all ${profiles.length} agents →`}
@@ -145,11 +145,11 @@ export function AgentPicker({
                   role="radio"
                   aria-checked={value === p.id}
                   onClick={() => onChange(p.id)}
-                  className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] hover:bg-surface-hover ${value === p.id ? 'bg-surface-active' : ''}`}
+                  className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-body hover:bg-surface-hover ${value === p.id ? 'bg-surface-active' : ''}`}
                 >
                   <span aria-hidden>{p.avatar ?? '◆'}</span>
                   {p.name}
-                  {p.slug && <span className="mono ml-auto text-[11px] text-dim">@{p.slug}</span>}
+                  {p.slug && <span className="mono ml-auto text-xxs text-dim">@{p.slug}</span>}
                 </button>
               ))}
             </div>

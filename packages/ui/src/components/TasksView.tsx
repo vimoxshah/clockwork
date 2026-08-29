@@ -94,7 +94,7 @@ export default function TasksView({ version }: { version: number }): JSX.Element
           ))}
         </div>
         <Select value={sort} onValueChange={(v) => setSort(v as SortKey)}>
-          <SelectTrigger aria-label="Sort tasks" className="w-auto h-8 text-[12px]">
+          <SelectTrigger aria-label="Sort tasks" className="w-auto h-8 text-xs">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>

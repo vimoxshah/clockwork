@@ -78,9 +78,9 @@ export function DateTimePicker({
             nav_button_next: 'right-0',
             table: 'border-collapse',
             head_row: 'flex mb-1',
-            head_cell: 'w-9 text-[11px] uppercase tracking-wide text-dim font-medium',
+            head_cell: 'w-9 text-xxs uppercase tracking-wide text-dim font-medium',
             row: 'flex w-full',
-            cell: 'p-0.5 text-center text-[13px]',
+            cell: 'p-0.5 text-center text-body',
             day: cn(
               'h-8 w-9 rounded-md inline-flex items-center justify-center cursor-pointer',
               'hover:bg-surface-hover hover:text-fg focus-visible:outline focus-visible:outline-accent',
@@ -100,7 +100,7 @@ export function DateTimePicker({
           <div className="flex items-center gap-1.5">
             <select
               aria-label="Hour"
-              className="h-8 rounded-md border border-strong bg-bg px-2 text-[13px] text-fg focus:outline-none focus:ring-2 focus:ring-accent"
+              className="h-8 rounded-md border border-strong bg-bg px-2 text-body text-fg focus:outline-none focus:ring-2 focus:ring-accent"
               value={hh}
               onChange={(e) => setTime(Number(e.target.value), value.getMinutes())}
             >
@@ -111,7 +111,7 @@ export function DateTimePicker({
             <span className="text-dim">:</span>
             <select
               aria-label="Minute"
-              className="h-8 rounded-md border border-strong bg-bg px-2 text-[13px] text-fg focus:outline-none focus:ring-2 focus:ring-accent"
+              className="h-8 rounded-md border border-strong bg-bg px-2 text-body text-fg focus:outline-none focus:ring-2 focus:ring-accent"
               value={mm}
               onChange={(e) => setTime(value.getHours(), Number(e.target.value))}
             >

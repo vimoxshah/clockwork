@@ -79,7 +79,7 @@ export function LicenseCard({ version }: { version: number }): JSX.Element {
       {activating && (
         <div className="flex flex-col gap-2 rounded-lg border border-border p-3">
           <label className="flex flex-col gap-1">
-            <span className="text-[12px] font-medium">License key</span>
+            <span className="text-xs font-medium">License key</span>
             <input
               type="password"
               value={keyInput}
@@ -89,7 +89,7 @@ export function LicenseCard({ version }: { version: number }): JSX.Element {
               autoComplete="off"
               spellCheck={false}
               data-testid="license-key-input"
-              className="w-full rounded-md border border-strong bg-bg px-2 py-1.5 font-mono text-[12px]"
+              className="w-full rounded-md border border-strong bg-bg px-2 py-1.5 font-mono text-xs"
             />
           </label>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -112,7 +112,7 @@ export function LicenseCard({ version }: { version: number }): JSX.Element {
       )}
 
       <button
-        className="text-left text-[12px] text-dim underline-offset-2 hover:text-fg hover:underline"
+        className="text-left text-xs text-dim underline-offset-2 hover:text-fg hover:underline"
         aria-expanded={showMatrix}
         onClick={() => setShowMatrix((v) => !v)}
         data-testid="capability-matrix-toggle"
@@ -123,14 +123,14 @@ export function LicenseCard({ version }: { version: number }): JSX.Element {
         <div className="rounded-lg border border-border p-2" style={{ maxHeight: 300, overflow: 'auto' }}>
           {groupByCategory(caps.features).map(([cat, feats]) => (
             <div key={cat}>
-              <p className="mb-1 mt-2 text-[11px] font-semibold uppercase tracking-wide text-dim">{cat}</p>
+              <p className="mb-1 mt-2 text-xxs font-semibold uppercase tracking-wide text-dim">{cat}</p>
               {feats.map((f) => (
-                <div key={f.key} className="flex items-center gap-2 px-1 py-1 text-[13px]">
+                <div key={f.key} className="flex items-center gap-2 px-1 py-1 text-body">
                   {f.enabled
                     ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-accent" aria-label="included" />
                     : <TriangleAlert className="h-3.5 w-3.5 shrink-0 text-dim" aria-hidden />}
                   <span>{f.label}</span>
-                  {f.limit && <span className="text-[11px] text-dim">({f.limit})</span>}
+                  {f.limit && <span className="text-xxs text-dim">({f.limit})</span>}
                   {!f.enabled && f.status === 'planned' && <span className="chip" style={{ marginLeft: 'auto' }}>planned</span>}
                 </div>
               ))}
