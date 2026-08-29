@@ -243,12 +243,22 @@ export interface EventStream {
 export function openEventStream(onEvent: (e: any) => void): EventStream {
   let closed = false;
   let ctrl: AbortController | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let connecting = false;
   const handle: EventStream = {
     close() {
       closed = true;
+      if (timer) clearTimeout(timer); // S-review: don't leave a live timer behind
+      timer = null;
       ctrl?.abort();
     },
     onerror: null,
+  };
+
+  const retry = (delay: number): void => {
+    if (closed) return;
+    if (timer) clearTimeout(timer); // S-review: never schedule two reconnects
+    timer = setTimeout(() => void connect(delay), delay);
   };
 
   const emit = (raw: string): void => {
@@ -261,21 +271,34 @@ export function openEventStream(onEvent: (e: any) => void): EventStream {
   };
 
   const connect = async (backoff: number): Promise<void> => {
-    if (closed) return;
+    if (closed || connecting) return; // S-review: no overlapping streams
+    connecting = true;
     ctrl = new AbortController();
     try {
       const res = await fetch('/events', {
         headers: { Authorization: `Bearer ${getToken()}` },
         signal: ctrl.signal,
       });
+      // S-review: a rejected credential is not a transient fault. Retrying it
+      // forever would hammer the daemon and hide the real problem from the
+      // user, who needs to re-enter a token — so stop and surface it.
+      if (res.status === 401 || res.status === 403) {
+        handle.onerror?.(new Error(`events unauthorized (${res.status})`));
+        return;
+      }
       if (!res.ok || !res.body) throw new Error(`events ${res.status}`);
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let buf = '';
+      // S-review: the stream is up, so the next failure starts from 1s again
+      // rather than inheriting an escalated delay forever after one blip.
+      backoff = 1000;
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
-        buf += dec.decode(value, { stream: true });
+        // S-review: normalise CRLF — our daemon writes \n, but a proxy or a
+        // different server may not, and \r\n\r\n contains no \n\n to split on.
+        buf += dec.decode(value, { stream: true }).replace(/\r\n/g, '\n');
         // SSE frames are separated by a blank line; a frame may carry several
         // `data:` lines, and a chunk may split mid-frame — hence the buffer.
         let sep = buf.indexOf('\n\n');
@@ -289,11 +312,13 @@ export function openEventStream(onEvent: (e: any) => void): EventStream {
         }
       }
       // Server closed a healthy stream — reconnect promptly.
-      if (!closed) setTimeout(() => void connect(1000), 1000);
+      retry(1000);
     } catch (e) {
       if (closed) return; // abort() during close is not an error
       handle.onerror?.(e);
-      setTimeout(() => void connect(Math.min(backoff * 2, 30_000)), backoff);
+      retry(Math.min(backoff * 2, 30_000));
+    } finally {
+      connecting = false;
     }
   };
 
