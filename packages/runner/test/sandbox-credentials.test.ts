@@ -133,6 +133,17 @@ describe.skipIf(!onMac)('sandbox credential containment', () => {
     expect(targets.length, 'no credential path was exercised; this suite would have proved nothing').toBeGreaterThan(0);
   });
 
+  // COVERAGE vs EFFECTIVENESS — deliberately two different checks.
+  //
+  // This one is STATIC: it proves a deny rule exists for every pinned path,
+  // including ones no dynamic vector can reach. ~/Library/Cookies is
+  // TCC-protected and unreadable even outside the sandbox, so it can never be
+  // a live target — but deleting it from CREDENTIAL_PATHS still fails HERE.
+  // Verified by planting that exact deletion.
+  //
+  // The per-path vectors below are the EFFECTIVENESS half: they prove the rule
+  // actually stops a read. A path skipped there is still covered here, so the
+  // skip is not a silent pass.
   it('denies every path on the pinned list, whatever CREDENTIAL_PATHS says', () => {
     const { profile } = generateSeatbeltProfile({ writePaths: [dir], readPaths: [dir] });
     const missing = MUST_BE_DENIED.filter((c) => !profile.includes(`(deny file-read* (subpath "${c}"))`));
