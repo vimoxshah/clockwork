@@ -137,14 +137,18 @@ export class EntitlementService {
   verifyToken(token: string): EntitlementClaims {
     const fail = (why: string): never => { throw new Error(why); };
     const [payloadB64, sigB64] = token.split('.');
-    if (!payloadB64 || !sigB64) return fail('This license key is malformed.');
+    if (!payloadB64 || !sigB64) return fail(
+      'This license key is not complete. Copy the whole key from your purchase email — it is one long line with a dot in the middle — and paste it again.',
+    );
     let payload: Buffer; let sig: Buffer; let claims: EntitlementClaims;
     try {
       payload = Buffer.from(payloadB64, 'base64url');
       sig = Buffer.from(sigB64, 'base64url');
       claims = JSON.parse(payload.toString('utf8')) as EntitlementClaims;
     } catch {
-      return fail('This license key is malformed.');
+      return fail(
+      'This license key is not complete. Copy the whole key from your purchase email — it is one long line with a dot in the middle — and paste it again.',
+    );
     }
     const configuredKey = this.publicKeyHexOverride || ENTITLEMENT_PUBLIC_KEY_HEX;
     if (!configuredKey) return fail('License verification is not yet enabled in this build.');
@@ -157,12 +161,16 @@ export class EntitlementService {
     }
     if (!ok) return fail('This license key is not genuine. Re-download Clockwork from the official site or contact support.');
     if (!claims.sub || !claims.plan || typeof claims.iat !== 'number' || typeof claims.exp !== 'number') {
-      return fail('This license key is missing required fields.');
+      return fail(
+        'This license key is damaged and cannot be read. Re-copy it from your purchase email; if it still fails, contact support and quote your order number.',
+      );
     }
     // S-review (OpenCode): plan must be a real tier — a malformed claim must
     // never create a ghost tier.
     if (!['pro', 'team', 'enterprise'].includes(claims.plan)) {
-      return fail('This license key references an unknown plan.');
+      return fail(
+        'This license key is for a plan this version of Clockwork does not recognise. Update to the latest version, then activate again.',
+      );
     }
     if (claims.exp < Date.now() - GRACE_PERIOD_MS) return fail('This license has expired and is beyond its offline grace period. Renew to reactivate.');
     return claims;

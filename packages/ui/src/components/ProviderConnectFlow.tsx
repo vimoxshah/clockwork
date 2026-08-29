@@ -229,7 +229,7 @@ export function ProviderConnectFlow({
 
             <div className="flex items-center gap-3">
               <button
-                className="btn small"
+                className="btn small shrink-0 whitespace-nowrap"
                 disabled={testing || !modelId.trim()}
                 onClick={() => void runTest()}
                 data-testid="test-connection-btn"
