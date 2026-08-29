@@ -117,6 +117,36 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
         </div>
       </div>
 
+      <h3 className="section-title" style={{ marginTop: 20 }}>Security</h3>
+      <div className="tasklist-row">
+        <div className="grow">
+          <strong>Rotate access token</strong>
+          <div className="hint">
+            Replaces the token this app uses to reach the daemon. Older versions put it in the
+            event-stream URL, so it may survive in proxy logs or browser history — rotating is how
+            you retire that copy. The old token stops working immediately and Clockwork reloads.
+          </div>
+        </div>
+        <button
+          className="btn small shrink-0 whitespace-nowrap"
+          data-testid="rotate-token"
+          onClick={async () => {
+            if (!confirm('Rotate the access token? The old one stops working immediately.')) return;
+            try {
+              const { token } = await api.rotateToken();
+              localStorage.setItem('clockwork.token', token);
+              // Every open stream and in-flight request still carries the old
+              // credential, so reload rather than trying to re-thread it.
+              location.reload();
+            } catch (e) {
+              alert(`Could not rotate the token: ${(e as Error).message}`);
+            }
+          }}
+        >
+          Rotate token
+        </button>
+      </div>
+
       <h3 className="section-title" style={{ marginTop: 20 }}>Support</h3>
       <div className="tasklist-row">
         <div className="grow">

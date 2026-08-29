@@ -73,6 +73,42 @@ describe('SSE auth (S-audit)', () => {
   });
 });
 
+describe('token rotation', () => {
+  it('replaces the credential: the old token stops working, the new one works', async () => {
+    const before = token;
+
+    const rot = await app.inject(auth({ method: 'POST', url: '/auth/rotate' }));
+    expect(rot.statusCode).toBe(200);
+    const next = (rot.json() as { token: string }).token;
+
+    expect(next).not.toBe(before);
+    expect(next.length).toBeGreaterThanOrEqual(32);
+
+    // the OLD credential must now be rejected — this is the whole point
+    const withOld = await app.inject({
+      method: 'GET',
+      url: '/profiles',
+      headers: { authorization: `Bearer ${before}` },
+    });
+    expect(withOld.statusCode).toBe(401);
+
+    // the NEW credential must work
+    const withNew = await app.inject({
+      method: 'GET',
+      url: '/profiles',
+      headers: { authorization: `Bearer ${next}` },
+    });
+    expect(withNew.statusCode).toBe(200);
+
+    token = next; // keep the rest of the suite authenticated
+  });
+
+  it('refuses to rotate for an unauthenticated caller', async () => {
+    const res = await app.inject({ method: 'POST', url: '/auth/rotate' });
+    expect(res.statusCode).toBe(401);
+  });
+});
+
 function auth(json: any): { method: string; url: string; payload?: any; headers: Record<string, string> } {
   return { ...json, headers: { authorization: `Bearer ${token}` } };
 }
