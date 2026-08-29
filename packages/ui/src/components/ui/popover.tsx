@@ -17,7 +17,7 @@ const PopoverContent = React.forwardRef<
       collisionPadding={collisionPadding}
       className={cn(
         'z-50 rounded-xl border border-strong bg-surface p-3 text-fg shadow-lg outline-none',
-        'max-h-[var(--radix-popover-content-available-height)]',
+        'max-h-[var(--radix-popover-content-available-height)] overflow-y-auto',
         'data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95',
         'data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95',
         className,

@@ -56,7 +56,14 @@ describe('EntitlementService — fail-closed baseline', () => {
       secret,
     );
     const svc = new EntitlementService(db);
-    expect(() => svc.activate(token)).toThrow(/not yet enabled/i);
+    // Assert the SECURITY property (fail closed), not the wording of the copy:
+    // a genuinely-signed pro token must still be refused with no public key.
+    let message = '';
+    expect(() => {
+      try { svc.activate(token); } catch (e) { message = (e as Error).message; throw e; }
+    }).toThrow();
+    expect(message).toMatch(/not available in this build/i);
+    expect(message).not.toMatch(/payload|base64|signature|parse/i);
     // And tier stays free.
     expect(svc.status().tier).toBe('free');
   });

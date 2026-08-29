@@ -134,6 +134,9 @@ export class EntitlementService {
     this.cached = null;
   }
 
+  // S-review (Hermes): the two 'not complete' strings below describe the key's
+  // shape ('one long line with a dot in the middle'). That copy is coupled to
+  // the payload.signature token format — if the format changes, change it too.
   verifyToken(token: string): EntitlementClaims {
     const fail = (why: string): never => { throw new Error(why); };
     const [payloadB64, sigB64] = token.split('.');
@@ -151,7 +154,9 @@ export class EntitlementService {
     );
     }
     const configuredKey = this.publicKeyHexOverride || ENTITLEMENT_PUBLIC_KEY_HEX;
-    if (!configuredKey) return fail('License verification is not yet enabled in this build.');
+    if (!configuredKey) return fail(
+      'License activation is not available in this build. Install the latest Clockwork release from the official site, or contact support if this build should support it.',
+    );
     let ok = false;
     try {
       const key = createPublicKey({ key: Buffer.from(configuredKey, 'hex'), format: 'der', type: 'spki' });
