@@ -10,6 +10,15 @@
  *
  * Each pricing <li> carries data-feature="<key>". These tests read the page
  * and hold that markup to the enforced matrix.
+ *
+ * SCOPE — what this does NOT catch, so "we have a test" is never mistaken for
+ * "the page is honest":
+ *   - claims with no data-feature attribute at all (prose, headlines, the hero)
+ *   - whether FEATURES itself is truthful; the page is held to the registry,
+ *     and the registry is held to nothing here
+ *   - the PRICE. $99/year has no machine-readable source of truth to check
+ *     against, and reconciling it with the $12-15/mo research is a business
+ *     decision, not a test.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -61,6 +70,26 @@ describe('landing page honesty', () => {
       }
     }
     expect(offenders, `paid tiers sell what free already gives away: ${offenders.join(', ')}`).toEqual([]);
+  });
+
+  // S-review (Hermes): the first version of this suite PASSED with Pro
+  // claiming "Unlimited run history" while retention caps Pro at 365 days —
+  // the exact lie the suite was written to catch. Verified by re-planting it.
+  // Rule 2 only compared against the FREE tier, so a capped paid tier could
+  // still be described in absolute terms.
+  it('never uses absolute language for a tier that has a limit', () => {
+    const ABSOLUTE = /\b(unlimited|forever|always|no limit|never expires|infinite)\b/i;
+    const offenders: string[] = [];
+    for (const card of parsed) {
+      for (const [, key, text] of card.html.matchAll(/data-feature="([a-z_]+)"[^>]*>([^<]*)</g)) {
+        const f = FEATURES.find((x) => x.key === key);
+        const limit = f?.tiers[card.tier]?.limit;
+        if (limit && ABSOLUTE.test(text!)) {
+          offenders.push(`${card.tier}/${key}: "${text!.trim()}" but the limit is "${limit}"`);
+        }
+      }
+    }
+    expect(offenders, `absolute claim over a limited tier:\n${offenders.join('\n')}`).toEqual([]);
   });
 
   it('says so when a feature is only planned', () => {
