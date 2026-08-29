@@ -276,14 +276,24 @@ export function openEventStream(onEvent: (e: any) => void): EventStream {
     connecting = true;
     ctrl = new AbortController();
     try {
+      const used = getToken();
       const res = await fetch('/events', {
-        headers: { Authorization: `Bearer ${getToken()}` },
+        headers: { Authorization: `Bearer ${used}` },
         signal: ctrl.signal,
       });
       // S-review: a rejected credential is not a transient fault. Retrying it
       // forever would hammer the daemon and hide the real problem from the
       // user, who needs to re-enter a token — so stop and surface it.
       if (res.status === 401 || res.status === 403) {
+        // A rotation in ANOTHER window writes the new token to shared
+        // localStorage. getToken() re-reads per call, so if it has changed
+        // since this request was sent, reconnect once with the fresh
+        // credential rather than stranding this tab's stream.
+        if (getToken() !== used) {
+          connecting = false;
+          void connect(1000);
+          return;
+        }
         handle.onerror?.(new Error(`events unauthorized (${res.status})`));
         return;
       }

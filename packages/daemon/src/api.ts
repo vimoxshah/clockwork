@@ -6,10 +6,10 @@
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import { z } from 'zod';
 import fastifyStatic from '@fastify/static';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes, timingSafeEqual, createHash } from 'node:crypto';
 import { ByokStore, validateProvider, keychainGet } from './byok.js';
 import { RetentionAudit } from './retention-audit.js';
 import { PolicyEngine } from './policy-engine.js';
@@ -71,16 +71,25 @@ export function loadOrCreateToken(dataDir: string): string {
  */
 export function bearerMatches(header: string | undefined, token: string): boolean {
   if (!header || !header.startsWith('Bearer ')) return false;
-  const given = Buffer.from(header.slice(7), 'utf8');
-  const want = Buffer.from(token, 'utf8');
-  if (given.length !== want.length) return false;
+  // S-review (Hermes): an early length return is a timing branch. The token's
+  // length is public (43 chars of base64url), so the leaked bit was not a
+  // secret — but hashing both sides to a fixed 32 bytes removes the branch
+  // altogether and lets timingSafeEqual do the whole comparison.
+  const given = createHash('sha256').update(header.slice(7), 'utf8').digest();
+  const want = createHash('sha256').update(token, 'utf8').digest();
   return timingSafeEqual(given, want);
 }
 
 export function rotateToken(dataDir: string): string {
   mkdirSync(dataDir, { recursive: true });
   const next = randomBytes(32).toString('base64url');
-  writeFileSync(path.join(dataDir, 'api-token'), next, { mode: 0o600 });
+  // S-review (Hermes): writeFileSync is not atomic. A crash mid-write leaves a
+  // truncated token file and then NOBODY can authenticate. Write a temp file
+  // and rename — rename is atomic within a filesystem.
+  const finalPath = path.join(dataDir, 'api-token');
+  const tmpPath = `${finalPath}.${randomBytes(6).toString('hex')}.tmp`;
+  writeFileSync(tmpPath, next, { mode: 0o600 });
+  renameSync(tmpPath, finalPath);
   return next;
 }
 
@@ -1216,6 +1225,9 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
   app.post('/auth/rotate', async (_req, reply) => {
     try {
       token = rotateToken(deps.dataDir);
+      // S-review (Hermes): rotation had no trace. Record that it happened —
+      // never the token itself, not even a prefix.
+      process.stdout.write(`clockworkd: api token rotated at ${new Date().toISOString()}\n`);
       // Every existing client — including this one's event stream — is now
       // unauthenticated by design. The caller receives the replacement so it
       // can re-authenticate; nobody else can.
