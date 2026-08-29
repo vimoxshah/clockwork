@@ -110,7 +110,7 @@ export function ModelSelector({
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         className={cn(
-          'flex h-9 w-full items-center justify-between rounded-lg border border-strong bg-bg px-3 py-2 text-body text-fg',
+          'flex h-9 w-full items-center justify-between rounded-lg border border-strong bg-bg px-3 py-2 text-ui text-fg',
           'focus:outline-none focus:ring-2 focus:ring-accent',
         )}
         aria-label="Model selector"
@@ -140,7 +140,7 @@ export function ModelSelector({
             onKeyDown={onKeyDown}
             placeholder="Search models…"
             aria-label="Search models"
-            className="w-full bg-transparent text-body outline-none placeholder:text-dim"
+            className="w-full bg-transparent text-ui outline-none placeholder:text-dim"
           />
         </div>
 
@@ -158,7 +158,7 @@ export function ModelSelector({
                 onMouseEnter={() => setActive(i)}
                 onClick={() => pick(m)}
                 className={cn(
-                  'flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-body',
+                  'flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-ui',
                   i === active ? 'bg-surface-hover' : '',
                   m.id === value ? 'ring-1 ring-accent' : '',
                 )}

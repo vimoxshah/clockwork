@@ -44,13 +44,15 @@ const config: Config = {
        * each token is a drop-in for the arbitrary value it replaces — body
        * sets no line-height, so these inherit `normal` exactly as the
        * hand-written text-[13px] etc. did. Leading stays a component concern.
+       * Named `ui` not `body`: 13px is the dense-UI size, while the actual
+       * <body> is 14px — S-review (Hermes) flagged `body` as misleading.
        * xxs previously paired 14px leading; it is font-size only now so that
        * 11px has ONE spelling instead of two.
        */
       fontSize: {
         micro: '10px',
         xxs: '11px',
-        body: '13px',
+        ui: '13px',
       },
     },
   },

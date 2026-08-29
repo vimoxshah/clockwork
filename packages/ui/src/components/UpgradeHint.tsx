@@ -59,7 +59,7 @@ export function UpgradeHint({
     >
       <span className="flex items-center gap-2">
         <Lock className="h-4 w-4 shrink-0 text-dim" aria-hidden />
-        <strong className="text-body">{copy.title}</strong>
+        <strong className="text-ui">{copy.title}</strong>
         <span className="chip" style={{ marginLeft: 'auto' }}>Included with {copy.plan}</span>
         {onDismiss && (
           <button onClick={onDismiss} aria-label="Dismiss" className="rounded p-0.5 text-dim hover:text-fg">✕</button>

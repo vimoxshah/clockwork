@@ -125,7 +125,7 @@ export function LicenseCard({ version }: { version: number }): JSX.Element {
             <div key={cat}>
               <p className="mb-1 mt-2 text-xxs font-semibold uppercase tracking-wide text-dim">{cat}</p>
               {feats.map((f) => (
-                <div key={f.key} className="flex items-center gap-2 px-1 py-1 text-body">
+                <div key={f.key} className="flex items-center gap-2 px-1 py-1 text-ui">
                   {f.enabled
                     ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-accent" aria-label="included" />
                     : <TriangleAlert className="h-3.5 w-3.5 shrink-0 text-dim" aria-hidden />}

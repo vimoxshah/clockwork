@@ -141,7 +141,7 @@ export function ProviderConnectFlow({
                 )}
               >
                 <span className="flex items-center gap-2">
-                  <strong className="text-body">{meta[c.kind].label}</strong>
+                  <strong className="text-ui">{meta[c.kind].label}</strong>
                   {kind === c.kind && <Check className="h-4 w-4 text-accent" />}
                 </span>
                 <span className="mt-0.5 block text-xxs text-dim">{c.blurb}</span>
@@ -153,7 +153,7 @@ export function ProviderConnectFlow({
         {stage === 1 && (
           <div className="mt-3 flex flex-col gap-4">
             <label className="flex flex-col gap-1.5">
-              <span className="text-body font-medium">API key for {m?.label}</span>
+              <span className="text-ui font-medium">API key for {m?.label}</span>
               <div className="relative">
                 <input
                   autoFocus
@@ -165,7 +165,7 @@ export function ProviderConnectFlow({
                   autoComplete="off"
                   spellCheck={false}
                   data-testid="api-key-input"
-                  className="h-10 w-full rounded-lg border border-strong bg-bg px-3 pr-10 font-mono text-body focus:outline-none focus:ring-2 focus:ring-accent"
+                  className="h-10 w-full rounded-lg border border-strong bg-bg px-3 pr-10 font-mono text-ui focus:outline-none focus:ring-2 focus:ring-accent"
                 />
                 <button
                   type="button"
@@ -190,7 +190,7 @@ export function ProviderConnectFlow({
               <div className="flex flex-col gap-3 rounded-lg border border-border p-3">
                 <label className="flex flex-col gap-1">
                   <span className="text-xs font-medium">Connection name</span>
-                  <input value={name} onChange={(e) => setName(e.target.value)} placeholder={`${m?.label ?? 'Provider'} (work)`} className="h-9 rounded-lg border border-strong bg-bg px-3 text-body focus:outline-none focus:ring-2 focus:ring-accent" />
+                  <input value={name} onChange={(e) => setName(e.target.value)} placeholder={`${m?.label ?? 'Provider'} (work)`} className="h-9 rounded-lg border border-strong bg-bg px-3 text-ui focus:outline-none focus:ring-2 focus:ring-accent" />
                 </label>
                 {(kind === 'custom_openai' || kind === 'openrouter') && (
                   <label className="flex flex-col gap-1">
@@ -218,7 +218,7 @@ export function ProviderConnectFlow({
         {stage === 2 && (
           <div className="mt-3 flex flex-col gap-4">
             <label className="flex flex-col gap-1.5">
-              <span className="text-body font-medium">Default model for this provider</span>
+              <span className="text-ui font-medium">Default model for this provider</span>
               <ModelSelector
                 models={models}
                 value={modelId}
