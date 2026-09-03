@@ -78,4 +78,7 @@ much of the reason this repo exists.
 ---
 
 <!-- SYNC-MARKER: do not edit by hand; written by packaging/sync-public-sandbox.sh -->
-SYNCED_FROM: clockwork@906f641
+<!-- The revision below is a commit in Clockwork's PRIVATE repository. You cannot
+     resolve it, and it is not meant to be a link — it exists so a specific
+     published copy can be traced back to the exact source it came from. -->
+SYNCED_FROM: clockwork@883c2c0
