@@ -56,6 +56,17 @@ source of truth. On each release copy them to the tap repo:
 Both are covered by `install-instructions.test.ts`, which is why they live here
 rather than only in the tap. The copy step itself is manual and unguarded.
 
+## Why not GitHub Pages
+
+GitHub Pages is unavailable here: the repo is private and the account is on the
+free plan, so the API returns "Your current plan does not support GitHub Pages
+for this repository". The `pages` workflow was deleted rather than left to fail
+on every landing-page change — recoverable from git history if the repo ever
+goes public or the plan changes.
+
+Cloudflare Workers serves the same `landing-page/` directory and deploys on push
+to `main`, so nothing was lost.
+
 ## Cost: zero
 
 Cloudflare Pages gives every project a free `<project>.pages.dev` subdomain with
