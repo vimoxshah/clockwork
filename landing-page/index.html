@@ -232,8 +232,16 @@
   <div style="max-width:680px;margin:22px auto 0;text-align:left">
     <h3 style="font-size:16px;margin:0 0 8px">Install with Homebrew (recommended)</h3>
     <pre style="background:#11141d;border:1px solid var(--border);border-radius:10px;padding:14px 16px;overflow:auto;font-size:13px;color:var(--mut)">brew tap vimoxshah/clockwork
-brew install --cask --no-quarantine clockwork</pre>
-    <p style="color:var(--dim);font-size:13px;margin:6px 0 22px"><code>--no-quarantine</code> is what skips the Gatekeeper prompt. Homebrew verifies the SHA-256 for you.</p>
+brew trust vimoxshah/clockwork
+brew install --cask clockwork
+xattr -dr com.apple.quarantine /Applications/Clockwork.app</pre>
+    <p style="color:var(--dim);font-size:13px;margin:6px 0 22px">
+      <code>brew trust</code> is required because Homebrew refuses casks from third-party taps by
+      default &mdash; you are explicitly saying you trust this one.
+      Homebrew verifies the SHA-256 before installing, then you clear the quarantine flag
+      yourself &mdash; Homebrew 6 removed the <code>--no-quarantine</code> option, so there is no
+      way to skip it. You are still clearing quarantine on a binary whose hash was checked for
+      you, which is why this beats a raw download.</p>
 
     <h3 style="font-size:16px;margin:0 0 8px">Or install the DMG by hand</h3>
     <pre style="background:#11141d;border:1px solid var(--border);border-radius:10px;padding:14px 16px;overflow:auto;font-size:13px;color:var(--mut)"># 1. verify what you downloaded

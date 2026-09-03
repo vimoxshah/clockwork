@@ -33,11 +33,19 @@ does not make this repository public.
 
 ```
 brew tap vimoxshah/clockwork
-brew install --cask --no-quarantine clockwork
+brew trust vimoxshah/clockwork
+brew install --cask clockwork
+xattr -dr com.apple.quarantine /Applications/Clockwork.app
 ```
 
-`--no-quarantine` is what avoids the Gatekeeper prompt. Homebrew still verifies
-the SHA-256, so the user is trusting a binary whose hash they can check.
+`brew trust` is required: Homebrew 6 refuses casks from third-party taps until
+the user explicitly trusts the tap.
+
+Quarantine cannot be skipped at install time. Homebrew 6 removed
+`--no-quarantine`, and `HOMEBREW_CASK_OPTS` accepts only `--*dir`, `--language`,
+`--require-sha` and `--no-binaries` — so the user clears the flag afterwards.
+Homebrew still verifies the SHA-256, so what they clear quarantine on is a
+binary whose hash was already checked.
 
 `packaging/homebrew/clockwork.rb` is the source of truth; copy it to the tap
 repo's `Casks/` directory on each release.
@@ -101,4 +109,4 @@ BASE_URL=https://your-project.pages.dev ./packaging/stage-release.sh
 Then copy `packaging/homebrew/clockwork.rb` into the tap repo's `Casks/` and push.
 
 Until Pages is connected, the cask URL will 404 — so do not share the tap link
-until you have run `brew install --cask --no-quarantine clockwork` yourself.
+until you have run `brew install --cask clockwork` yourself.
