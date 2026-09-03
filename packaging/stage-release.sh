@@ -12,12 +12,22 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # <project>.pages.dev subdomain with HTTPS, so no domain purchase is required.
 # Override when the project name differs, or once a custom domain is bought:
 #   BASE_URL=https://clockworkd.com ./packaging/stage-release.sh
-BASE_URL="${BASE_URL:-https://clockwork.pages.dev}"
+BASE_URL="${BASE_URL:-https://clockwork.vmoksh-shah179.workers.dev}"
 BUNDLE="$ROOT/src-tauri/target/release/bundle/dmg"
 DEST="$ROOT/landing-page/downloads"
 
 DMG="$(ls -1 "$BUNDLE"/Clockwork_*_aarch64.dmg 2>/dev/null | tail -1)"
 [ -n "$DMG" ] || { echo "no DMG in $BUNDLE — run the tauri build first" >&2; exit 1; }
+
+# A locally built DMG is NOT byte-identical to the one CI publishes, so its
+# hash differs. Staging a local build over a published one silently breaks the
+# cask for everyone who already has the published hash. Prefer the release
+# artifact; pass ALLOW_LOCAL=1 to override deliberately.
+if [ "${ALLOW_LOCAL:-0}" != "1" ]; then
+  echo "refusing to stage a locally built DMG." >&2
+  echo "download the artifact from the GitHub release instead, or re-run with ALLOW_LOCAL=1" >&2
+  exit 1
+fi
 
 VERSION="$(basename "$DMG" | sed -E 's/Clockwork_(.+)_aarch64\.dmg/\1/')"
 mkdir -p "$DEST"
