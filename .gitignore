@@ -53,3 +53,6 @@ spikes/out/*.local/
 # Tauri build artifacts
 src-tauri/target/
 src-tauri/app-icon.png.orig/
+
+# Per-session hook state — machine-local, never source.
+.genea/subagent-state.json
