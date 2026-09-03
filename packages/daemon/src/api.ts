@@ -6,10 +6,10 @@
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import { z } from 'zod';
 import fastifyStatic from '@fastify/static';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, timingSafeEqual, createHash } from 'node:crypto';
 import { ByokStore, validateProvider, keychainGet } from './byok.js';
 import { RetentionAudit } from './retention-audit.js';
 import { PolicyEngine } from './policy-engine.js';
@@ -51,6 +51,48 @@ export function loadOrCreateToken(dataDir: string): string {
   return token;
 }
 
+/**
+ * Mint a replacement token, invalidating the old one immediately.
+ *
+ * This is remediation, not hygiene. Until the SSE auth fix, /events carried
+ * the bearer token in its query string, so an existing token may already be
+ * sitting in proxy logs, browser history and Referer headers. Without this a
+ * user has no way to replace a credential that grants arbitrary code
+ * execution.
+ */
+/**
+ * Constant-time bearer check. A plain `!==` on the token returns as soon as
+ * two bytes differ, which leaks a prefix oracle. Not practically exploitable
+ * against a 256-bit token over loopback, but the fix is two lines and the
+ * daemon is being prepared for exposure beyond loopback.
+ *
+ * Length is compared first because timingSafeEqual throws on a mismatch; the
+ * length of a rejected credential is not a useful secret.
+ */
+export function bearerMatches(header: string | undefined, token: string): boolean {
+  if (!header || !header.startsWith('Bearer ')) return false;
+  // S-review (Hermes): an early length return is a timing branch. The token's
+  // length is public (43 chars of base64url), so the leaked bit was not a
+  // secret — but hashing both sides to a fixed 32 bytes removes the branch
+  // altogether and lets timingSafeEqual do the whole comparison.
+  const given = createHash('sha256').update(header.slice(7), 'utf8').digest();
+  const want = createHash('sha256').update(token, 'utf8').digest();
+  return timingSafeEqual(given, want);
+}
+
+export function rotateToken(dataDir: string): string {
+  mkdirSync(dataDir, { recursive: true });
+  const next = randomBytes(32).toString('base64url');
+  // S-review (Hermes): writeFileSync is not atomic. A crash mid-write leaves a
+  // truncated token file and then NOBODY can authenticate. Write a temp file
+  // and rename — rename is atomic within a filesystem.
+  const finalPath = path.join(dataDir, 'api-token');
+  const tmpPath = `${finalPath}.${randomBytes(6).toString('hex')}.tmp`;
+  writeFileSync(tmpPath, next, { mode: 0o600 });
+  renameSync(tmpPath, finalPath);
+  return next;
+}
+
 export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance; token: string; sseClients: Set<FastifyReply> }> {
   const app = Fastify({ logger: false });
   const tasks = new TaskRepo(deps.db);
@@ -70,7 +112,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     const v = policies.evaluate({ engine: engine ?? 'cli', byokId: byokId ?? null, requestedBudgetUsd: budgetUsd });
     return v ? { violation: `${v.code}: ${v.message}` } : null;
   };
-  const token = loadOrCreateToken(deps.dataDir);
+  let token = loadOrCreateToken(deps.dataDir);
   const sseClients = new Set<FastifyReply>();
 
   // serve the built UI when present (single-port product surface)
@@ -87,16 +129,18 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     const needsAuth =
       /^\/(tasks|runs|approvals|profiles|search|widget|queue|onboarding|pause-all|resume|capacity)/.test(url) ||
       /^\/(analytics|retention|audit|policies|capabilities|targets|byok|triggers|trigger-events|ics|usage)/.test(url) ||
-      /^\/(license|support)\//.test(url) || // S-review: control plane + diagnostics must not be anonymous
+      /^\/(license|support|auth)\//.test(url) || // S-review: control plane + diagnostics must not be anonymous
       /^\/(calendars|templates)\//.test(url) || // S-audit: ICS export leaks task data; template preview is control plane
       url.startsWith('/events');
     if (!needsAuth) return; // /health + static UI assets carry no user data
-    // SSE handled via query param (EventSource cannot set headers)
+    // S-audit: /events used to accept ?token= because EventSource cannot set
+    // headers. A bearer token in a URL reaches proxy logs, browser history and
+    // Referer headers — tolerable on loopback, disqualifying for any remote
+    // bind (docs/architecture/byo-runner.md). The client now streams /events
+    // via fetch + ReadableStream, which does carry a header, so there is no
+    // longer a query-param path to authenticate.
     const header = req.headers.authorization;
-    const qpToken = url.startsWith('/events')
-      ? new URL(req.raw.url ?? '', 'http://x').searchParams.get('token')
-      : null;
-    if (header !== `Bearer ${token}` && qpToken !== token) {
+    if (!bearerMatches(header, token)) {
       await reply.code(401).send({ error: 'unauthorized' });
     }
   });
@@ -1171,6 +1215,26 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       ],
       default: 'local',
     };
+  });
+
+  // ---- credential rotation ----
+  // Remediation for a credential that may already be exposed: until the SSE
+  // auth fix, /events carried the bearer token in its query string, so it can
+  // be sitting in proxy logs and browser history. Rotation is also the only
+  // revocation this single-token model has.
+  app.post('/auth/rotate', async (_req, reply) => {
+    try {
+      token = rotateToken(deps.dataDir);
+      // S-review (Hermes): rotation had no trace. Record that it happened —
+      // never the token itself, not even a prefix.
+      process.stdout.write(`clockworkd: api token rotated at ${new Date().toISOString()}\n`);
+      // Every existing client — including this one's event stream — is now
+      // unauthenticated by design. The caller receives the replacement so it
+      // can re-authenticate; nobody else can.
+      return await reply.send({ token });
+    } catch (e) {
+      return await reply.code(500).send({ error: 'rotate_failed', detail: (e as Error).message });
+    }
   });
 
   app.put('/policies', async (req, reply) => {

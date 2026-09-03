@@ -137,6 +137,7 @@ export const api = {
   byokSetDefault: (id: string) => req<{ ok: boolean }>('POST', `/byok/${id}/default`),
   capabilities: () => req<{ tier: string; features: Array<{ key: string; label: string; category: string; enabled: boolean; limit?: string; status: string }>; entitlement: { tier: string; state: string; plan?: string; expiresAt?: number; graceEndsAt?: number; subject?: string } }>('GET', '/capabilities'),
   supportBundle: () => req<Record<string, unknown>>('GET', '/support/bundle'),
+  rotateToken: () => req<{ token: string }>('POST', '/auth/rotate'),
   licenseActivate: (token: string) => req<{ ok: boolean; entitlement: unknown }>('POST', '/license/activate', { token }),
   licenseDeactivate: () => req<{ ok: boolean }>('POST', '/license/deactivate'),
   analytics: (days: number) => req<AnalyticsT>('GET', `/analytics?days=${days}`),
@@ -226,15 +227,112 @@ export const api = {
   putPrefs: (p: { soundMode: string; volumePct: number }) => req<unknown>('PUT', '/prefs', p),
 };
 
-export function openEventStream(onEvent: (e: any) => void): EventSource {
-  const es = new EventSource(`/events?token=${encodeURIComponent(getToken())}`);
-  es.onmessage = (m) => {
+export interface EventStream {
+  close(): void;
+  onerror: ((e: unknown) => void) | null;
+}
+
+/**
+ * Live daemon events.
+ *
+ * S-audit: this used `EventSource`, which cannot set headers, so the bearer
+ * token rode in the query string — where it reaches proxy logs, browser
+ * history and Referer headers. Streaming the response body via `fetch`
+ * carries a real Authorization header instead, at the cost of reimplementing
+ * the reconnect that EventSource gave for free (below, with backoff).
+ */
+export function openEventStream(onEvent: (e: any) => void): EventStream {
+  let closed = false;
+  let ctrl: AbortController | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let connecting = false;
+  const handle: EventStream = {
+    close() {
+      closed = true;
+      if (timer) clearTimeout(timer); // S-review: don't leave a live timer behind
+      timer = null;
+      ctrl?.abort();
+    },
+    onerror: null,
+  };
+
+  const retry = (delay: number): void => {
+    if (closed) return;
+    if (timer) clearTimeout(timer); // S-review: never schedule two reconnects
+    timer = setTimeout(() => void connect(delay), delay);
+  };
+
+  const emit = (raw: string): void => {
     try {
-      const parsed = JSON.parse(m.data);
+      const parsed = JSON.parse(raw);
       // fan-out for any component that needs SSE without prop drilling
       window.dispatchEvent(new CustomEvent('clockwork:sse', { detail: parsed }));
       onEvent(parsed);
     } catch {}
   };
-  return es;
+
+  const connect = async (backoff: number): Promise<void> => {
+    if (closed || connecting) return; // S-review: no overlapping streams
+    connecting = true;
+    ctrl = new AbortController();
+    try {
+      const used = getToken();
+      const res = await fetch('/events', {
+        headers: { Authorization: `Bearer ${used}` },
+        signal: ctrl.signal,
+      });
+      // S-review: a rejected credential is not a transient fault. Retrying it
+      // forever would hammer the daemon and hide the real problem from the
+      // user, who needs to re-enter a token — so stop and surface it.
+      if (res.status === 401 || res.status === 403) {
+        // A rotation in ANOTHER window writes the new token to shared
+        // localStorage. getToken() re-reads per call, so if it has changed
+        // since this request was sent, reconnect once with the fresh
+        // credential rather than stranding this tab's stream.
+        if (getToken() !== used) {
+          connecting = false;
+          void connect(1000);
+          return;
+        }
+        handle.onerror?.(new Error(`events unauthorized (${res.status})`));
+        return;
+      }
+      if (!res.ok || !res.body) throw new Error(`events ${res.status}`);
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      // S-review: the stream is up, so the next failure starts from 1s again
+      // rather than inheriting an escalated delay forever after one blip.
+      backoff = 1000;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        // S-review: normalise CRLF — our daemon writes \n, but a proxy or a
+        // different server may not, and \r\n\r\n contains no \n\n to split on.
+        buf += dec.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+        // SSE frames are separated by a blank line; a frame may carry several
+        // `data:` lines, and a chunk may split mid-frame — hence the buffer.
+        let sep = buf.indexOf('\n\n');
+        while (sep !== -1) {
+          const frame = buf.slice(0, sep);
+          buf = buf.slice(sep + 2);
+          for (const line of frame.split('\n')) {
+            if (line.startsWith('data:')) emit(line.slice(5).trim());
+          }
+          sep = buf.indexOf('\n\n');
+        }
+      }
+      // Server closed a healthy stream — reconnect promptly.
+      retry(1000);
+    } catch (e) {
+      if (closed) return; // abort() during close is not an error
+      handle.onerror?.(e);
+      retry(Math.min(backoff * 2, 30_000));
+    } finally {
+      connecting = false;
+    }
+  };
+
+  void connect(1000);
+  return handle;
 }
