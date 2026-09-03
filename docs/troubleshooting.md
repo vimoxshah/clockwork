@@ -73,3 +73,16 @@ connect screen. Tokens rotate if you delete the file and restart the daemon.
 node packages/daemon/dist/cli.js uninstall
 rm -rf ~/.clockwork    # deletes tasks, reports, transcripts — export first!
 ```
+
+## Still stuck?
+
+Email **vmoksh.shah179@gmail.com** with:
+
+- what you ran and what happened
+- your macOS version and chip (`uname -m`)
+- the daemon version from the app footer
+- `curl -s http://127.0.0.1:4747/health` output if the daemon is up
+
+A support bundle helps most — Settings → Export diagnostics. It contains
+versions, provider connection states and counts, and deliberately no
+credentials: API keys never leave the Keychain and are not included.

@@ -62,4 +62,11 @@ occurs in the current version.
 
 ## Contact
 
-Questions about this policy: open an issue on the repository.
+Questions about this policy, a data request, or anything else:
+**vmoksh.shah179@gmail.com**
+
+You can also open an issue on the public Homebrew tap:
+https://github.com/vimoxshah/homebrew-clockwork/issues
+
+(The main Clockwork repository is private, so issues there are not reachable —
+use email or the tap.)
