@@ -127,6 +127,21 @@ describe('landing page honesty', () => {
     expect(rHit?.[0] ?? null, `README claims permanence but retention prunes: "${rHit?.[0] ?? ''}"`).toBeNull();
   });
 
+  // Caught a real defect the moment it was written: a new link used
+  // var(--accent), which this palette does not define. An undefined custom
+  // property fails SILENTLY — the browser drops the declaration and the
+  // element inherits, so the page looks almost right and nothing errors.
+  it('uses no CSS variable it does not define', () => {
+    const html = readFileSync(PAGE, 'utf8');
+    const defined = new Set([...html.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]!));
+    // Only bare var(--x). `var(--x, #fallback)` is deliberate and safe — the
+    // first version of this test flagged one and was wrong.
+    const used = new Set([...html.matchAll(/var\((--[a-z0-9-]+)\s*\)/g)].map((m) => m[1]!));
+    expect(defined.size, 'no custom properties parsed — this guard is blind').toBeGreaterThan(5);
+    const undefinedVars = [...used].filter((v) => !defined.has(v));
+    expect(undefinedVars, `landing page uses undefined CSS variables: ${undefinedVars.join(', ')}`).toEqual([]);
+  });
+
   it('says so when a feature is only planned', () => {
     const bad: string[] = [];
     for (const card of parsed) {
