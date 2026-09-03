@@ -56,25 +56,13 @@ source of truth. On each release copy them to the tap repo:
 Both are covered by `install-instructions.test.ts`, which is why they live here
 rather than only in the tap. The copy step itself is manual and unguarded.
 
-## Publishing the audit repo (github.com/vimoxshah/clockwork-sandbox)
+## Auditing the sandbox
 
-`public/clockwork-sandbox/` in this repo is the source of truth. Publishing it
-is TWO steps, and the first one does not do the second:
-
-1. `./packaging/sync-public-sandbox.sh` — copies the eight files out of
-   `packages/runner/` and stamps `SYNCED_FROM` with the current git sha.
-   `public-sandbox-sync.test.ts` fails the build if this has not been run after
-   a source change.
-2. Copy `public/clockwork-sandbox/` into a clone of the public repo and push.
-   **This is manual.** The guard in step 1 only protects main -> `public/`; it
-   cannot see the published repo, exactly as the tap guard cannot.
-
-A green build therefore means "the copy in this repo is current", NOT "the
-public repo is current". Do step 2 on every release that touches the sandbox,
-the deny list, the run env, or service-path.
-
-`SYNCED_FROM` records a sha in this PRIVATE repo. Outside readers cannot
-resolve it; it is an audit trail for us, and the public README says so.
+The security boundary lives in `packages/runner/src/{sandbox,deny-list,run-env,
+service-path}.ts` and is dual-licensed under Apache-2.0 (LICENSE §12). It used
+to be mirrored to a separate public repo so it could be read without exposing
+the product; now that this repository is public, the code IS the audit surface
+and the mirror has been retired.
 
 ## Why not GitHub Pages
 

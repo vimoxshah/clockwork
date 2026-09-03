@@ -249,13 +249,17 @@ Full list: [docs/SHORTCUTS.md](docs/SHORTCUTS.md)
 - **Local-only:** daemon binds 127.0.0.1; bearer token file is 0600; no
   analytics, no account, no cloud component
 
-**Audit it yourself.** The Seatbelt profile, credential deny list and
-run-environment allowlist are published under Apache-2.0 at
-[vimoxshah/clockwork-sandbox](https://github.com/vimoxshah/clockwork-sandbox),
-with the tests that exercise them on a real `sandbox-exec`. That repo is also
-explicit about what those tests do *not* prove. Sources of truth live here in
-`packages/runner/`; `packaging/sync-public-sandbox.sh` republishes them, and
-`public-sandbox-sync.test.ts` fails the build if the copy drifts.
+**Audit it yourself.** `packages/runner/src/{sandbox,deny-list,run-env,service-path}.ts`
+are the security boundary, dual-licensed under Apache-2.0 (LICENSE §12), and
+`packages/runner/test/` exercises them against a real `sandbox-exec` — the suite
+writes a fake secret into `~/.ssh` and `~/.aws`, then runs `cat` inside the
+sandbox and asserts it fails.
+
+What that does **not** prove: that the DMG you downloaded was built from this
+source. Releases are built by GitHub Actions from this repository and the
+checksums are published, but reproducing the binary yourself is not yet
+supported. The Seatbelt profile also permits `system-socket` — the ssh-agent
+claim holds because of the run-env allowlist, not the sandbox.
 
 Details: [docs/security.md](docs/security.md) · [docs/privacy.md](docs/privacy.md)
 
@@ -263,8 +267,8 @@ Details: [docs/security.md](docs/security.md) · [docs/privacy.md](docs/privacy.
 
 - [BYOK guide](docs/byok-guide.md) — connect Anthropic, OpenAI, Google,
   DeepSeek, Z.ai, and more; key storage, defaults, error decoding
-- [Plans & licensing](docs/commercialization/DECISIONS.md) — pricing model and
-  how offline license verification works
+- [Install & security](docs/install.md) — verified checksums, what Clockwork
+  can reach once installed, and why quarantine must be cleared by hand
 - [Troubleshooting](docs/troubleshooting.md) — daemon, auth, scheduling, and
   license/plan problems
 

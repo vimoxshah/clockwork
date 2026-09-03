@@ -91,9 +91,8 @@ Copyright (c) 2026 Vimox Shah. All Rights Reserved.
 12. DUAL-LICENSED COMPONENTS (Apache-2.0)
 
     The following files are ALSO made available by the Licensor under the
-    Apache License, Version 2.0, and are published at
-    github.com/vimoxshah/clockwork-sandbox so that the security boundary can
-    be independently audited:
+    Apache License, Version 2.0, so that the security boundary can be
+    independently audited and reused:
 
         packages/runner/src/sandbox.ts
         packages/runner/src/deny-list.ts

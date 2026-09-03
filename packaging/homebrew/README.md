@@ -53,7 +53,7 @@ Worth knowing before you bypass Gatekeeper for any tool that runs code unattende
 These are enforced and covered by tests, not aspirations — and you can check
 that claim rather than believe it. The Seatbelt profile, credential deny list
 and run-environment allowlist are published under Apache-2.0 at
-https://github.com/vimoxshah/clockwork-sandbox, together with the tests that
+https://github.com/vimoxshah/clockwork, together with the tests that
 exercise them against a real `sandbox-exec`, and an honest list of what those
 tests do not prove.
 

@@ -62,7 +62,7 @@ Honest gap list, each verified against the code:
 | 5 | UI has no notion of a remote daemon address | assumes same origin | blocks |
 
 Gap 3 deserves emphasis. It was accepted as a **v1 risk on loopback** and
-recorded as such in `docs/commercialization/VALIDATOR-REVIEWS.md`. That
+recorded during an internal validator review. That
 acceptance does not survive this change: a token in a URL reaches proxy logs,
 browser history and referrers. **Remote support cannot ship until SSE auth
 moves out of the query string.** This is the one place where the existing
