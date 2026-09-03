@@ -217,9 +217,41 @@
 <section id="download" class="wrap reveal" style="text-align:center;padding-bottom:40px">
   <div class="kicker">Get started</div>
   <h2 style="font-size:38px">Give your agents a workday.</h2>
-  <p class="sub" style="margin:12px auto 30px;max-width:520px">Download Clockwork for Mac, connect once, book your first chore tonight.</p>
-  <a class="btn" href="https://github.com/vimoxshah/clockwork/releases/latest" target="_blank" rel="noopener noreferrer" id="dmg-cta">Download Clockwork for Mac</a>
-  <p style="color:var(--dim);font-size:13px;margin-top:16px">Apple silicon · macOS 14+ · <a href="https://github.com/vimoxshah/clockwork/releases" target="_blank" rel="noopener noreferrer" style="color:var(--mut)">All releases &amp; checksums</a></p>
+  <p class="sub" style="margin:12px auto 26px;max-width:520px">Download Clockwork for Mac, connect once, book your first chore tonight.</p>
+
+  <a class="btn" href="/downloads/Clockwork_0.4.0_aarch64.dmg" id="dmg-cta">Download Clockwork 0.4.0 for Mac</a>
+  <p style="color:var(--dim);font-size:13px;margin-top:14px">Apple silicon · macOS 14+ · 3.4&nbsp;MB · <a href="/downloads/checksums-sha256.txt" style="color:var(--mut)">SHA-256 checksum</a></p>
+
+  <div class="honest" style="max-width:680px;margin:30px auto 0;text-align:left">
+    <strong style="color:var(--ink)">Clockwork is not notarised by Apple yet.</strong><br>
+    An Apple Developer certificate costs $99/year and this is an early build, so the app is
+    unsigned. macOS will refuse to open it until you clear the download quarantine flag. We would
+    rather tell you that plainly than have Gatekeeper call it &ldquo;damaged&rdquo;.
+  </div>
+
+  <div style="max-width:680px;margin:22px auto 0;text-align:left">
+    <h3 style="font-size:16px;margin:0 0 8px">Install with Homebrew (recommended)</h3>
+    <pre style="background:#11141d;border:1px solid var(--border);border-radius:10px;padding:14px 16px;overflow:auto;font-size:13px;color:var(--mut)">brew tap vimoxshah/clockwork
+brew install --cask --no-quarantine clockwork</pre>
+    <p style="color:var(--dim);font-size:13px;margin:6px 0 22px"><code>--no-quarantine</code> is what skips the Gatekeeper prompt. Homebrew verifies the SHA-256 for you.</p>
+
+    <h3 style="font-size:16px;margin:0 0 8px">Or install the DMG by hand</h3>
+    <pre style="background:#11141d;border:1px solid var(--border);border-radius:10px;padding:14px 16px;overflow:auto;font-size:13px;color:var(--mut)"># 1. verify what you downloaded
+shasum -a 256 ~/Downloads/Clockwork_0.4.0_aarch64.dmg
+
+# 2. open the DMG, drag Clockwork to Applications, then:
+xattr -dr com.apple.quarantine /Applications/Clockwork.app
+
+# 3. launch it
+open -a Clockwork</pre>
+    <p style="color:var(--dim);font-size:13px;margin-top:6px">
+      Step 1 should print the hash shown in
+      <a href="/downloads/checksums-sha256.txt" style="color:var(--mut)">checksums-sha256.txt</a>.
+      If it does not match, do not install it &mdash; tell us instead.
+      Step 2 removes the quarantine flag macOS adds to downloaded files; you are telling your Mac
+      you trust this specific app. Only run it on a file whose checksum you just verified.
+    </p>
+  </div>
 </section>
 
 <section id="pricing" class="wrap reveal" style="padding-bottom:90px">

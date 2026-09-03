@@ -58,3 +58,56 @@ keys and credential stores are deliberately unreadable from within a run.
 
 Quit Clockwork, then drag it from Applications to Trash. Data lives in
 `~/.clockwork/` — delete that folder to remove all tasks, runs, and reports.
+
+## Verifying the download (please actually do this)
+
+Clockwork is **not notarised by Apple**. An Apple Developer certificate costs
+$99/year and this is an early build, so the app is ad-hoc signed. macOS adds a
+quarantine flag to anything downloaded from the internet and will refuse to open
+an unsigned app until that flag is cleared — often with a misleading message
+saying the app is "damaged".
+
+That is a real trade-off, not a formality. Clearing quarantine tells your Mac you
+trust this specific binary, so verify it first:
+
+```bash
+# 1. Check the hash matches the published one
+shasum -a 256 ~/Downloads/Clockwork_0.4.0_aarch64.dmg
+curl -s https://clockworkd.com/downloads/checksums-sha256.txt
+```
+
+If those two do not match, **stop** — do not install it, and report it.
+
+```bash
+# 2. Install: open the DMG and drag Clockwork to Applications, then
+xattr -dr com.apple.quarantine /Applications/Clockwork.app
+
+# 3. Launch
+open -a Clockwork
+```
+
+### Homebrew does this for you
+
+```bash
+brew tap vimoxshah/clockwork
+brew install --cask --no-quarantine clockwork
+```
+
+Homebrew verifies the SHA-256 from the cask before installing, and
+`--no-quarantine` skips the Gatekeeper prompt. This is the recommended path: you
+still get hash verification, without hand-running `xattr` on a file you have not
+checked.
+
+### What Clockwork can reach once installed
+
+Worth knowing before you clear quarantine on any tool that runs unattended code:
+
+- Agent runs execute inside a macOS Seatbelt sandbox, in a per-run git worktree.
+  Writes are restricted to that worktree.
+- Credential paths — `~/.ssh`, `~/.aws`, `~/.gnupg`, browser cookies, shell
+  history — are denied to the run, and the run environment is an allowlist that
+  does not forward `SSH_AUTH_SOCK` or any provider token.
+- The daemon binds `127.0.0.1` only and is never exposed to your network.
+- Your provider API keys stay in the macOS Keychain.
+
+These are enforced and tested, not aspirational — see `packages/runner/test/`.
