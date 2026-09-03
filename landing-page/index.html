@@ -158,7 +158,7 @@
     <div class="step"><h3>Book</h3><p>Choose an agent profile, a repo, a budget, and a time. One-off or recurring.</p></div>
     <div class="step"><h3>Run</h3><p>Your own CLI engine executes unattended inside an OS-sandboxed git worktree.</p></div>
     <div class="step"><h3>Review</h3><p>A human-readable report lands in your inbox — branch, diffstat, cost, transcript.</p></div>
-    <div class="step"><h3>Repeat</h3><p>Make it weekly. Search every past run forever. Trust grows with evidence.</p></div>
+    <div class="step"><h3>Repeat</h3><p>Make it weekly. Search your run history. Trust grows with evidence.</p></div>
   </div>
 </section>
 
@@ -170,7 +170,7 @@
     <div class="card"><h3>🔀 Provider freedom</h3><p>Claude Code today, Codex / OpenCode / Hermes when you want. Switch per task without rebuilding anything.</p></div>
     <div class="card"><h3>🛡 Human-in-the-loop</h3><p>Risky actions pause the run and ask you. Unanswered asks fail safe — never silently approved.</p></div>
     <div class="card"><h3>📦 Real isolation</h3><p>Every run gets its own worktree and Seatbelt sandbox. Writes locked to scope. SSH keys unreadable.</p></div>
-    <div class="card"><h3>🔎 Searchable history</h3><p>Full-text search across every report and transcript. Your agent's track record becomes auditable.</p></div>
+    <div class="card"><h3>🔎 Searchable history</h3><p>Full-text search across your retained reports and transcripts. Your agent's track record becomes auditable.</p></div>
     <div class="card"><h3>⌨️ Keyboard-native</h3><p>⌘K palette, global shortcuts, instant inbox search. Built by terminal people, for terminal people.</p></div>
   </div>
 </section>
@@ -231,24 +231,33 @@
     <strong style="color:var(--ink)">separate bills</strong>.
   </p>
   <div class="cards" style="max-width:900px;margin-left:auto;margin-right:auto">
+    <!-- data-feature ties every claim to a key in packages/daemon/src/features.ts.
+         packages/daemon/test/landing-honesty.test.ts fails the build if a claim
+         names a feature that does not exist, if a PAID tier sells something the
+         free tier already includes, or if a `planned` feature is listed without
+         saying so. Marketing copy cannot drift from the enforced matrix. -->
     <div class="card">
       <h3>Personal</h3>
       <p><strong style="font-size:22px;color:var(--ink)">Free</strong> during beta</p>
       <ul style="font-size:13.5px;color:var(--dim);line-height:1.9;padding-left:18px">
-        <li>Local agents, unlimited schedules</li>
-        <li>All CLI engines + BYOK providers</li>
-        <li>Calendar + human ICS overlay</li>
-        <li>Run history &amp; reports on your Mac</li>
+        <li data-feature="local_agents">Local agents in sandboxed worktrees</li>
+        <li data-feature="scheduling">Unlimited recurring schedules</li>
+        <li data-feature="byok_providers">All BYOK providers and CLI engines</li>
+        <li data-feature="approvals">Human approval gates</li>
+        <li data-feature="budget_guards">Budget guardrails</li>
+        <li data-feature="retention">Run history and reports (30 days)</li>
       </ul>
+      <p style="font-size:12px;color:var(--dim)">Approvals and budget caps are never paywalled — they are the brakes on unattended code.</p>
     </div>
     <div class="card">
       <h3>Pro</h3>
       <p><strong style="font-size:22px;color:var(--ink)">$99/year</strong> <span style="font-size:12px;color:var(--dim)">(lifetime option at launch)</span></p>
       <ul style="font-size:13.5px;color:var(--dim);line-height:1.9;padding-left:18px">
         <li>Everything in Free</li>
-        <li>Unlimited run history</li>
-        <li>Advanced cost analytics across every engine</li>
-        <li>Priority engine &amp; model updates</li>
+        <li data-feature="retention">Run history kept for a year</li>
+        <li data-feature="policy_engine">Policy engine — restrict engines, models and spend</li>
+        <li data-feature="audit_log">Audit log (30 days)</li>
+        <li data-feature="event_triggers">Up to 50 event-triggered agents</li>
       </ul>
       <p style="font-size:12px;color:var(--dim)">Launching soon — free beta users keep their history.</p>
     </div>
@@ -256,10 +265,10 @@
       <h3>Teams &amp; Enterprise</h3>
       <p><strong style="font-size:22px;color:var(--ink)">Talk to us</strong></p>
       <ul style="font-size:13.5px;color:var(--dim);line-height:1.9;padding-left:18px">
-        <li>Governance: policy engine, approvals, budgets</li>
-        <li>Audit log export, extended retention</li>
-        <li>Self-hosted runners, VPC execution</li>
-        <li>SSO / SCIM (planned)</li>
+        <li data-feature="audit_log">Unlimited audit log with export</li>
+        <li data-feature="retention">Extended retention (2 years)</li>
+        <li data-feature="policy_engine">Policy engine across the team</li>
+        <li data-feature="sso_scim">SSO / SCIM (planned)</li>
       </ul>
     </div>
   </div>

@@ -31,7 +31,7 @@ sticky notes. Clockwork gives that work a home on a **real calendar**:
 | Hope the script worked | Report with branch, diffstat, cost, transcript |
 | Unbounded token spend | Hard USD / turn / wall-clock caps |
 | Agent has your whole disk | Per-run OS-sandboxed git worktree |
-| Find last Tuesday's run: scrollback | Full-text search across all history |
+| Find last Tuesday's run: scrollback | Full-text search across retained history |
 
 ## Screenshots
 
@@ -54,7 +54,7 @@ RUN     Your own CLI engine executes unattended inside an OS-sandboxed
 REVIEW  A human-readable report lands in your inbox — what it did,
         what it skipped and why, what it cost.
   ↓
-REPEAT  Make it weekly. Search every past run forever.
+REPEAT  Make it weekly. Search your retained run history.
 ```
 
 ## ✨ Highlights
