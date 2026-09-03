@@ -38,6 +38,14 @@ import { generateSeatbeltProfile, wrapWithSandbox, CREDENTIAL_PATHS } from '../s
  * fails this list.
  */
 const MUST_BE_DENIED = [
+  // Clockwork's own control plane. Reading api-token was a VERIFIED sandbox
+  // escape: a run could take the token, reach the daemon on loopback and book
+  // a task with any repo path. Pinned here so the vectors below attack them
+  // too, not just the third-party credential paths.
+  '.clockwork/api-token',
+  '.clockwork/clockwork.sqlite',
+  '.clockwork/clockwork.sqlite-wal',
+  '.clockwork/clockwork.sqlite-shm',
   '.ssh', '.aws', '.gnupg', '.config/gcloud',
   'Library/Cookies', 'Library/Application Support/Google/Chrome',
   'Library/Application Support/Firefox',
