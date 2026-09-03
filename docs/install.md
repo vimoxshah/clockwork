@@ -90,13 +90,17 @@ open -a Clockwork
 
 ```bash
 brew tap vimoxshah/clockwork
-brew install --cask --no-quarantine clockwork
+brew trust vimoxshah/clockwork
+brew install --cask clockwork
+xattr -dr com.apple.quarantine /Applications/Clockwork.app
 ```
 
-Homebrew verifies the SHA-256 from the cask before installing, and
-`--no-quarantine` skips the Gatekeeper prompt. This is the recommended path: you
-still get hash verification, without hand-running `xattr` on a file you have not
-checked.
+Homebrew verifies the SHA-256 from the cask before installing, so the bytes are
+checked for you. It cannot skip quarantine — Homebrew 6 removed
+`--no-quarantine`, and `HOMEBREW_CASK_OPTS` does not accept it either — so you
+still clear the flag by hand. The difference is that you are clearing it on a
+binary whose hash was already verified, rather than on a file you downloaded and
+never checked. That is why this is the recommended path.
 
 ### What Clockwork can reach once installed
 
