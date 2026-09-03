@@ -73,7 +73,7 @@ trust this specific binary, so verify it first:
 ```bash
 # 1. Check the hash matches the published one
 shasum -a 256 ~/Downloads/Clockwork_0.4.0_aarch64.dmg
-curl -s https://clockworkd.com/downloads/checksums-sha256.txt
+curl -s https://clockwork.pages.dev/downloads/checksums-sha256.txt
 ```
 
 If those two do not match, **stop** — do not install it, and report it.
