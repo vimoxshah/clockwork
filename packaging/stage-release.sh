@@ -7,6 +7,12 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Public base URL for downloads. Cloudflare Pages gives every project a free
+# <project>.pages.dev subdomain with HTTPS, so no domain purchase is required.
+# Override when the project name differs, or once a custom domain is bought:
+#   BASE_URL=https://clockworkd.com ./packaging/stage-release.sh
+BASE_URL="${BASE_URL:-https://clockwork.pages.dev}"
 BUNDLE="$ROOT/src-tauri/target/release/bundle/dmg"
 DEST="$ROOT/landing-page/downloads"
 
@@ -31,7 +37,12 @@ PAGE="$ROOT/landing-page/index.html"
 /usr/bin/sed -i '' -E "s#Download Clockwork [0-9.]+ for Mac#Download Clockwork ${VERSION} for Mac#" "$PAGE"
 /usr/bin/sed -i '' -E "s#Clockwork_[0-9.]+_aarch64\.dmg#Clockwork_${VERSION}_aarch64.dmg#g" "$PAGE"
 
+# keep the cask host in sync with BASE_URL
+/usr/bin/sed -i '' -E "s#url \"https://[^/]+/downloads/#url \"${BASE_URL}/downloads/#" "$CASK"
+/usr/bin/sed -i '' -E "s#homepage \"https://[^/]+/?\"#homepage \"${BASE_URL}/\"#" "$CASK"
+
 echo "staged ${VERSION}"
+echo "  base   ${BASE_URL}"
 echo "  dmg    $DEST/Clockwork_${VERSION}_aarch64.dmg"
 echo "  sha256 ${SHA}"
 echo "  cask + landing page updated — commit, merge and push to redeploy Pages"

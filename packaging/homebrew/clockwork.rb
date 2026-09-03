@@ -2,10 +2,10 @@ cask "clockwork" do
   version "0.4.0"
   sha256 "75dd370e40412222ad731bd23f9f6fc1200c1af7196914a767639301afd8e93a"
 
-  url "https://clockworkd.com/downloads/Clockwork_#{version}_aarch64.dmg"
+  url "https://clockwork.pages.dev/downloads/Clockwork_#{version}_aarch64.dmg"
   name "Clockwork"
   desc "Calendar that schedules AI coding agents in sandboxed git worktrees"
-  homepage "https://clockworkd.com/"
+  homepage "https://clockwork.pages.dev/"
 
   depends_on macos: ">= :sonoma"
   depends_on arch: :arm64
