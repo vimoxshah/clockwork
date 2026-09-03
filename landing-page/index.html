@@ -329,6 +329,18 @@ open -a Clockwork</pre>
     Clockwork is an early build and I read every message. Tell me what broke, what you expected,
     or what would make it worth paying for.
   </p>
+  <!-- Release-notes signup. One field, opt-in, no tracking of any kind.
+       Degrades to the mailto link below if the endpoint is unreachable, so the
+       section is useful even before the Worker is deployed. -->
+  <form id="sub-form" style="max-width:520px;margin:0 auto 16px;display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
+    <label for="sub-email" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Your email address</label>
+    <input id="sub-email" name="email" type="email" required autocomplete="email"
+           placeholder="you@example.com"
+           style="flex:1 1 260px;min-width:220px;height:46px;border-radius:10px;border:1px solid var(--border-strong,#2a3247);background:var(--panel);color:var(--ink);padding:0 14px;font-size:15px" />
+    <button id="sub-btn" class="btn" type="submit" style="height:46px">Get release notes</button>
+  </form>
+  <p id="sub-msg" role="status" aria-live="polite" style="min-height:20px;color:var(--mut);font-size:13px;margin:0 0 14px"></p>
+
   <a class="btn" href="mailto:vmoksh.shah179@gmail.com?subject=Clockwork">Email me</a>
   <p style="color:var(--dim);font-size:13px;margin-top:14px">
     <a href="mailto:vmoksh.shah179@gmail.com" style="color:var(--mut)">vmoksh.shah179@gmail.com</a>
@@ -343,6 +355,49 @@ open -a Clockwork</pre>
 </footer>
 
 <script>
+  // Release-notes signup. Posts to the site Worker; if that is unreachable or
+  // storage is not configured yet, it says so and points at the email link
+  // rather than silently swallowing the address.
+  (function () {
+    var f = document.getElementById('sub-form');
+    if (!f) return;
+    var msg = document.getElementById('sub-msg');
+    var btn = document.getElementById('sub-btn');
+    var ENDPOINT = 'https://clockwork.vmoksh-shah179.workers.dev/subscribe';
+    f.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var email = document.getElementById('sub-email').value.trim();
+      if (!email) return;
+      btn.disabled = true;
+      msg.style.color = 'var(--mut)';
+      msg.textContent = 'Sending…';
+      fetch(ENDPOINT, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: email })
+      })
+        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+        .then(function (res) {
+          if (res.ok && res.d.ok) {
+            msg.style.color = 'var(--success, #4bc97f)';
+            msg.textContent = res.d.already
+              ? "You're already on the list — thanks."
+              : "Thanks. You'll get release notes, nothing else.";
+            f.reset();
+          } else {
+            throw new Error(res.d && res.d.error ? res.d.error : 'failed');
+          }
+        })
+        .catch(function () {
+          msg.style.color = 'var(--mut)';
+          msg.innerHTML = "Sign-up isn't live yet — email " +
+            '<a href="mailto:vmoksh.shah179@gmail.com?subject=Clockwork%20release%20notes" style="color:var(--brass)">vmoksh.shah179@gmail.com</a>' +
+            ' and I\'ll add you.';
+        })
+        .finally(function () { btn.disabled = false; });
+    });
+  })();
+
   // Scroll reveal (respects prefers-reduced-motion via CSS override above)
   const io = new IntersectionObserver((es) => {
     es.forEach((e) => e.isIntersecting && e.target.classList.add('in'));

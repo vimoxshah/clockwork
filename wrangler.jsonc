@@ -9,9 +9,25 @@
   // static host with Cloudflare's CDN in front, on the free plan.
   "name": "clockwork",
   "compatibility_date": "2026-09-01",
+  // The Worker owns exactly one route (POST /subscribe) and hands everything
+  // else to the static assets via env.ASSETS.
+  "main": "./worker/index.js",
   "assets": {
     "directory": "./landing-page",
     // Serve /downloads/... and the DMG as-is; no SPA rewriting.
-    "not_found_handling": "404-page"
+    "not_found_handling": "404-page",
+    // Required so the Worker can serve the site through env.ASSETS.
+    "binding": "ASSETS"
   }
+
+  // NOTE: the SUBSCRIBERS KV binding is deliberately NOT declared here yet.
+  // Declaring a namespace id that does not exist fails the deploy, which would
+  // take the live site down. The Worker treats a missing binding as a 503 and
+  // the page falls back to the mailto link, so this config deploys safely as
+  // is. To turn signup on, create the namespace and add:
+  //
+  //   "kv_namespaces": [{ "binding": "SUBSCRIBERS", "id": "<id from dashboard>" }]
+  //
+  // No code change is needed — the Worker starts storing as soon as the
+  // binding exists.
 }
