@@ -28,7 +28,7 @@ import type {
 import { BudgetGuard } from './budget-guard.js';
 import { fold, newAccumulator, parseStreamLine } from './stream-parser.js';
 import { generateSeatbeltProfile, wrapWithSandbox, type SandboxSpec } from './sandbox.js';
-import { augmentedPath } from './service-path.js';
+import { buildRunEnv } from './run-env.js';
 
 const GRACE_MS = 30_000;
 const DEFAULT_DISK_FLOOR_BYTES = 2 * 1024 * 1024 * 1024; // S-88
@@ -127,19 +127,9 @@ export class ClaudeCliRunner implements AgentRunner {
     }
 
     // Sanitized env: only what Node + the CLI genuinely need (arch §7.3).
-    // USER/LOGNAME are required by macOS keychain ACL identification —
-    // verified empirically: without them the engine cannot read its own
-    // OAuth item ("Not logged in"), with them auth succeeds.
-    const env: Record<string, string> = {
-      PATH: augmentedPath(process.env.PATH ?? '/usr/bin:/bin:/usr/local/bin'),
-      HOME: process.env.HOME ?? os.homedir(),
-      TERM: 'dumb',
-      NO_COLOR: '1',
-      LANG: process.env.LANG ?? 'en_US.UTF-8',
-      SHELL: '/bin/zsh',
-      ...(process.env.USER ? { USER: process.env.USER } : {}),
-      ...(process.env.LOGNAME ? { LOGNAME: process.env.LOGNAME } : {}),
-    };
+    // The allowlist itself lives in run-env.ts — see that file for why this is
+    // a security boundary and not a convenience.
+    const env = buildRunEnv({ SHELL: '/bin/zsh' });
 
     const child = spawn(fullArgv[0]!, fullArgv.slice(1), {
       cwd: ctx.worktreePath,
