@@ -17,9 +17,11 @@
  *     retention); the rest of the copy is unchecked.
  *   - whether FEATURES itself is truthful; the page is held to the registry,
  *     and the registry is held to nothing here
- *   - the PRICE. $99/year has no machine-readable source of truth to check
- *     against, and reconciling it with the $12-15/mo research is a business
- *     decision, not a test.
+ *   - the PRICE. There is no machine-readable source of truth to check a price
+ *     against, and setting one is a business decision, not a test. The page
+ *     currently advertises no price at all: nothing is purchasable while
+ *     ENTITLEMENT_PUBLIC_KEY_HEX is empty, so a figure here would be a claim
+ *     the product cannot honour.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
