@@ -127,7 +127,7 @@ export function ProviderConnectFlow({
 
         {stage === 0 && (
           <div className="mt-3 grid max-h-[55vh] grid-cols-1 gap-2 overflow-auto pr-1 sm:grid-cols-2" role="listbox" aria-label="Choose a provider">
-            {PROVIDER_CARDS.filter((c) => meta[c.kind]).map((c) => (
+            {PROVIDER_CARDS.filter((c) => meta[c.kind]).map((c, i, list) => (
               <button
                 key={c.kind}
                 role="option"
@@ -136,6 +136,9 @@ export function ProviderConnectFlow({
                 data-testid={`provider-card-${c.kind}`}
                 className={cn(
                   'rounded-xl border p-3 text-left transition-colors',
+                  // An odd provider count leaves the last card orphaned beside a
+                  // dead half-row (gauntlet §27); let it span instead.
+                  i === list.length - 1 && list.length % 2 === 1 && 'sm:col-span-2',
                   'border-border hover:border-strong hover:bg-surface-hover focus:outline-none focus:ring-2 focus:ring-accent',
                   kind === c.kind && 'border-accent',
                 )}
@@ -229,7 +232,7 @@ export function ProviderConnectFlow({
 
             <div className="flex items-center gap-3">
               <button
-                className="btn small"
+                className="btn small shrink-0 whitespace-nowrap"
                 disabled={testing || !modelId.trim()}
                 onClick={() => void runTest()}
                 data-testid="test-connection-btn"

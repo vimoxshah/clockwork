@@ -34,8 +34,15 @@ describe('EntitlementService — fail-closed baseline', () => {
 
   it('rejects malformed tokens with human-readable errors', () => {
     const svc = new EntitlementService(db);
-    expect(() => svc.activate('not-a-license')).toThrow(/malformed/i);
-    expect(() => svc.activate('a.b.c')).toThrow(/malformed/i);
+    // The message a user actually reads must say what to DO (gauntlet §31),
+    // never leak parser jargon like "malformed"/"payload"/"base64".
+    for (const bad of ['not-a-license', 'a.b.c']) {
+      let message = '';
+      expect(() => { try { svc.activate(bad); } catch (e) { message = (e as Error).message; throw e; } }).toThrow();
+      expect(message).toMatch(/license key/i);
+      expect(message).toMatch(/purchase email/i);
+      expect(message).not.toMatch(/malformed|payload|base64|signature|parse/i);
+    }
   });
 
   it('rejects ANY paid token while no public key is configured (no fake validation)', async () => {
@@ -49,7 +56,14 @@ describe('EntitlementService — fail-closed baseline', () => {
       secret,
     );
     const svc = new EntitlementService(db);
-    expect(() => svc.activate(token)).toThrow(/not yet enabled/i);
+    // Assert the SECURITY property (fail closed), not the wording of the copy:
+    // a genuinely-signed pro token must still be refused with no public key.
+    let message = '';
+    expect(() => {
+      try { svc.activate(token); } catch (e) { message = (e as Error).message; throw e; }
+    }).toThrow();
+    expect(message).toMatch(/not available in this build/i);
+    expect(message).not.toMatch(/payload|base64|signature|parse/i);
     // And tier stays free.
     expect(svc.status().tier).toBe('free');
   });
