@@ -19,15 +19,13 @@
     // Required so the Worker can serve the site through env.ASSETS.
     "binding": "ASSETS"
   }
+,
 
-  // NOTE: the SUBSCRIBERS KV binding is deliberately NOT declared here yet.
-  // Declaring a namespace id that does not exist fails the deploy, which would
-  // take the live site down. The Worker treats a missing binding as a 503 and
-  // the page falls back to the mailto link, so this config deploys safely as
-  // is. To turn signup on, create the namespace and add:
-  //
-  //   "kv_namespaces": [{ "binding": "SUBSCRIBERS", "id": "<id from dashboard>" }]
-  //
-  // No code change is needed — the Worker starts storing as soon as the
-  // binding exists.
+  // Signup storage. This MUST stay declared here: a deploy from a config
+  // without it silently drops a binding added through the dashboard, which is
+  // exactly how signup broke once already. A namespace id is an identifier,
+  // not a secret — it is useless without account credentials.
+  "kv_namespaces": [
+    { "binding": "SUBSCRIBERS", "id": "f3016353cd8046e5893796fb82276113" }
+  ]
 }
