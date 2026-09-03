@@ -54,12 +54,42 @@ experiment gets traction — not before.
 
 ## Before this works publicly
 
-- [ ] Connect this repo to Cloudflare Pages
-      - Framework preset: **None**
-      - Build command: *(empty)*
-      - Build output directory: **`landing-page`**
-      - Project name: **`clockwork`** → serves at `https://clockwork.pages.dev`
+- [ ] Connect this repo to Cloudflare
 - [x] Public `homebrew-clockwork` tap repo created, cask published
+
+### Cloudflare: two flows, both free
+
+Cloudflare's dashboard now funnels git-connected projects into **Workers**
+rather than **Pages**. The two look similar but configure differently:
+
+**Workers (what the dashboard defaults to).** No "build output directory"
+field — the directory is declared in `wrangler.jsonc` at the repo root, which
+is committed. Accept the auto-filled settings:
+
+| Field | Value |
+| --- | --- |
+| Build command | *(leave empty — nothing to compile)* |
+| Deploy command | `npx wrangler deploy` (auto-filled, keep it) |
+| Root directory | `/` (repo root, so wrangler.jsonc is found) |
+
+`wrangler.jsonc` points at `./landing-page` and declares no `main` script, so
+this is a purely static host — nothing executes server-side.
+
+**Pages (if the dashboard still offers it).** Workers & Pages → Create → the
+**Pages** tab → Connect to Git, then:
+
+| Field | Value |
+| --- | --- |
+| Framework preset | None |
+| Build command | *(empty)* |
+| Build output directory | `landing-page` |
+
+Either produces `https://<project>.pages.dev` or `https://<project>.<subdomain>.workers.dev`
+on the free plan. Whichever URL you get, re-point the cask with:
+
+```bash
+BASE_URL=https://your-actual-url ./packaging/stage-release.sh
+```
 
 If the Pages project ends up on a different subdomain, re-point everything with
 one command:
