@@ -23,8 +23,10 @@
  *     BROKEN; only running brew proves they work.
  *   - flags other than the three rules below. A future Homebrew removal of
  *     some other option would ship exactly the way this one did.
- *   - the tap repo's copy of the cask. `packaging/homebrew/clockwork.rb` is
- *     the source of truth here; publishing is a manual copy step.
+ *   - the tap repo itself. `packaging/homebrew/{clockwork.rb,README.md}` are
+ *     the source of truth; publishing them is a MANUAL copy step, so the live
+ *     tap can still drift from what is guarded here. This proves what we
+ *     publish is correct — not that it was published.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
@@ -37,7 +39,17 @@ const ROOT = resolve(HERE, '../../..');
 // Listed explicitly, never globbed. A guard that discovers its own inputs
 // passes when the input disappears — the failure mode found in the pricing
 // suite, where a rule enumerated from the very array it was meant to police.
-const SURFACES = ['docs/install.md', 'landing-page/index.html', 'packaging/README.md', 'packaging/homebrew/clockwork.rb'];
+const SURFACES = [
+  'docs/install.md',
+  'landing-page/index.html',
+  'packaging/README.md',
+  'packaging/homebrew/clockwork.rb',
+  // The tap's README is the surface the broken command survived on LONGEST.
+  // It used to live only in the public tap repo, hand-maintained, with no copy
+  // here — so nothing could guard it. This file is now the source of truth and
+  // is copied to the tap on release, exactly like the cask.
+  'packaging/homebrew/README.md',
+];
 
 /**
  * The text a reader would COPY: fenced blocks in markdown, <pre> in HTML, the
