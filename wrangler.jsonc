@@ -1,0 +1,17 @@
+{
+  // Cloudflare Workers Static Assets — serves the marketing site and the DMG.
+  //
+  // The dashboard's git flow now defaults to Workers rather than Pages, so
+  // there is no "build output directory" field; the directory is declared
+  // here instead. Deploy command stays the auto-filled `npx wrangler deploy`.
+  //
+  // Assets-only: no `main` script, so nothing runs server-side — this is a
+  // static host with Cloudflare's CDN in front, on the free plan.
+  "name": "clockwork",
+  "compatibility_date": "2026-09-01",
+  "assets": {
+    "directory": "./landing-page",
+    // Serve /downloads/... and the DMG as-is; no SPA rewriting.
+    "not_found_handling": "404-page"
+  }
+}
