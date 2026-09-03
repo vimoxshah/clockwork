@@ -249,6 +249,14 @@ Full list: [docs/SHORTCUTS.md](docs/SHORTCUTS.md)
 - **Local-only:** daemon binds 127.0.0.1; bearer token file is 0600; no
   analytics, no account, no cloud component
 
+**Audit it yourself.** The Seatbelt profile, credential deny list and
+run-environment allowlist are published under Apache-2.0 at
+[vimoxshah/clockwork-sandbox](https://github.com/vimoxshah/clockwork-sandbox),
+with the tests that exercise them on a real `sandbox-exec`. That repo is also
+explicit about what those tests do *not* prove. Sources of truth live here in
+`packages/runner/`; `packaging/sync-public-sandbox.sh` republishes them, and
+`public-sandbox-sync.test.ts` fails the build if the copy drifts.
+
 Details: [docs/security.md](docs/security.md) · [docs/privacy.md](docs/privacy.md)
 
 ## 📚 Guides
