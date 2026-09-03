@@ -1,0 +1,39 @@
+name: pages
+
+# Deploy the marketing landing page (landing-page/) to GitHub Pages.
+# Static HTML + real product screenshots; no build step required.
+
+on:
+  push:
+    branches: [main]
+    paths: ['landing-page/**', '.github/workflows/pages.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # enablement: turn Pages on if it is not already. Without this the run
+      # fails with "Get Pages site failed ... Not Found" on a repo where Pages
+      # has never been enabled — exactly what the first deploy attempt hit.
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: landing-page
+      - id: deployment
+        uses: actions/deploy-pages@v4
