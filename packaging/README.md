@@ -47,8 +47,14 @@ Quarantine cannot be skipped at install time. Homebrew 6 removed
 Homebrew still verifies the SHA-256, so what they clear quarantine on is a
 binary whose hash was already checked.
 
-`packaging/homebrew/clockwork.rb` is the source of truth; copy it to the tap
-repo's `Casks/` directory on each release.
+`packaging/homebrew/clockwork.rb` and `packaging/homebrew/README.md` are the
+source of truth. On each release copy them to the tap repo:
+
+- `clockwork.rb` -> `Casks/clockwork.rb`
+- `README.md`    -> `README.md`
+
+Both are covered by `install-instructions.test.ts`, which is why they live here
+rather than only in the tap. The copy step itself is manual and unguarded.
 
 ## Cost: zero
 
