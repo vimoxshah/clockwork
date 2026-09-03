@@ -22,10 +22,6 @@ const FEATURE_COPY: Record<string, { title: string; value: string }> = {
     title: 'Extended history retention',
     value: 'Keep every report, transcript, and artifact searchable for years instead of weeks.',
   },
-  cloud_agents: {
-    title: 'Cloud execution targets',
-    value: 'Run agents on always-on machines so schedules survive your Mac sleeping.',
-  },
 };
 
 export function upgradeCopy(feature?: string, requiresPlan?: string): { title: string; value: string; plan: string } {
