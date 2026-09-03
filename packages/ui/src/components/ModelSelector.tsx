@@ -110,7 +110,7 @@ export function ModelSelector({
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         className={cn(
-          'flex h-9 w-full items-center justify-between rounded-lg border border-strong bg-bg px-3 py-2 text-[13px] text-fg',
+          'flex h-9 w-full items-center justify-between rounded-lg border border-strong bg-bg px-3 py-2 text-compact text-fg',
           'focus:outline-none focus:ring-2 focus:ring-accent',
         )}
         aria-label="Model selector"
@@ -120,7 +120,7 @@ export function ModelSelector({
           {selected ? (
             <>
               <strong>{selected.name ?? selected.id}</strong>
-              {selected.name && <span className="ml-2 text-[11px] text-dim">{selected.id}</span>}
+              {selected.name && <span className="ml-2 text-xxs text-dim">{selected.id}</span>}
             </>
           ) : value ? (
             value
@@ -140,7 +140,7 @@ export function ModelSelector({
             onKeyDown={onKeyDown}
             placeholder="Search models…"
             aria-label="Search models"
-            className="w-full bg-transparent text-[13px] outline-none placeholder:text-dim"
+            className="w-full bg-transparent text-compact outline-none placeholder:text-dim"
           />
         </div>
 
@@ -158,18 +158,18 @@ export function ModelSelector({
                 onMouseEnter={() => setActive(i)}
                 onClick={() => pick(m)}
                 className={cn(
-                  'flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-[13px]',
+                  'flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-compact',
                   i === active ? 'bg-surface-hover' : '',
                   m.id === value ? 'ring-1 ring-accent' : '',
                 )}
               >
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-medium">{m.name ?? m.id}</span>
-                  <span className="block truncate text-[11px] text-dim">{priceLine(m)}</span>
+                  <span className="block truncate text-xxs text-dim">{priceLine(m)}</span>
                   {chips(m).length > 0 && (
                     <span className="mt-1 flex flex-wrap gap-1">
                       {chips(m).map((c) => (
-                        <span key={c} className="rounded border border-border px-1.5 py-0.5 text-[10px] text-muted">{c}</span>
+                        <span key={c} className="rounded border border-border px-1.5 py-0.5 text-micro text-muted">{c}</span>
                       ))}
                     </span>
                   )}
@@ -189,7 +189,7 @@ export function ModelSelector({
               onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); submitCustom(); } }}
               placeholder={customPlaceholder}
               aria-label="Custom model ID"
-              className="h-8 w-full rounded-md border border-strong bg-bg px-2 font-mono text-[12px] outline-none focus:ring-2 focus:ring-accent"
+              className="h-8 w-full rounded-md border border-strong bg-bg px-2 font-mono text-caption outline-none focus:ring-2 focus:ring-accent"
             />
             <button className="btn small primary" onClick={submitCustom}>Use</button>
           </div>
@@ -197,9 +197,9 @@ export function ModelSelector({
           allowCustom && (
             <button
               onClick={() => setCustomMode(true)}
-              className="w-full border-t border-border px-3 py-2 text-left text-[12px] text-dim hover:bg-surface-hover hover:text-fg"
+              className="w-full border-t border-border px-3 py-2 text-left text-caption text-dim hover:bg-surface-hover hover:text-fg"
             >
-              Use a custom model ID… <span className="text-[11px]">(advanced)</span>
+              Use a custom model ID… <span className="text-xxs">(advanced)</span>
             </button>
           )
         )}

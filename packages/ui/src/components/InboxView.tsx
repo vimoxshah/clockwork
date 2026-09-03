@@ -143,7 +143,7 @@ export default function InboxView({ version }: { version: number }): JSX.Element
               ✕
             </button>
           )}
-          <kbd className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded border border-border px-1.5 py-0.5 text-[10px] text-dim">
+          <kbd className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded border border-border px-1.5 py-0.5 text-micro text-dim">
             ⌘K
           </kbd>
         </div>
@@ -197,7 +197,7 @@ export default function InboxView({ version }: { version: number }): JSX.Element
         )}
         {grouped.map(([label, rows]) => (
           <div key={label}>
-            <div className="mb-1 mt-2 text-[11px] font-semibold uppercase tracking-wider text-dim">
+            <div className="mb-1 mt-2 text-xxs font-semibold uppercase tracking-wider text-dim">
               {label} · {rows.length}
             </div>
             {rows.map((r: RunRowT) => {

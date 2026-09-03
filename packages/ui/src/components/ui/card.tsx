@@ -32,7 +32,7 @@ export function CardFooter({ className, ...props }: React.HTMLAttributes<HTMLDiv
 }
 
 const badgeVariants = cva(
-  'inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium whitespace-nowrap',
+  'inline-flex items-center rounded-full px-2 py-0.5 text-xxs font-medium whitespace-nowrap',
   {
     variants: {
       variant: {

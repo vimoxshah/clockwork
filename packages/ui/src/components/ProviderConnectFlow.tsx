@@ -144,10 +144,10 @@ export function ProviderConnectFlow({
                 )}
               >
                 <span className="flex items-center gap-2">
-                  <strong className="text-[13px]">{meta[c.kind].label}</strong>
+                  <strong className="text-compact">{meta[c.kind].label}</strong>
                   {kind === c.kind && <Check className="h-4 w-4 text-accent" />}
                 </span>
-                <span className="mt-0.5 block text-[11px] text-dim">{c.blurb}</span>
+                <span className="mt-0.5 block text-xxs text-dim">{c.blurb}</span>
               </button>
             ))}
           </div>
@@ -156,7 +156,7 @@ export function ProviderConnectFlow({
         {stage === 1 && (
           <div className="mt-3 flex flex-col gap-4">
             <label className="flex flex-col gap-1.5">
-              <span className="text-[13px] font-medium">API key for {m?.label}</span>
+              <span className="text-compact font-medium">API key for {m?.label}</span>
               <div className="relative">
                 <input
                   autoFocus
@@ -168,7 +168,7 @@ export function ProviderConnectFlow({
                   autoComplete="off"
                   spellCheck={false}
                   data-testid="api-key-input"
-                  className="h-10 w-full rounded-lg border border-strong bg-bg px-3 pr-10 font-mono text-[13px] focus:outline-none focus:ring-2 focus:ring-accent"
+                  className="h-10 w-full rounded-lg border border-strong bg-bg px-3 pr-10 font-mono text-compact focus:outline-none focus:ring-2 focus:ring-accent"
                 />
                 <button
                   type="button"
@@ -180,25 +180,25 @@ export function ProviderConnectFlow({
                 </button>
               </div>
             </label>
-            <p className="-mt-2 text-[12px] leading-relaxed text-dim">{KEYCHAIN_NOTE}</p>
+            <p className="-mt-2 text-caption leading-relaxed text-dim">{KEYCHAIN_NOTE}</p>
 
             <button
               onClick={() => setAdvanced((v) => !v)}
               aria-expanded={advanced}
-              className="w-fit text-[12px] text-dim underline-offset-2 hover:text-fg hover:underline"
+              className="w-fit text-caption text-dim underline-offset-2 hover:text-fg hover:underline"
             >
               {advanced ? '− Hide advanced settings' : '+ Advanced settings'}
             </button>
             {advanced && (
               <div className="flex flex-col gap-3 rounded-lg border border-border p-3">
                 <label className="flex flex-col gap-1">
-                  <span className="text-[12px] font-medium">Connection name</span>
-                  <input value={name} onChange={(e) => setName(e.target.value)} placeholder={`${m?.label ?? 'Provider'} (work)`} className="h-9 rounded-lg border border-strong bg-bg px-3 text-[13px] focus:outline-none focus:ring-2 focus:ring-accent" />
+                  <span className="text-caption font-medium">Connection name</span>
+                  <input value={name} onChange={(e) => setName(e.target.value)} placeholder={`${m?.label ?? 'Provider'} (work)`} className="h-9 rounded-lg border border-strong bg-bg px-3 text-compact focus:outline-none focus:ring-2 focus:ring-accent" />
                 </label>
                 {(kind === 'custom_openai' || kind === 'openrouter') && (
                   <label className="flex flex-col gap-1">
-                    <span className="text-[12px] font-medium">Base URL</span>
-                    <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={m?.defaultBaseUrl} className="h-9 rounded-lg border border-strong bg-bg px-3 font-mono text-[12px] focus:outline-none focus:ring-2 focus:ring-accent" />
+                    <span className="text-caption font-medium">Base URL</span>
+                    <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={m?.defaultBaseUrl} className="h-9 rounded-lg border border-strong bg-bg px-3 font-mono text-caption focus:outline-none focus:ring-2 focus:ring-accent" />
                   </label>
                 )}
               </div>
@@ -221,7 +221,7 @@ export function ProviderConnectFlow({
         {stage === 2 && (
           <div className="mt-3 flex flex-col gap-4">
             <label className="flex flex-col gap-1.5">
-              <span className="text-[13px] font-medium">Default model for this provider</span>
+              <span className="text-compact font-medium">Default model for this provider</span>
               <ModelSelector
                 models={models}
                 value={modelId}
@@ -240,7 +240,7 @@ export function ProviderConnectFlow({
                 {testing ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : null}
                 {testing ? 'Testing…' : 'Test connection'}
               </button>
-              <span className="text-[12px] text-dim">
+              <span className="text-caption text-dim">
                 Makes one tiny real API call to verify the key, the endpoint, and that the model exists.
               </span>
             </div>

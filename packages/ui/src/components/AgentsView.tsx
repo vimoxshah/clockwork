@@ -192,7 +192,7 @@ function ProfileCard({ p }: { p: ProfileRowT }): JSX.Element {
           </span>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <strong className="truncate text-[13px]">{p.name}</strong>
+              <strong className="truncate text-compact">{p.name}</strong>
               {!!p.builtin && <Badge variant="info">built-in</Badge>}
               {p.category && <Badge variant="outline">{p.category}</Badge>}
             </div>

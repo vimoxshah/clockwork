@@ -190,7 +190,7 @@ function ConnectedProviderRow({ cfg, onChanged }: { cfg: ByokConfig; onChanged: 
               onChange={(e) => setNewKey(e.target.value)}
               aria-label={`New key for ${cfg.label}`}
               autoComplete="off"
-              className="w-full rounded-md border border-strong bg-bg px-2 py-1.5 pr-9 font-mono text-[12px]"
+              className="w-full rounded-md border border-strong bg-bg px-2 py-1.5 pr-9 font-mono text-caption"
             />
             <button type="button" onClick={() => setShowNewKey((v) => !v)} aria-label={showNewKey ? 'Hide key' : 'Show key'} className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-dim hover:text-fg">
               {showNewKey ? 'hide' : 'show'}
