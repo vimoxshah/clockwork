@@ -21,7 +21,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { augmentedPath } from './service-path.js';
+import { buildRunEnv } from './run-env.js';
 import type { AgentRunner, JobContext, JobSpecLike, RunOutcome } from '@clockwork/shared';
 
 const GRACE_MS = 30_000;
@@ -91,16 +91,7 @@ export class HermesRunner implements AgentRunner {
       const bin = this.opts.hermesBin ?? 'hermes';
       const child: ChildProcess = spawn(bin, argv, {
         cwd: ctx.worktreePath,
-        env: {
-          PATH: augmentedPath(process.env.PATH),
-          HOME: process.env.HOME ?? os.homedir(),
-          TERM: 'dumb',
-          NO_COLOR: '1',
-          LANG: process.env.LANG ?? 'en_US.UTF-8',
-          HERMES_NONINTERACTIVE: '1',
-          ...(process.env.USER ? { USER: process.env.USER } : {}),
-          ...(process.env.LOGNAME ? { LOGNAME: process.env.LOGNAME } : {}),
-        },
+        env: buildRunEnv({ HERMES_NONINTERACTIVE: '1' }),
         detached: true,
         stdio: ['ignore', 'pipe', 'pipe'],
       });

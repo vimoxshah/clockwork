@@ -5,6 +5,7 @@
  * are invisible. The daemon must find them anyway — runs depend on it.
  */
 import { homedir } from 'node:os';
+import { accessSync, constants } from 'node:fs';
 
 const WELL_KNOWN_USER_BINS = [
   '/opt/homebrew/bin',
@@ -31,18 +32,11 @@ export function resolveOnAugmentedPath(bin: string): string | null {
   for (const dir of augmentedPath(process.env.PATH).split(':')) {
     try {
       const p = `${dir}/${bin}`;
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const fs = requireFs();
-      fs.accessSync(p, fs.constants.X_OK);
+      accessSync(p, constants.X_OK);
       return p;
     } catch {
       /* keep looking */
     }
   }
   return null;
-}
-
-import { accessSync, constants } from 'node:fs';
-function requireFs(): typeof import('node:fs') {
-  return { accessSync, constants } as unknown as typeof import('node:fs');
 }

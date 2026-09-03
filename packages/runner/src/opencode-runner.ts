@@ -6,8 +6,7 @@
  * by time only.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import os from 'node:os';
-import { augmentedPath } from './service-path.js';
+import { buildRunEnv } from './run-env.js';
 import type { AgentRunner, JobContext, JobSpecLike, RunOutcome } from '@clockwork/shared';
 
 const GRACE_MS = 30_000;
@@ -47,15 +46,7 @@ export class OpenCodeRunner implements AgentRunner {
   private execute(job: JobSpecLike, ctx: JobContext): Promise<RunOutcome> {
     return new Promise<RunOutcome>((resolve) => {
       const argv = ['run', buildPrompt(job)];
-      const env: Record<string, string> = {
-        PATH: augmentedPath(process.env.PATH),
-        HOME: process.env.HOME ?? os.homedir(),
-        TERM: 'dumb',
-        NO_COLOR: '1',
-        LANG: process.env.LANG ?? 'en_US.UTF-8',
-        ...(process.env.USER ? { USER: process.env.USER } : {}),
-        ...(process.env.LOGNAME ? { LOGNAME: process.env.LOGNAME } : {}),
-      };
+      const env = buildRunEnv();
 
       const child: ChildProcess = spawn('opencode', argv, {
         cwd: ctx.worktreePath,
