@@ -56,3 +56,7 @@ src-tauri/app-icon.png.orig/
 
 # Per-session hook state — machine-local, never source.
 .genea/subagent-state.json
+
+# Product Hunt / launch prep — drafts, unpublished copy, generated assets.
+# The repo is PUBLIC: launch copy stays local until it is actually published.
+launch/
