@@ -27,9 +27,27 @@ Only two categories of data ever leave your Mac:
 
 ## What we collect
 
+### From the app: nothing
+
 **Nothing.** The authors operate no telemetry, analytics, crash reporting, or
 phone-home service. The daemon listens only on `127.0.0.1` and makes no
-connections to infrastructure controlled by the authors.
+connections to infrastructure controlled by the authors. Installing and running
+Clockwork sends us nothing, ever — there is no opt-out because there is nothing
+to opt out of.
+
+### From the website: your email, only if you type it in
+
+The marketing site has one optional field: a release-notes signup. If you enter
+an address and press the button, we store **that address and the time you
+submitted it**, and nothing else — no IP address, no user agent, no referrer, no
+cookie, no analytics script on any page.
+
+We use it to send release notes. We do not sell it, share it, or send anything
+else to it. To be removed, email
+[vmoksh.shah179@gmail.com](mailto:vmoksh.shah179@gmail.com) and it is deleted.
+
+This is a website form, not app telemetry. The two are separate on purpose: the
+app's promise above is unconditional.
 
 ## AI provider keys
 
