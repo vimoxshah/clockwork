@@ -32,7 +32,32 @@ export const SANDBOX_PROFILE_VERSION = 1;
  *   shell-snapshots/logs) so a run cannot tamper global config that future
  *   runs would load.
  */
+/**
+ * Clockwork's OWN control-plane secrets.
+ *
+ * S-audit (iteration 13): these were unprotected, and that was a sandbox
+ * escape — verified end to end, not theorised. A run could `cat`
+ * ~/.clockwork/api-token, then reach the daemon on loopback with it (the
+ * profile allows network*) and read every task through the authenticated API.
+ * From there it could book a task with any repo path and prompt, escaping the
+ * write restrictions of the run it started in.
+ *
+ * Deliberately NARROW. A blanket deny on ~/.clockwork would break every run:
+ * worktrees live under ~/.clockwork/worktrees and journals under
+ * ~/.clockwork/runs, so the agent must still read its own workspace. Only the
+ * token and the database are denied — an agent has no legitimate reason to
+ * read either.
+ */
+const dataDir = process.env.CLOCKWORK_HOME ?? `${os.homedir()}/.clockwork`;
+export const CONTROL_PLANE_PATHS = [
+  `${dataDir}/api-token`,
+  `${dataDir}/clockwork.sqlite`,
+  `${dataDir}/clockwork.sqlite-wal`,
+  `${dataDir}/clockwork.sqlite-shm`,
+];
+
 export const CREDENTIAL_PATHS = [
+  ...CONTROL_PLANE_PATHS,
   `${os.homedir()}/.ssh`,
   `${os.homedir()}/.aws`,
   `${os.homedir()}/.gnupg`,
