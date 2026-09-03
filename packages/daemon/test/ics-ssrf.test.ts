@@ -13,18 +13,8 @@
  * a latent issue rather than a live one, fixed because the fix costs nothing:
  * a real calendar feed never needs to downgrade to http.
  */
-import { describe, it, expect, afterAll } from 'vitest';
-import http from 'node:http';
+import { describe, it, expect } from 'vitest';
 import { fetchIcs } from '../src/ics.js';
-
-const servers: http.Server[] = [];
-const listen = async (h: http.RequestListener): Promise<number> => {
-  const s = http.createServer(h);
-  servers.push(s);
-  await new Promise<void>((r) => s.listen(0, '127.0.0.1', r));
-  return (s.address() as { port: number }).port;
-};
-afterAll(() => servers.forEach((s) => s.close()));
 
 describe('ICS feed fetching', () => {
   it('refuses a plain http URL outright', async () => {
