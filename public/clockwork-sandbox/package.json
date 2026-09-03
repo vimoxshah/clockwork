@@ -1,0 +1,15 @@
+{
+  "name": "clockwork-sandbox",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The macOS sandbox, credential deny list and run-env allowlist used by Clockwork — published so you can audit the security claims yourself.",
+  "license": "Apache-2.0",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.9"
+  }
+}

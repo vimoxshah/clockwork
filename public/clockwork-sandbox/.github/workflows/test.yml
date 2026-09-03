@@ -1,0 +1,17 @@
+# Runs the real sandbox tests on a real Mac. The point of this repo is that you
+# do not have to take our word for it — this proves the suite passes on a
+# machine nobody involved controls.
+name: test
+on:
+  push: { branches: [main] }
+  pull_request:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - run: npm test
