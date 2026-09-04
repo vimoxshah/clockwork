@@ -1,0 +1,27 @@
+{
+  "name": "Clockwork",
+  "short_name": "Clockwork",
+  "description": "Put your coding agents on a schedule. Book Claude Code, Codex, OpenCode or Hermes like a meeting; Clockwork runs it sandboxed on your Mac and files a readable report. Free for personal use.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "browser",
+  "background_color": "#F5F6F8",
+  "theme_color": "#15181D",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
