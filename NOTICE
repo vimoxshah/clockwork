@@ -40,6 +40,15 @@ licenses via the user's own installed copy and account):
 - OpenCode — SST / opencode contributors
 - Hermes Agent — Nous Research (Apache-licensed project)
 
+## Web fonts (landing page)
+
+The landing page under `landing-page/` self-hosts three typefaces, all
+licensed under the SIL Open Font License 1.1 (OFL-1.1):
+
+- Inter — Copyright (c) The Inter Project Authors (rsms)
+- JetBrains Mono — Copyright (c) The JetBrains Mono Project Authors
+- Instrument Serif — Copyright (c) The Instrument Serif Project Authors
+
 ## Trademarks
 
 All product names, logos, and brands are property of their respective owners.

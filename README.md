@@ -10,7 +10,7 @@ Schedule recurring AI agent jobs on a real calendar. Clockwork executes them
 unattended in isolated, sandboxed worktrees — and files a report you can
 actually read.
 
-[Website](https://clockwork.vmoksh-shah179.workers.dev/) · [Download](#-installation) · [Contact](mailto:vmoksh.shah179@gmail.com) · [Agent Library](#-agent-profile-library) · [Providers](#-providers) · [Security](#%EF%B8%8F-security-model)
+[Website](https://vimoxshah.github.io/clockwork/) · [Download](#-installation) · [Contact](mailto:vmoksh.shah179@gmail.com) · [Agent Library](#-agent-profile-library) · [Providers](#-providers) · [Security](#%EF%B8%8F-security-model)
 
 ![platform](https://img.shields.io/badge/platform-macOS-black) ![license](https://img.shields.io/badge/license-proprietary-red) ![tests](https://img.shields.io/badge/tests-passing-brightgreen) [![pages](https://img.shields.io/badge/docs-GitHub%20Pages-orange)](https://vimoxshah.github.io/clockwork/)
 
@@ -39,9 +39,9 @@ sticky notes. Clockwork gives that work a home on a **real calendar**:
 |---|---|
 | ![Calendar](landing-page/screens/01-calendar-month.png) | ![Composer](landing-page/screens/02-task-composer.png) |
 
-| Run report | Command palette (⌘K) |
+| Agent library | Command palette (⌘K) |
 |---|---|
-| ![Report](landing-page/screens/05-run-report.png) | ![Palette](landing-page/screens/07-command-palette.png) |
+| ![Agents](landing-page/screens/03-agent-profile.png) | ![Palette](landing-page/screens/07-command-palette.png) |
 
 ## The Loop
 
@@ -139,7 +139,7 @@ mode, budget defaults, and system prompt — bookable a minute later.
 
 ## 📦 Installation
 
-> macOS 14+ (Apple silicon). Free during beta.
+> macOS 14+ (Apple silicon). Free for personal use.
 
 ```bash
 # 1. Clone and install
