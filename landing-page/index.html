@@ -1,408 +1,848 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta name="description" content="Clockwork — the calendar where your AI agents show up for work. Schedule recurring agent jobs on a real calendar, run them unattended in isolated sandboxes, and review honest reports." />
-<title>Clockwork — the calendar where your agents show up for work</title>
-<link rel="icon" type="image/svg+xml" href="favicon.svg" />
-<link rel="apple-touch-icon" href="favicon.svg" />
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clockwork: a calendar for your coding agents on macOS</title>
+<meta name="description" content="Put your coding agents on a schedule. Book Claude Code, Codex, OpenCode or Hermes like a meeting; Clockwork runs it sandboxed on your Mac and files a readable report. Free for personal use.">
+<meta name="robots" content="index,follow,max-image-preview:large">
+<meta name="theme-color" content="#15181D">
+<meta name="author" content="Vimox Shah">
+<meta name="keywords" content="Clockwork, schedule coding agents, Claude Code scheduler, Codex CLI automation, OpenCode, Hermes Agent, AI agent calendar, macOS, sandboxed agents">
+<link rel="canonical" href="https://vimoxshah.github.io/clockwork/">
+<link rel="icon" type="image/svg+xml" href="mark.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="icon" type="image/png" sizes="64x64" href="favicon-64.png">
+<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
+<link rel="manifest" href="site.webmanifest">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Clockwork">
+<meta property="og:title" content="Clockwork: put your coding agents on a schedule">
+<meta property="og:description" content="Put your coding agents on a schedule. Book Claude Code, Codex, OpenCode or Hermes like a meeting; Clockwork runs it sandboxed on your Mac and files a readable report. Free for personal use.">
+<meta property="og:url" content="https://vimoxshah.github.io/clockwork/">
+<meta property="og:image" content="https://vimoxshah.github.io/clockwork/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Clockwork: a week calendar with coding-agent shifts booked next to meetings">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Clockwork: put your coding agents on a schedule">
+<meta name="twitter:description" content="Book Claude Code, Codex, OpenCode or Hermes like a meeting. Sandboxed runs, readable reports, free for personal use on macOS.">
+<meta name="twitter:image" content="https://vimoxshah.github.io/clockwork/og.png">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "SoftwareApplication", "name": "Clockwork", "url": "https://vimoxshah.github.io/clockwork/", "description": "Put your coding agents on a schedule. Book Claude Code, Codex, OpenCode or Hermes like a meeting; Clockwork runs it sandboxed on your Mac and files a readable report. Free for personal use.", "applicationCategory": "DeveloperApplication", "operatingSystem": "macOS 14 or later, Apple silicon", "softwareVersion": "0.4.0", "fileSize": "3.4MB", "downloadUrl": "https://github.com/vimoxshah/clockwork/releases/download/v0.4.0/Clockwork_0.4.0_aarch64.dmg", "installUrl": "https://vimoxshah.github.io/clockwork/#install", "image": "https://vimoxshah.github.io/clockwork/og.png", "screenshot": "https://vimoxshah.github.io/clockwork/screens/01-calendar-month-3200.webp", "softwareRequirements": "Node.js 22 or later and at least one of Claude Code, Codex CLI, OpenCode or Hermes Agent on the PATH", "license": "https://github.com/vimoxshah/clockwork/blob/main/LICENSE", "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD", "description": "Free for personal, non-commercial use. Commercial use requires a licence."}, "author": {"@type": "Person", "name": "Vimox Shah", "url": "https://www.linkedin.com/in/vimoxshah/", "sameAs": ["https://github.com/vimoxshah", "https://www.linkedin.com/in/vimoxshah/"]}}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Do I need an API key?", "acceptedAnswer": {"@type": "Answer", "text": "No. Clockwork drives the CLI you already log into: Claude Code, Codex, OpenCode or Hermes. You can also bring your own API keys; they are stored in the macOS Keychain and billed by the provider, never marked up."}}, {"@type": "Question", "name": "Does it run while my Mac is asleep?", "acceptedAnswer": {"@type": "Answer", "text": "No. Runs execute only while the Mac is awake. When the Mac is plugged in, Clockwork arms a power assertion before a scheduled run; a closed lid on battery defeats it, and the report says so. A missed run follows the policy you chose: run late, skip, or ask. For true overnight work, use an always-on Mac."}}, {"@type": "Question", "name": "Why does macOS say the app is damaged?", "acceptedAnswer": {"@type": "Answer", "text": "The build is not notarised, so Gatekeeper refuses it until the quarantine flag is cleared. Verify the checksum first, then run the xattr command from the install section."}}, {"@type": "Question", "name": "Where does my data live?", "acceptedAnswer": {"@type": "Answer", "text": "In a folder in your home directory, in SQLite. The daemon listens on the loopback interface only. Nothing is sent anywhere unless you configure a delivery target yourself."}}, {"@type": "Question", "name": "Can an agent touch my main branch?", "acceptedAnswer": {"@type": "Answer", "text": "No. Each run works in its own worktree on its own branch. A global deny-list that no profile can override blocks force-pushes to protected branches and package publishing, and journals every attempt."}}, {"@type": "Question", "name": "What does it cost?", "acceptedAnswer": {"@type": "Answer", "text": "Nothing for personal, non-commercial use. Commercial use needs a licence; email for one. Provider usage is always a separate bill."}}]}</script>
+<link rel="preload" as="font" type="font/woff2" href="fonts/bricolage-grotesque-latin.woff2" crossorigin>
 <style>
-  :root {
-    --ground:#0c0e14; --panel:#141824; --panel-hover:#1a1f2e; --brass:#e8a33d;
-    --ink:#e9ebf3; --mut:#9ba1b6; --dim:#6a7189; --border:#232a3d;
-    --success:#4bc97f; --info:#5ea7f0;
-  }
-  * { box-sizing:border-box; }
-  html { scroll-behavior:smooth; }
-  @media (prefers-reduced-motion: reduce) { html { scroll-behavior:auto; } * { animation:none !important; transition:none !important; } }
-  body { margin:0; background:var(--ground); color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; line-height:1.6; }
-  .wrap { max-width:1060px; margin:0 auto; padding:0 24px; }
-  section { padding:72px 0; }
-  h1 { font-size:40px; letter-spacing:.01em; margin:0 0 12px; font-weight:700; line-height:1.14; }
-  h1 b { color:var(--brass); }
-  h2 { font-size:30px; margin:0 0 10px; letter-spacing:.01em; }
-  .kicker { color:var(--brass); text-transform:uppercase; letter-spacing:.22em; font-size:12px; font-weight:700; margin-bottom:14px; }
-  .sub { color:var(--mut); font-size:20px; max-width:640px; }
-  nav.top { display:flex; align-items:center; gap:18px; padding:18px 0; position:sticky; top:0; background:rgba(12,14,20,.86); backdrop-filter:blur(8px); z-index:50; border-bottom:1px solid var(--border); }
-  nav.top .word { font-weight:700; letter-spacing:.2em; font-size:14px; }
-  nav.top .word b { color:var(--brass); }
-  nav.top a { color:var(--mut); text-decoration:none; font-size:13.5px; }
-  nav.top a:hover { color:var(--ink); }
-  nav.top .cta { margin-left:auto; background:var(--brass); color:#14100a; font-weight:700; border-radius:9px; padding:9px 16px; text-decoration:none; font-size:13.5px; }
-  .btnrow { display:flex; gap:14px; margin:30px 0 14px; flex-wrap:wrap; }
-  .btn { background:var(--brass); color:#14100a; font-weight:700; border:none; border-radius:11px; padding:15px 28px; font-size:16px; cursor:pointer; text-decoration:none; display:inline-block; transition:transform .15s ease, box-shadow .15s ease; }
-  .btn:hover { transform:translateY(-2px); box-shadow:0 10px 30px rgba(232,163,61,.25); }
-  .btn.ghost { background:transparent; color:var(--ink); border:1px solid var(--border-strong,#2a3247); }
-  .hero-grid { display:grid; grid-template-columns:1fr; gap:40px; align-items:center; padding:80px 0 40px; }
-  @media (min-width:900px) { .hero-grid { grid-template-columns:.88fr 1.12fr; } h1 { font-size:46px; } }
-  @media (min-width:1100px) { .hero-grid { grid-template-columns:.85fr 1.15fr; gap:48px; } h1 { font-size:50px; } }
-  .shot { width:100%; border-radius:14px; border:1px solid var(--border); box-shadow:0 24px 70px rgba(0,0,0,.5); display:block; background:var(--panel); }
-  .shots-2 { display:grid; grid-template-columns:1fr 1fr; gap:22px; margin-top:34px; }
-  @media (max-width:760px) { .shots-2 { grid-template-columns:1fr; } }
-  figure { margin:0; }
-  figcaption { color:var(--dim); font-size:12.5px; margin-top:8px; }
-  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:18px; margin-top:30px; }
-  .card { background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:22px; }
-  .card h3 { margin:0 0 8px; font-size:16.5px; }
-  .card p { margin:0; color:var(--mut); font-size:14px; }
-  .loop { display:flex; gap:0; flex-wrap:wrap; margin-top:30px; counter-reset:step; }
-  .step { flex:1 1 180px; background:var(--panel); border:1px solid var(--border); padding:22px; position:relative; counter-increment:step; }
-  .step:first-child { border-radius:14px 0 0 14px; } .step:last-child { border-radius:0 14px 14px 0; }
-  .step::before { content:counter(step,decimal-leading-zero); color:var(--brass); font-weight:800; font-size:13px; letter-spacing:.15em; }
-  .step h3 { margin:6px 0 4px; font-size:17px; } .step p { margin:0; color:var(--mut); font-size:13.5px; }
-  .providers { display:flex; gap:12px; flex-wrap:wrap; margin-top:26px; }
-  .prov { border:1px solid var(--border); border-radius:11px; padding:12px 18px; background:var(--panel); }
-  .prov strong { display:block; font-size:14.5px; } .prov span { color:var(--dim); font-size:12px; }
-  .dot-ok { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--success); margin-right:7px; }
-  .reveal { opacity:0; transform:translateY(18px); transition:opacity .7s ease, transform .7s ease; }
-  .reveal.in { opacity:1; transform:none; }
-  .honest { border-left:3px solid var(--brass); padding:12px 18px; color:var(--dim); font-size:14px; background:#11141d; border-radius:0 10px 10px 0; max-width:720px; }
-  footer { border-top:1px solid var(--border); padding:36px 0 60px; color:var(--dim); font-size:13px; }
-  footer a { color:var(--mut); }
+/* Self-hosted type. Both families are SIL Open Font License 1.1; the licence texts sit in fonts/. */
+@font-face { font-family: "Bricolage Grotesque"; font-style: normal; font-weight: 400 800; font-display: swap; src: url(fonts/bricolage-grotesque-latin.woff2) format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: "Bricolage Grotesque"; font-style: normal; font-weight: 400 800; font-display: swap; src: url(fonts/bricolage-grotesque-latin-ext.woff2) format("woff2"); unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+@font-face { font-family: "Geist Mono"; font-style: normal; font-weight: 400 500; font-display: swap; src: url(fonts/geist-mono-latin.woff2) format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: "Geist Mono"; font-style: normal; font-weight: 400 500; font-display: swap; src: url(fonts/geist-mono-latin-ext.woff2) format("woff2"); unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF; }
 </style>
+<style>
+/* Clockwork landing page, redesign prototype.
+   One grid, one axis, one accent. Light theme is authored and locked.
+   Fonts are self-hosted from fonts/. */
+
+:root {
+  --bg: #F5F6F8;
+  --surface: #FFFFFF;
+  --ink: #15181D;
+  --ink-2: #4B5160;
+  --ink-3: #626B7D;
+  --line: #DCE0E7;
+  --line-2: #C3C8D2;
+  --accent: #E0442E;
+  --accent-ink: #B5321E;
+  --accent-tint: rgba(224, 68, 46, .07);
+  --human: #E6E9F0;
+  --sans: "Bricolage Grotesque", "Helvetica Neue", Arial, system-ui, sans-serif;
+  --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --r: 6px;
+  --max: 1280px;
+  --gutter: 32px;
+  --col-gap: 24px;
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 400 17px/1.55 var(--sans); font-synthesis: none; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; overflow-x: hidden; }
+img { display: block; max-width: 100%; height: auto; }
+a { color: inherit; }
+h1, h2, h3, p, dl, dd, figure { margin: 0; }
+h1, h2 { font-weight: 600; letter-spacing: -.022em; line-height: 1.04; text-wrap: balance; }
+h1 { font-size: clamp(38px, 3.9vw, 56px); }
+h2 { font-size: clamp(30px, 3vw, 44px); }
+h3 { font-size: 20px; font-weight: 600; letter-spacing: -.012em; line-height: 1.25; }
+p { text-wrap: pretty; }
+code, pre, .mono { font-family: var(--mono); font-feature-settings: "liga" 0; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+::selection { background: var(--accent-tint); }
+
+/* the one grid */
+.wrap { max-width: var(--max); margin: 0 auto; padding: 0 var(--gutter); }
+.grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--col-gap); row-gap: 32px; }
+.c1-5 { grid-column: 1 / 6; } .c1-6 { grid-column: 1 / 7; } .c1-7 { grid-column: 1 / 8; } .c1-8 { grid-column: 1 / 9; }
+.c1-12 { grid-column: 1 / -1; } .c6-12 { grid-column: 6 / -1; } .c7-12 { grid-column: 7 / -1; } .c8-12 { grid-column: 8 / -1; } .c9-12 { grid-column: 9 / -1; }
+.c1-4 { grid-column: 1 / 5; } .c5-12 { grid-column: 5 / -1; }
+.c1-2 { grid-column: 1 / 3; } .c3-12 { grid-column: 3 / -1; } .c3-7 { grid-column: 3 / 8; } .c8-12b { grid-column: 8 / -1; }
+
+section { padding: 112px 0; border-top: 1px solid var(--line); }
+.lede { font-size: 19px; line-height: 1.5; color: var(--ink-2); max-width: 34em; }
+.sub { color: var(--ink-2); max-width: 36em; }
+.sub + .sub { margin-top: 12px; }
+.head { margin-bottom: 44px; }
+.head .sub { margin-top: 14px; }
+
+/* buttons */
+.btn { display: inline-flex; align-items: center; gap: 8px; min-height: 48px; padding: 0 20px; border-radius: var(--r); font: 600 15px/1 var(--sans); text-decoration: none; border: 1px solid var(--line-2); background: var(--surface); color: var(--ink); white-space: nowrap; cursor: pointer; transition: transform .15s ease, background .15s ease, border-color .15s ease; }
+.btn:hover { border-color: var(--ink-3); }
+.btn:active { transform: translateY(1px); }
+.btn.primary { background: var(--ink); color: #fff; border-color: var(--ink); }
+.btn.primary:hover { background: #000; border-color: #000; }
+.btn-row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 32px; }
+
+/* nav */
+.nav { position: sticky; top: 0; z-index: 20; background: rgba(245, 246, 248, .88); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+.nav .grid { align-items: center; height: 68px; row-gap: 0; }
+.mark { grid-column: 1 / 4; font-weight: 700; font-size: 19px; letter-spacing: -.02em; text-decoration: none; display: inline-flex; align-items: center; gap: 10px; }
+.mark img { width: 24px; height: 24px; display: block; }
+.links { grid-column: 4 / 10; display: flex; gap: 26px; font-size: 15px; font-weight: 500; color: var(--ink-2); }
+.links a { text-decoration: none; }
+.links a:hover { color: var(--ink); }
+.nav-cta { grid-column: 10 / -1; justify-self: end; }
+
+/* hero */
+.hero { border-top: 0; padding: 72px 0 88px; }
+.hero .grid { align-items: center; }
+.hero h1 { margin-top: 6px; }
+.hero .lede { margin-top: 22px; }
+
+/* the week: a working calendar, not a picture of one */
+.week { border: 1px solid var(--line-2); border-radius: var(--r); background: var(--surface); overflow: hidden; }
+.week-head { display: grid; grid-template-columns: 56px repeat(7, minmax(0, 1fr)); border-bottom: 1px solid var(--line); }
+.week-head .cell { padding: 12px 8px 10px; font: 500 12px/1.2 var(--mono); color: var(--ink-3); text-transform: uppercase; letter-spacing: .04em; border-left: 1px solid var(--line); min-width: 0; }
+.week-head .cell b { display: block; font: 600 16px/1.2 var(--sans); color: var(--ink); letter-spacing: -.01em; margin-top: 3px; text-transform: none; }
+.week-head .cell.today b { color: var(--accent-ink); }
+.week-head .cell:first-child { border-left: 0; }
+.week-body { position: relative; display: grid; grid-template-columns: 56px repeat(7, minmax(0, 1fr)); }
+.gutter { position: relative; }
+.gutter span { position: absolute; right: 8px; transform: translateY(-50%); font: 500 11px/1 var(--mono); color: var(--ink-3); }
+.day { position: relative; border-left: 1px solid var(--line); min-width: 0; }
+.day.today { background: var(--accent-tint); }
+.hour-line { position: absolute; left: 0; right: 0; height: 1px; background: var(--line); }
+.ev { position: absolute; left: 4px; right: 4px; border-radius: var(--r); padding: 5px 7px; font: 500 12px/1.25 var(--sans); text-align: left; overflow: hidden; cursor: pointer; border: 1px solid transparent; letter-spacing: -.005em; transition: transform .15s ease, box-shadow .15s ease; }
+.ev:hover, .ev:focus-visible { transform: translateY(-1px); box-shadow: 0 6px 18px -8px rgba(21, 24, 29, .35); z-index: 3; }
+.ev.human { background: var(--human); color: var(--ink-2); border-color: var(--human); }
+.ev.agent { background: var(--ink); color: #fff; }
+.ev.agent.booked { background: var(--surface); color: var(--ink); border-color: var(--ink); border-style: dashed; }
+.ev.ask { background: var(--surface); color: var(--accent-ink); border-color: var(--accent); }
+.ev small { display: block; font: 400 11px/1.2 var(--mono); opacity: .8; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ev .t { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.now { position: absolute; left: 56px; right: 0; height: 2px; background: var(--accent); z-index: 4; pointer-events: none; }
+.now::before { content: ""; position: absolute; left: -5px; top: -4px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+.now-label { position: absolute; left: 0; width: 52px; text-align: right; transform: translateY(-50%); font: 500 11px/1 var(--mono); color: var(--accent-ink); z-index: 4; pointer-events: none; }
+.week-scroll { overflow-x: auto; }
+.week-scroll .week-inner { min-width: 0; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 22px; align-items: center; margin-top: 14px; font: 400 13px/1.4 var(--sans); color: var(--ink-3); }
+.legend .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 7px; }
+.detail { margin-top: 12px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); padding: 14px 16px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 20px; align-items: baseline; min-height: 74px; }
+.detail b { font-weight: 600; letter-spacing: -.01em; }
+.detail .m { font: 400 13px/1.5 var(--mono); color: var(--ink-3); grid-column: 1 / -1; }
+.detail .st { font: 500 12px/1 var(--mono); padding: 5px 8px; border-radius: 4px; background: var(--human); color: var(--ink-2); white-space: nowrap; }
+.detail .st.done { background: var(--ink); color: #fff; }
+.detail .st.ask { background: var(--accent); color: #fff; }
+
+/* a day, as a timeline */
+.stops { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--col-gap); row-gap: 0; }
+.stop { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--col-gap); padding: 40px 0; border-top: 1px solid var(--line); }
+.stop:first-child { border-top: 0; padding-top: 0; }
+.stop .when { grid-column: 1 / 3; font: 500 13px/1.4 var(--mono); color: var(--accent-ink); padding-top: 6px; }
+.stop .when b { display: block; font: 600 clamp(28px, 2.6vw, 40px)/1 var(--sans); color: var(--ink); letter-spacing: -.02em; margin-bottom: 8px; font-variant-numeric: tabular-nums; }
+.stop .what { grid-column: 3 / 7; }
+.stop .what h3 { font-size: 24px; }
+.stop .what p { margin-top: 12px; color: var(--ink-2); max-width: 30em; }
+.stop .show { grid-column: 7 / -1; align-self: start; }
+.shot { border: 1px solid var(--line-2); border-radius: var(--r); background: var(--surface); }
+.plain { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 14px 24px; }
+.plain li { padding-left: 22px; position: relative; color: var(--ink-2); font-size: 15.5px; line-height: 1.5; }
+.plain li::before { content: ""; position: absolute; left: 0; top: 9px; width: 12px; height: 2px; background: var(--ink); }
+.report { border: 1px solid var(--line-2); border-radius: var(--r); background: var(--surface); padding: 22px 24px; display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 12px 20px; font-size: 15px; }
+.report dt { font: 500 12px/1.6 var(--mono); color: var(--ink-3); text-transform: uppercase; letter-spacing: .04em; padding-top: 2px; }
+.report dd { color: var(--ink-2); }
+.report dd b { color: var(--ink); font-weight: 600; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chips span { font: 500 13px/1 var(--mono); padding: 9px 11px; border: 1px solid var(--line-2); border-radius: var(--r); background: var(--surface); color: var(--ink-2); }
+
+/* roster */
+.roster { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--col-gap); row-gap: 40px; }
+.group { display: contents; }
+.gname { grid-column: 1 / 3; font: 500 13px/1.5 var(--mono); color: var(--ink-3); padding-top: 4px; }
+.people { grid-column: 3 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: var(--col-gap); row-gap: 22px; }
+.person b { display: block; font-weight: 600; letter-spacing: -.012em; font-size: 17px; }
+.person span { display: block; color: var(--ink-2); font-size: 14.5px; line-height: 1.45; margin-top: 3px; }
+.roster-note { grid-column: 3 / -1; color: var(--ink-3); font-size: 14.5px; }
+
+/* the real app */
+.real .grid { row-gap: 10px; align-items: start; }
+.cap { font: 400 13.5px/1.5 var(--sans); color: var(--ink-3); }
+figcaption { font: 400 13.5px/1.5 var(--sans); color: var(--ink-3); margin-top: 10px; }
+.stack { display: flex; flex-direction: column; justify-content: space-between; align-self: stretch; }
+
+/* trust */
+.two { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--col-gap); row-gap: 40px; }
+.two .col { grid-column: span 6; }
+.two h3 { padding-bottom: 14px; border-bottom: 1px solid var(--ink); margin-bottom: 18px; }
+.two ul { list-style: none; margin: 0; padding: 0; }
+.two li { padding: 11px 0; color: var(--ink-2); font-size: 16px; line-height: 1.5; display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 10px; }
+.two li .k { font: 500 13px/1.7 var(--mono); color: var(--ink); }
+.two li .k.no { color: var(--accent-ink); }
+.foot-note { grid-column: 1 / 9; color: var(--ink-3); font-size: 14.5px; line-height: 1.55; max-width: 60em; }
+.foot-note a { color: var(--ink-2); text-decoration-thickness: 1px; text-underline-offset: 3px; text-underline-position: from-font; }
+
+/* spec sheet */
+.spec { display: grid; row-gap: 0; }
+.spec > div { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--col-gap); padding: 22px 0; border-top: 1px solid var(--line); }
+.spec > div:last-child { border-bottom: 1px solid var(--line); }
+.spec dt { grid-column: 1 / 3; font-weight: 600; letter-spacing: -.012em; font-size: 17px; }
+.spec dd { grid-column: 3 / 10; color: var(--ink-2); font-size: 16px; line-height: 1.55; }
+.spec dd code { font-size: 13.5px; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; color: var(--ink); }
+.spec > div > * { min-width: 0; }
+
+/* install */
+pre.cmd { margin: 0; background: var(--ink); color: #E8EAF0; border-radius: var(--r); padding: 20px 22px; overflow: auto; font: 500 14px/1.8 var(--mono); }
+pre.cmd .p { color: #8C93A6; }
+pre.cmd .c { color: #8C93A6; font-weight: 400; }
+.install .note { color: var(--ink-2); font-size: 15.5px; line-height: 1.55; }
+.install .note + .note { margin-top: 14px; }
+.install .note b { color: var(--ink); font-weight: 600; }
+.install .note a { color: var(--ink); text-underline-offset: 3px; text-underline-position: from-font; text-decoration-thickness: 1px; }
+.install .note code { font-size: 13px; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; color: var(--ink); }
+
+/* pricing: one wide free column, two narrow built-not-priced columns */
+.tiers { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--col-gap); row-gap: 40px; align-items: start; }
+.tiers > .card:nth-child(1) { grid-column: 1 / 7; }
+.tiers > .card:nth-child(2) { grid-column: 7 / 10; }
+.tiers > .card:nth-child(3) { grid-column: 10 / -1; }
+.tier { border-top: 1px solid var(--line-2); padding-top: 18px; }
+.tier.lead { border-top: 2px solid var(--ink); }
+.tname { font: 600 15px/1.2 var(--sans); letter-spacing: -.01em; }
+.tprice { margin-top: 10px; font: 600 clamp(32px, 3vw, 44px)/1 var(--sans); letter-spacing: -.03em; }
+.tprice small { display: block; margin-top: 8px; font: 500 13px/1.4 var(--mono); color: var(--ink-3); letter-spacing: 0; }
+.tier ul { list-style: none; margin: 22px 0 0; padding: 0; }
+.tier li { padding: 9px 0; border-top: 1px solid var(--line); color: var(--ink-2); font-size: 15px; line-height: 1.45; }
+.tier.lead ul { columns: 2; column-gap: var(--col-gap); }
+.tier.lead li { break-inside: avoid; }
+.tier-note { margin-top: 36px; color: var(--ink-2); font-size: 15px; max-width: 60em; }
+.tier-note a { color: var(--ink); text-underline-offset: 3px; text-underline-position: from-font; text-decoration-thickness: 1px; }
+.faq details { border-top: 1px solid var(--line); }
+.faq details:last-child { border-bottom: 1px solid var(--line); }
+.faq summary { list-style: none; cursor: pointer; padding: 18px 40px 18px 0; font-weight: 600; font-size: 18px; letter-spacing: -.012em; position: relative; }
+.faq summary::-webkit-details-marker { display: none; }
+.faq summary::after { content: "+"; position: absolute; right: 4px; top: 14px; font: 400 24px/1 var(--mono); color: var(--ink-3); }
+.faq details[open] summary::after { content: "\2212"; }
+.faq details p { padding: 0 0 20px; color: var(--ink-2); max-width: 60ch; }
+.faq details p a { color: var(--ink-2); text-underline-offset: 3px; text-underline-position: from-font; }
+
+/* final */
+.final { padding: 104px 0 112px; }
+.final .fine { margin-top: 18px; font: 400 14px/1.6 var(--mono); color: var(--ink-3); }
+footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--ink-2); font-size: 15px; }
+.ft { row-gap: 40px; align-items: start; }
+.ft-brand { grid-column: 1 / 6; }
+.ft-brand p { margin-top: 16px; max-width: 30em; line-height: 1.5; }
+.ft-brand a:not(.mark) { color: var(--ink); text-underline-offset: 3px; text-underline-position: from-font; text-decoration-thickness: 1px; }
+.ft-col { display: flex; flex-direction: column; gap: 2px; }
+.ft-col:nth-of-type(1) { grid-column: 6 / 8; }
+.ft-col:nth-of-type(2) { grid-column: 8 / 10; }
+.ft-col:nth-of-type(3) { grid-column: 10 / -1; }
+.ft-col b { font-weight: 600; color: var(--ink); letter-spacing: -.01em; margin-bottom: 4px; }
+.ft-col a { text-decoration: none; color: var(--ink-2); overflow-wrap: anywhere; padding: 6px 0; }
+.ft-col a:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; text-underline-position: from-font; }
+.ft-bottom { margin-top: 56px; padding-top: 22px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; gap: 16px 32px; flex-wrap: wrap; font-size: 13.5px; color: var(--ink-3); }
+.ft-bottom .mono { font-size: 12.5px; }
+
+/* reveal, only with JS, only when motion is allowed */
+.js .rv { opacity: 0; transform: translateY(14px); transition: opacity .6s cubic-bezier(.16, 1, .3, 1), transform .6s cubic-bezier(.16, 1, .3, 1); }
+.js .rv.in { opacity: 1; transform: none; }
+.js .ev.agent, .js .ev.human, .js .ev.ask { opacity: 0; transform: translateY(6px); animation: punch .5s cubic-bezier(.16, 1, .3, 1) forwards; animation-delay: calc(var(--i, 0) * 60ms + 150ms); }
+@keyframes punch { to { opacity: 1; transform: none; } }
+
+/* the grid children default to min-width:auto */
+.grid > *, .stop > *, .roster > *, .two > *, .people > * { min-width: 0; }
+
+@media (max-width: 1080px) {
+  .links { gap: 18px; font-size: 14px; }
+}
+@media (max-width: 1100px) {
+  .hero .hero-copy, .hero .hero-cal { grid-column: 1 / -1; }
+  .hero .grid { align-items: start; }
+  .hero .lede { max-width: 40em; }
+}
+@media (max-width: 900px) {
+  section { padding: 80px 0; }
+  .hero { padding: 48px 0 64px; }
+  .links { display: none; }
+  .mark { grid-column: 1 / 7; }
+  .nav-cta { grid-column: 7 / -1; }
+  .stop .when { grid-column: 1 / -1; display: flex; gap: 12px; align-items: baseline; }
+  .stop .when b { margin-bottom: 0; }
+  .stop .what, .stop .show { grid-column: 1 / -1; }
+  .stop .show { margin-top: 24px; }
+  .gname, .people, .roster-note { grid-column: 1 / -1; }
+  .people { grid-template-columns: 1fr 1fr; }
+  .two .col { grid-column: 1 / -1; }
+  .foot-note { grid-column: 1 / -1; }
+  .tiers > .card:nth-child(1), .tiers > .card:nth-child(2), .tiers > .card:nth-child(3) { grid-column: 1 / -1; }
+  .spec dt, .spec dd { grid-column: 1 / -1; }
+  .spec dd { margin-top: 6px; }
+  .c1-4, .c5-12, .c1-5, .c1-6, .c1-7, .c1-8, .c6-12, .c7-12, .c8-12, .c9-12 { grid-column: 1 / -1; }
+  .stack { gap: var(--col-gap); }
+  .real .grid { row-gap: var(--col-gap); }
+  .real figure.c1-8 { order: -2; }
+  .cap.c1-8 { order: -1; }
+  .week-scroll .week-inner { min-width: 760px; }
+  .ft-brand { grid-column: 1 / -1; }
+  .ft-col:nth-of-type(1) { grid-column: 1 / 5; }
+  .ft-col:nth-of-type(2) { grid-column: 5 / 9; }
+  .ft-col:nth-of-type(3) { grid-column: 9 / -1; }
+}
+@media (max-width: 600px) {
+  :root { --gutter: 20px; }
+  body { font-size: 16px; }
+  .people { grid-template-columns: 1fr; }
+  .plain { grid-template-columns: 1fr; }
+  .tier.lead ul { columns: 1; }
+  .report { grid-template-columns: 1fr; gap: 4px; }
+  .report dt { padding-top: 10px; }
+  .btn-row .btn { flex: 1 1 auto; justify-content: center; }
+  .detail { grid-template-columns: 1fr; }
+  .final { padding: 88px 0 96px; }
+  .ft-col:nth-of-type(1) { grid-column: 1 / 7; }
+  .ft-col:nth-of-type(2) { grid-column: 7 / -1; }
+  .ft-col:nth-of-type(3) { grid-column: 1 / 7; }
+  footer { padding-top: 48px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .js .rv { opacity: 1; transform: none; transition: none; }
+  .js .ev.agent, .js .ev.human, .js .ev.ask { animation: none; opacity: 1; transform: none; }
+  .btn, .ev { transition: none; }
+}
+</style>
+<script>document.documentElement.classList.add('js');</script>
 </head>
 <body>
 
-<nav class="top wrap">
-  <span class="word">CLOCK<b>WORK</b></span>
-  <a href="#product">Product</a>
-  <a href="#how">How it works</a>
-  <a href="#agents">Agents</a>
-  <a href="#security">Security</a>
-  <a class="cta" href="#download">Download</a>
-</nav>
-
-<header class="wrap hero-grid">
-  <div>
-    <div class="kicker">Local-first · macOS · works with the logins you already have</div>
-    <h1>Your AI agents have a <b>calendar</b> now.</h1>
-    <p class="sub">Stop babysitting terminals and cron scripts. Book agent work on a real calendar — Clockwork runs it in an isolated sandbox at the hour you chose and files a report you can actually read.</p>
-    <div class="btnrow">
-      <a class="btn" href="#download">Download Clockwork</a>
-      <a class="btn ghost" href="#product">See it work ↓</a>
+<header class="nav">
+  <div class="wrap">
+    <div class="grid">
+      <a class="mark" href="#top" aria-label="Clockwork, home"><img src="mark.svg" width="24" height="24" alt="">Clockwork</a>
+      <nav class="links" aria-label="Sections">
+        <a href="#day">How it works</a>
+        <a href="#agents">Agents</a>
+        <a href="#trust">Security</a>
+        <a href="#spec">Spec</a>
+        <a href="#pricing">Pricing</a>
+        <a href="#install">Install</a>
+      </nav>
+      <a class="btn primary nav-cta dl" href="https://github.com/vimoxshah/clockwork/releases/download/v0.4.0/Clockwork_0.4.0_aarch64.dmg" download type="application/octet-stream">Download for Mac</a>
     </div>
-    <p style="color:var(--dim);font-size:13px">Free during beta · No API key · Uses your Claude Code / Codex / OpenCode / Hermes login</p>
   </div>
-  <figure>
-    <img class="shot" src="screens/01-calendar-month.png" alt="Clockwork month calendar with scheduled agent runs" loading="eager"/>
-    <figcaption>The default view: every agent job on one month grid.</figcaption>
-  </figure>
 </header>
 
-<section id="story" class="wrap reveal" style="padding-top:40px">
-  <div class="kicker">Act I — the problem</div>
-  <h2>Your agents are everywhere. Their work is nowhere.</h2>
-  <p class="sub">You have powerful AI agents. But the work they do lives in terminal scrollback,
-  cron tables, CI logs and chat threads — invisible, unrepeatable, unaccountable.</p>
-  <svg viewBox="0 0 720 180" style="width:100%;max-width:760px;margin-top:26px" role="img" aria-label="Scattered agent work across terminals, cron and CI converging into a calendar">
-    <defs>
-      <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#e8a33d"/></marker>
-    </defs>
-    <g font-family="-apple-system,sans-serif" font-size="12">
-      <rect x="10" y="20" width="130" height="34" rx="8" fill="#141824" stroke="#232a3d"/><text x="75" y="41" text-anchor="middle" fill="#9ba1b6">cron · 2am</text>
-      <rect x="10" y="72" width="130" height="34" rx="8" fill="#141824" stroke="#232a3d"/><text x="75" y="93" text-anchor="middle" fill="#9ba1b6">terminal #4</text>
-      <rect x="10" y="124" width="130" height="34" rx="8" fill="#141824" stroke="#232a3d"/><text x="75" y="145" text-anchor="middle" fill="#9ba1b6">CI job ✗</text>
-      <path d="M145 37 C 250 60, 300 80, 420 88" stroke="#e8a33d" fill="none" marker-end="url(#arr)" opacity=".7"/>
-      <path d="M145 89 C 260 92, 320 90, 420 90" stroke="#e8a33d" fill="none" marker-end="url(#arr)" opacity=".7"/>
-      <path d="M145 141 C 250 120, 300 100, 420 94" stroke="#e8a33d" fill="none" marker-end="url(#arr)" opacity=".7"/>
-      <rect x="430" y="55" width="270" height="70" rx="12" fill="#141824" stroke="#e8a33d"/>
-      <text x="565" y="85" text-anchor="middle" fill="#e9ebf3" font-weight="600">one calendar</text>
-      <text x="565" y="105" text-anchor="middle" fill="#6a7189" font-size="11">booked · run · reviewed · repeated</text>
-    </g>
-  </svg>
-</section>
+<main id="top">
 
-<section id="day" class="wrap reveal">
-  <div class="kicker">Act II — your agents' workday</div>
-  <h2>Human time + agent time, on one grid.</h2>
-  <p class="sub">Clockwork overlays your meetings with scheduled agent work, so you always
-  know what ran while you were heads-down — and what needs you now.</p>
-  <svg viewBox="0 0 720 230" style="width:100%;max-width:700px;margin-top:26px;display:block" role="img" aria-label="Example day: meetings interleaved with agent jobs">
-    <g font-family="-apple-system,sans-serif" font-size="12.5">
-      <line x1="90" y1="15" x2="90" y2="215" stroke="#232a3d"/>
-      <text x="78" y="35" text-anchor="end" fill="#6a7189">09:00</text>
-      <text x="78" y="70" text-anchor="end" fill="#6a7189">10:00</text>
-      <text x="78" y="105" text-anchor="end" fill="#6a7189">11:00</text>
-      <text x="78" y="140" text-anchor="end" fill="#6a7189">13:00</text>
-      <text x="78" y="175" text-anchor="end" fill="#6a7189">14:00</text>
-      <text x="78" y="210" text-anchor="end" fill="#6a7189">16:00</text>
-      <rect x="100" y="22" width="380" height="26" rx="6" fill="rgba(94,167,240,.18)"/><text x="112" y="39" fill="#5ea7f0">👤 Team standup — meeting</text>
-      <rect x="100" y="57" width="280" height="26" rx="6" fill="rgba(94,167,240,.18)"/><text x="112" y="74" fill="#5ea7f0">👤 Focus time</text>
-      <rect x="100" y="92" width="330" height="26" rx="6" fill="rgba(232,163,61,.16)"/><text x="112" y="109" fill="#e8a33d">🤖 Dependency audit — Dep Surgeon ✓ completed</text>
-      <rect x="100" y="127" width="200" height="26" rx="6" fill="rgba(94,167,240,.18)"/><text x="112" y="144" fill="#5ea7f0">👤 Lunch</text>
-      <rect x="100" y="162" width="350" height="26" rx="6" fill="rgba(75,201,127,.14)"/><text x="112" y="179" fill="#4bc97f">🤖 Nightly test sweep — Test Doctor ✓ report ready</text>
-      <rect x="100" y="197" width="310" height="26" rx="6" fill="rgba(224,92,92,.15)"/><text x="112" y="214" fill="#e05c5c">🤖 Force-push request — ⚑ waiting for you</text>
-    </g>
-  </svg>
-</section>
-
-<section id="product" class="wrap">
-  <div class="reveal">
-    <div class="kicker">Why this exists</div>
-    <h2>Agents are powerful. Recurring work has no home.</h2>
-    <p class="sub">Right now recurring agent chores live in crontabs, shell scripts, CI pipelines, and sticky notes. Clockwork gives that work a home on your calendar — with budgets, approvals, isolation, and searchable history built in.</p>
-  </div>
-  <div class="shots-2">
-    <figure class="reveal"><img class="shot" src="screens/02-task-composer.png" alt="Task composer with provider selection" loading="lazy"/><figcaption>Book a job in under a minute — prompt, repo, budget, schedule.</figcaption></figure>
-    <figure class="reveal"><img class="shot" src="screens/08-provider-selection.png" alt="Provider selection between Claude, Codex, OpenCode and Hermes" loading="lazy"/><figcaption>Pick the engine per task: Claude Code, Codex, OpenCode, or Hermes Agent.</figcaption></figure>
-    <figure class="reveal"><img class="shot" src="screens/05-run-report.png" alt="Run report with summary and cost" loading="lazy"/><figcaption>Reports worth reading: what it did, what it skipped, what it cost.</figcaption></figure>
-    <figure class="reveal"><img class="shot" src="screens/07-command-palette.png" alt="Command palette" loading="lazy"/><figcaption>⌘K everything: navigate, switch themes, create tasks.</figcaption></figure>
-  </div>
-</section>
-
-<section id="how" class="wrap reveal">
-  <div class="kicker">The loop</div>
-  <h2>Book → Run → Review → Repeat</h2>
-  <div class="loop">
-    <div class="step"><h3>Book</h3><p>Choose an agent profile, a repo, a budget, and a time. One-off or recurring.</p></div>
-    <div class="step"><h3>Run</h3><p>Your own CLI engine executes unattended inside an OS-sandboxed git worktree.</p></div>
-    <div class="step"><h3>Review</h3><p>A human-readable report lands in your inbox — branch, diffstat, cost, transcript.</p></div>
-    <div class="step"><h3>Repeat</h3><p>Make it weekly. Search your run history. Trust grows with evidence.</p></div>
-  </div>
-</section>
-
-<section id="usp" class="wrap reveal">
-  <div class="kicker">Differentiators</div>
-  <h2>Built like a product, not a demo</h2>
-  <div class="cards">
-    <div class="card"><h3>🗓 A real calendar</h3><p>Month grid, recurrence, missed-run policies, per-repo mutex — scheduling is first-class, not an afterthought.</p></div>
-    <div class="card"><h3>🔀 Provider freedom</h3><p>Claude Code today, Codex / OpenCode / Hermes when you want. Switch per task without rebuilding anything.</p></div>
-    <div class="card"><h3>🛡 Human-in-the-loop</h3><p>Risky actions pause the run and ask you. Unanswered asks fail safe — never silently approved.</p></div>
-    <div class="card"><h3>📦 Real isolation</h3><p>Every run gets its own worktree and Seatbelt sandbox. Writes locked to scope. SSH keys unreadable.</p></div>
-    <div class="card"><h3>🔎 Searchable history</h3><p>Full-text search across your retained reports and transcripts. Your agent's track record becomes auditable.</p></div>
-    <div class="card"><h3>⌨️ Keyboard-native</h3><p>⌘K palette, global shortcuts, instant inbox search. Built by terminal people, for terminal people.</p></div>
-  </div>
-</section>
-
-<section id="agents" class="wrap reveal">
-  <div class="kicker">Agent library</div>
-  <h2>Ready-to-run specialists, not blank prompts</h2>
-  <p class="sub">Every profile ships with mission, constraints, safety rails, output contract, and success criteria — so "update my deps" doesn't turn into "rewrite my repo".</p>
-  <div class="cards">
-    <div class="card"><h3>Dependency Surgeon</h3><p>Groups upgrades, reads breaking changes, runs tests, opens PRs. Never force-pushes.</p></div>
-    <div class="card"><h3>Test Doctor</h3><p>Triage flaky suites, quarantine noise, propose minimal fixes.</p></div>
-    <div class="card"><h3>Docs Drift Checker</h3><p>Finds where docs and code disagree, drafts precise corrections.</p></div>
-    <div class="card"><h3>Repo Health Monitor</h3><p>Morning digest: stale branches, failing CI, security advisories.</p></div>
-  </div>
-  <div class="btnrow" style="margin-top:26px">
-    <a class="btn ghost" href="#download">Browse the full library in-app</a>
-  </div>
-</section>
-
-<section id="security" class="wrap reveal">
-  <div class="kicker">Security</div>
-  <h2>Trust is the feature</h2>
-  <div class="cards">
-    <div class="card"><h3>Sandboxed execution</h3><p>macOS Seatbelt profiles per run. File writes restricted to the run's worktree.</p></div>
-    <div class="card"><h3>Credential hygiene</h3><p>Sanitized environment. SSH agents and credential helpers unreadable from inside a run.</p></div>
-    <div class="card"><h3>Hard budget bounds</h3><p>USD soft caps, turn limits, wall-clock timeouts — enforced by the supervisor, not the model's good intentions.</p></div>
-    <div class="card"><h3>Audit journal</h3><p>Every approval, denial, and state change recorded. Nothing happens off the record.</p></div>
-  </div>
-  <p class="honest" style="margin-top:26px">🔍 <strong>Don't take our word for it.</strong> The Seatbelt profile, the credential
-    deny list and the run-environment allowlist are
-    <a href="https://github.com/vimoxshah/clockwork" style="color:var(--brass)">published under Apache-2.0</a>
-    with the tests that prove them &mdash; the suite writes a fake secret into <code>~/.ssh</code> and <code>~/.aws</code>,
-    then runs a real <code>cat</code> inside a real sandbox and asserts it fails. Read it, run it on your own Mac, and
-    see what it does <em>not</em> prove. Clockwork itself stays proprietary; the security boundary is open.</p>
-
-  <p class="honest" style="margin-top:26px">⏾ <strong>The honest constraint:</strong> jobs run when your machine is awake. Clockwork keeps a plugged-in laptop awake through booked windows and tells you loudly when sleep caused a miss. For true overnight runs, use an always-on machine. We'd rather tell you now than disappoint you at 2am.</p>
-</section>
-
-<section id="providers" class="wrap reveal">
-  <div class="kicker">Providers</div>
-  <h2>Bring the engines you already pay for</h2>
-  <div class="providers">
-    <div class="prov"><strong><span class="dot-ok"></span>Claude Code</strong><span>subscription login · default</span></div>
-    <div class="prov"><strong><span class="dot-ok"></span>Codex CLI</strong><span>OpenAI</span></div>
-    <div class="prov"><strong><span class="dot-ok"></span>OpenCode</strong><span>multi-model</span></div>
-    <div class="prov"><strong><span class="dot-ok"></span>Hermes Agent</strong><span>Nous Research</span></div>
-  </div>
-  <figure class="reveal" style="margin-top:30px"><img class="shot" style="max-width:760px" src="screens/03-agent-profile.png" alt="Agent profiles library" loading="lazy"/><figcaption>Detection is automatic — if the CLI is installed, it appears.</figcaption></figure>
-</section>
-
-<section id="download" class="wrap reveal" style="text-align:center;padding-bottom:40px">
-  <div class="kicker">Get started</div>
-  <h2 style="font-size:38px">Give your agents a workday.</h2>
-  <p class="sub" style="margin:12px auto 26px;max-width:520px">Download Clockwork for Mac, connect once, book your first chore tonight.</p>
-
-  <a class="btn" href="https://github.com/vimoxshah/clockwork/releases/latest" id="dmg-cta">Download Clockwork for Mac</a>
-  <p style="color:var(--dim);font-size:13px;margin-top:14px">Apple silicon · macOS 14+ · 3.4&nbsp;MB · <a href="https://github.com/vimoxshah/clockwork/releases/latest" style="color:var(--mut)">SHA-256 checksum</a></p>
-
-  <div class="honest" style="max-width:680px;margin:30px auto 0;text-align:left">
-    <strong style="color:var(--ink)">Clockwork is not notarised by Apple yet.</strong><br>
-    An Apple Developer certificate costs $99/year and this is an early build, so the app is
-    unsigned. macOS will refuse to open it until you clear the download quarantine flag. We would
-    rather tell you that plainly than have Gatekeeper call it &ldquo;damaged&rdquo;.
-  </div>
-
-  <div style="max-width:680px;margin:22px auto 0;text-align:left">
-    <h3 style="font-size:16px;margin:0 0 8px">Install with Homebrew (recommended)</h3>
-    <pre style="background:#11141d;border:1px solid var(--border);border-radius:10px;padding:14px 16px;overflow:auto;font-size:13px;color:var(--mut)">brew tap vimoxshah/clockwork
-brew trust vimoxshah/clockwork
-brew install --cask clockwork
-xattr -dr com.apple.quarantine /Applications/Clockwork.app</pre>
-    <p style="color:var(--dim);font-size:13px;margin:6px 0 22px">
-      <code>brew trust</code> is required because Homebrew refuses casks from third-party taps by
-      default &mdash; you are explicitly saying you trust this one.
-      Homebrew verifies the SHA-256 before installing, then you clear the quarantine flag
-      yourself &mdash; Homebrew 6 removed the <code>--no-quarantine</code> option, so there is no
-      way to skip it. You are still clearing quarantine on a binary whose hash was checked for
-      you, which is why this beats a raw download.</p>
-
-    <h3 style="font-size:16px;margin:0 0 8px">Or install the DMG by hand</h3>
-    <pre style="background:#11141d;border:1px solid var(--border);border-radius:10px;padding:14px 16px;overflow:auto;font-size:13px;color:var(--mut)"># 1. verify what you downloaded
-shasum -a 256 ~/Downloads/Clockwork_0.4.0_aarch64.dmg
-
-# 2. open the DMG, drag Clockwork to Applications, then:
-xattr -dr com.apple.quarantine /Applications/Clockwork.app
-
-# 3. launch it
-open -a Clockwork</pre>
-    <p style="color:var(--dim);font-size:13px;margin-top:6px">
-      Step 1 should print the hash shown in
-      <a href="https://github.com/vimoxshah/clockwork/releases/latest" style="color:var(--mut)">checksums-sha256.txt</a>.
-      If it does not match, do not install it &mdash; tell us instead.
-      Step 2 removes the quarantine flag macOS adds to downloaded files; you are telling your Mac
-      you trust this specific app. Only run it on a file whose checksum you just verified.
-    </p>
-  </div>
-</section>
-
-<section id="pricing" class="wrap reveal" style="padding-bottom:90px">
-  <div class="kicker" style="text-align:center">Pricing</div>
-  <h2 style="text-align:center;font-size:30px">Free today. BYOK, always.</h2>
-  <p style="text-align:center;color:var(--dim);max-width:640px;margin:10px auto 26px">
-    Bring your own API keys — Clockwork never marks up provider charges.
-    Whatever Clockwork costs later, it will never be a markup on your provider
-    usage &mdash; those stay <strong style="color:var(--ink)">separate bills</strong>.
-  </p>
-  <div class="cards" style="max-width:900px;margin-left:auto;margin-right:auto">
-    <!-- data-feature ties every claim to a key in packages/daemon/src/features.ts.
-         packages/daemon/test/landing-honesty.test.ts fails the build if a claim
-         names a feature that does not exist, if a PAID tier sells something the
-         free tier already includes, or if a `planned` feature is listed without
-         saying so. Marketing copy cannot drift from the enforced matrix. -->
-    <div class="card">
-      <h3>Personal</h3>
-      <p><strong style="font-size:22px;color:var(--ink)">Free</strong> during beta</p>
-      <ul style="font-size:13.5px;color:var(--dim);line-height:1.9;padding-left:18px">
-        <li data-feature="local_agents">Local agents in sandboxed worktrees</li>
-        <li data-feature="scheduling">Unlimited recurring schedules</li>
-        <li data-feature="byok_providers">All BYOK providers and CLI engines</li>
-        <li data-feature="approvals">Human approval gates</li>
-        <li data-feature="budget_guards">Budget guardrails</li>
-        <li data-feature="retention">Run history and reports (30 days)</li>
-      </ul>
-      <p style="font-size:12px;color:var(--dim)">Approvals and budget caps are never paywalled — they are the brakes on unattended code.</p>
-    </div>
-    <div class="card">
-      <h3>Pro</h3>
-      <p><strong style="font-size:22px;color:var(--ink)">Not yet priced</strong></p>
-      <ul style="font-size:13.5px;color:var(--dim);line-height:1.9;padding-left:18px">
-        <li>Everything in Free</li>
-        <li data-feature="retention">Run history kept for a year</li>
-        <li data-feature="policy_engine">Policy engine — restrict engines, models and spend</li>
-        <li data-feature="audit_log">Audit log (30 days)</li>
-        <li data-feature="event_triggers">Up to 50 event-triggered agents</li>
-      </ul>
-      <p style="font-size:12px;color:var(--dim)">These are the pieces teams ask for. They are built, but not for sale &mdash; I would rather find out what is worth paying for than guess at a number. Beta users keep their history either way.</p>
-    </div>
-    <div class="card">
-      <h3>Teams &amp; Enterprise</h3>
-      <p><strong style="font-size:22px;color:var(--ink)">Talk to us</strong></p>
-      <ul style="font-size:13.5px;color:var(--dim);line-height:1.9;padding-left:18px">
-        <li data-feature="audit_log">Unlimited audit log with export</li>
-        <li data-feature="retention">Extended retention (2 years)</li>
-        <li data-feature="policy_engine">Policy engine across the team</li>
-        <li data-feature="sso_scim">SSO / SCIM (planned)</li>
-      </ul>
+<section class="hero">
+  <div class="wrap">
+    <div class="grid">
+      <div class="c1-5 hero-copy">
+        <h1>Put your agents on a schedule.</h1>
+        <p class="lede">Book Claude Code, Codex, OpenCode or Hermes like a meeting. Clockwork runs it sandboxed and files a readable report.</p>
+        <div class="btn-row">
+          <a class="btn primary dl" href="https://github.com/vimoxshah/clockwork/releases/download/v0.4.0/Clockwork_0.4.0_aarch64.dmg" download type="application/octet-stream">Download for Mac</a>
+          <a class="btn" href="#day">How it works</a>
+        </div>
+      </div>
+      <div class="c6-12 hero-cal">
+        <div class="week-scroll">
+          <div class="week-inner">
+            <div class="week" id="week" role="group" aria-label="An example week on a Clockwork calendar. Today's column is highlighted and the red line is the current time.">
+              <div class="week-head" id="week-head"></div>
+              <div class="week-body" id="week-body"></div>
+            </div>
+          </div>
+        </div>
+        <div class="detail" id="detail" aria-live="polite"></div>
+        <p class="legend"><span><span class="sw" style="background:var(--ink)"></span>agent shift, done</span><span><span class="sw" style="border:1px dashed var(--ink)"></span>agent shift, booked</span><span><span class="sw" style="background:var(--human)"></span>your calendar, over ICS</span><span><span class="sw" style="border:1px solid var(--accent)"></span>waiting for you</span><span>Example week. Costs are illustrative.</span></p>
+      </div>
     </div>
   </div>
-  <p style="text-align:center;color:var(--dim);font-size:12.5px;margin-top:18px">Clockwork is proprietary software — previously FSL-1.1, now under the LICENSE in the repository. No payment is collected on this site yet.</p>
 </section>
 
-<section id="contact" class="wrap reveal" style="text-align:center;padding:56px 24px 72px">
-  <div class="kicker">Get in touch</div>
-  <h2 style="font-size:26px;margin-bottom:10px">Questions, bugs, or want to try it on your repo?</h2>
-  <p class="sub" style="margin:0 auto 20px;max-width:560px">
-    Clockwork is an early build and I read every message. Tell me what broke, what you expected,
-    or what would make it worth paying for.
-  </p>
-  <!-- Release-notes signup. One field, opt-in, no tracking of any kind.
-       Degrades to the mailto link below if the endpoint is unreachable, so the
-       section is useful even before the Worker is deployed. -->
-  <form id="sub-form" style="max-width:520px;margin:0 auto 16px;display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
-    <label for="sub-email" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Your email address</label>
-    <input id="sub-email" name="email" type="email" required autocomplete="email"
-           placeholder="you@example.com"
-           style="flex:1 1 260px;min-width:220px;height:46px;border-radius:10px;border:1px solid var(--border-strong,#2a3247);background:var(--panel);color:var(--ink);padding:0 14px;font-size:15px" />
-    <button id="sub-btn" class="btn" type="submit" style="height:46px">Get release notes</button>
-  </form>
-  <p id="sub-msg" role="status" aria-live="polite" style="min-height:20px;color:var(--mut);font-size:13px;margin:0 0 14px"></p>
-
-  <a class="btn" href="mailto:vmoksh.shah179@gmail.com?subject=Clockwork">Email me</a>
-  <p style="color:var(--dim);font-size:13px;margin-top:14px">
-    <a href="mailto:vmoksh.shah179@gmail.com" style="color:var(--mut)">vmoksh.shah179@gmail.com</a>
-    · or open an issue on the
-    <a href="https://github.com/vimoxshah/homebrew-clockwork/issues" target="_blank" rel="noopener noreferrer" style="color:var(--mut)">Homebrew tap</a>
-  </p>
+<section id="day">
+  <div class="wrap">
+    <div class="head rv">
+      <h2>One day, with the agents on the calendar.</h2>
+    </div>
+    <div class="stops">
+      <article class="stop rv">
+        <div class="when"><b>07:00</b>Monday</div>
+        <div class="what">
+          <h3>You book it like a meeting.</h3>
+          <p>Pick a profile, a repository, a budget in dollars and a time. One-off, recurring, or fired by a webhook. Chain a second agent to run after the first.</p>
+        </div>
+        <div class="show"><img class="shot" src="screens/02-task-composer-1600.webp" srcset="screens/02-task-composer-1200.webp 1200w, screens/02-task-composer-1600.webp 1600w, screens/02-task-composer-2400.webp 2400w, screens/02-task-composer-3200.webp 3200w" sizes="(max-width: 900px) calc(100vw - 40px), 496px" width="3200" height="2000" alt="The Clockwork composer: task name, prompt, repository, engine, budget and schedule" loading="lazy"></div>
+      </article>
+      <article class="stop rv">
+        <div class="when"><b>02:00</b>Tuesday</div>
+        <div class="what">
+          <h3>It works the night shift, inside a sandbox.</h3>
+          <p>Your own CLI login does the work, in its own git worktree, under a macOS Seatbelt profile. Your checkout is never touched.</p>
+        </div>
+        <div class="show">
+          <ul class="plain">
+            <li>A fresh worktree and branch cut from your base branch</li>
+            <li>Writes denied outside that worktree</li>
+            <li>SSH keys, cloud credentials, GnuPG and shell history unreadable</li>
+            <li>A dollar cap, a turn cap and a wall-clock timeout</li>
+            <li>Risky actions pause the run and ask you</li>
+            <li>No answer in about two minutes means no</li>
+          </ul>
+        </div>
+      </article>
+      <article class="stop rv">
+        <div class="when"><b>08:30</b>Tuesday</div>
+        <div class="what">
+          <h3>You read a report, not a scrollback.</h3>
+          <p>Every run files the same document into your inbox. Credentials are masked, best effort, before it is stored. Every report and transcript is full-text searchable.</p>
+        </div>
+        <div class="show">
+          <dl class="report">
+            <dt>Summary</dt><dd><b>What it did</b>, what it skipped, and why.</dd>
+            <dt>Branch</dt><dd>The branch it worked on and the diffstat, so review starts from a diff.</dd>
+            <dt>Cost</dt><dd>Dollars spent, turns used, wall-clock time, against the caps you set.</dd>
+            <dt>Approvals</dt><dd>Every ask, every answer, and what auto-denied.</dd>
+            <dt>Transcript</dt><dd>The full session, searchable.</dd>
+          </dl>
+        </div>
+      </article>
+      <article class="stop rv">
+        <div class="when"><b>Weekly</b>and on</div>
+        <div class="what">
+          <h3>It comes back next week without being asked.</h3>
+          <p>Recurrence is real calendar recurrence: RRULE or cron in your own time zone, daylight-saving handled, a policy for missed runs, and one run per repository at a time.</p>
+        </div>
+        <div class="show">
+          <div class="chips">
+            <span>every Monday 07:00</span><span>Tue and Thu 01:30</span><span>weekdays 08:30</span><span>first of the month 03:00</span><span>0 22 * * 5</span><span>if missed: run late within 6h</span><span>if missed: skip</span><span>if missed: ask me</span><span>overlap: skip or queue</span>
+          </div>
+        </div>
+      </article>
+    </div>
+  </div>
 </section>
 
-<footer class="wrap">
-  © 2026 Clockwork · Proprietary — free for personal use, commercial license required · Local-first: your data stays in ~/.clockwork<br>
-  <a href="mailto:vmoksh.shah179@gmail.com" style="color:var(--mut)">vmoksh.shah179@gmail.com</a>
+<section id="agents">
+  <div class="wrap">
+    <div class="head rv">
+      <h2>Thirteen specialists ship with it.</h2>
+      <p class="sub">Each one is an operating contract: a mission, hard limits, and a fixed shape for the report. These are the names you will see in the app.</p>
+    </div>
+    <div class="roster rv">
+      <div class="group">
+        <div class="gname">Engineering</div>
+        <div class="people">
+          <div class="person"><b>Generalist</b><span>The balanced default for any repository chore.</span></div>
+          <div class="person"><b>Dep Surgeon</b><span>Patch and minor bumps proven by tests. Majors get notes, not upgrades.</span></div>
+          <div class="person"><b>Test Doctor</b><span>Sorts flaky from broken and never weakens an assertion.</span></div>
+          <div class="person"><b>Bug Hunter</b><span>Root cause with file and line before any fix.</span></div>
+          <div class="person"><b>Code Reviewer</b><span>Read-only, severity-rated findings with evidence.</span></div>
+          <div class="person"><b>Refactor Engineer</b><span>Behaviour-preserving steps, tests green after each.</span></div>
+          <div class="person"><b>Performance Engineer</b><span>Baseline, one change, measure again.</span></div>
+          <div class="person"><b>Security Auditor</b><span>Report-only defensive scan, secrets masked.</span></div>
+          <div class="person"><b>Release Engineer</b><span>Version, changelog and build readiness checks.</span></div>
+        </div>
+      </div>
+      <div class="group">
+        <div class="gname">Operations and docs</div>
+        <div class="people">
+          <div class="person"><b>CI Investigator</b><span>Infra flake or real regression, decided from the logs.</span></div>
+          <div class="person"><b>Repo Health Monitor</b><span>A morning digest: stale branches, drift, advisories.</span></div>
+          <div class="person"><b>Docs Scribe</b><span>Fixes documentation drift from evidence in the code.</span></div>
+          <div class="person"><b>Changelog Writer</b><span>Entries derived from the diffs, never invented.</span></div>
+        </div>
+      </div>
+      <p class="roster-note">Write your own in the app: pick skills, a permission mode, budget defaults and a system prompt.</p>
+    </div>
+  </div>
+</section>
+
+<section class="real">
+  <div class="wrap">
+    <div class="head rv">
+      <h2>This is the app, at version 0.4.0.</h2>
+    </div>
+    <div class="grid rv">
+      <figure class="c1-8"><img class="shot" src="screens/01-calendar-month-1600.webp" srcset="screens/01-calendar-month-1200.webp 1200w, screens/01-calendar-month-1600.webp 1600w, screens/01-calendar-month-2400.webp 2400w, screens/01-calendar-month-3200.webp 3200w" sizes="(max-width: 900px) calc(100vw - 40px), 803px" width="3200" height="2000" alt="Clockwork month view with recurring agent jobs booked across September" loading="lazy"></figure>
+      <div class="c9-12 stack">
+        <figure><img class="shot" src="screens/03-agent-profile-1600.webp" srcset="screens/03-agent-profile-1200.webp 1200w, screens/03-agent-profile-1600.webp 1600w, screens/03-agent-profile-2400.webp 2400w, screens/03-agent-profile-3200.webp 3200w" sizes="(max-width: 900px) calc(100vw - 40px), 389px" width="3200" height="2000" alt="The agent library with all thirteen built-in profiles" loading="lazy"></figure>
+        <figure><img class="shot" src="screens/09-approvals-tasks-1600.webp" srcset="screens/09-approvals-tasks-1200.webp 1200w, screens/09-approvals-tasks-1600.webp 1600w, screens/09-approvals-tasks-2400.webp 2400w, screens/09-approvals-tasks-3200.webp 3200w" sizes="(max-width: 900px) calc(100vw - 40px), 389px" width="3200" height="2000" alt="The tasks list with schedules, budgets and run-now controls" loading="lazy"></figure>
+      </div>
+      <p class="cap c1-8">The month view. Every booking on one grid, colour-coded by profile.</p>
+      <p class="cap c9-12">The agent library, and every task with its next run and budget.</p>
+    </div>
+  </div>
+</section>
+
+<section id="trust">
+  <div class="wrap">
+    <div class="head rv">
+      <h2>What a run can touch, and what it cannot.</h2>
+    </div>
+    <div class="two rv">
+      <div class="col">
+        <h3>Inside a run</h3>
+        <ul>
+          <li><span class="k">yes</span><span>Its own worktree and branch, cut from your base branch</span></li>
+          <li><span class="k">yes</span><span>The CLI you already log into, with your subscription</span></li>
+          <li><span class="k">yes</span><span>A dollar cap, a turn cap and a timeout, enforced by the supervisor</span></li>
+          <li><span class="k">yes</span><span>Approvals that pause the run and wait for you</span></li>
+          <li><span class="k">yes</span><span>A safety journal that records every deny-list hit</span></li>
+        </ul>
+      </div>
+      <div class="col">
+        <h3>Never reachable</h3>
+        <ul>
+          <li><span class="k no">no</span><span>Your checkout, or your main branch</span></li>
+          <li><span class="k no">no</span><span>Files under .ssh, .aws, .gnupg, or your shell history</span></li>
+          <li><span class="k no">no</span><span>Writes anywhere outside the run's worktree</span></li>
+          <li><span class="k no">no</span><span>A silent approval. Unanswered asks fail closed.</span></li>
+          <li><span class="k no">no</span><span>A server of ours. There is none: no account, no cloud, no telemetry.</span></li>
+        </ul>
+      </div>
+      <p class="foot-note">The sandbox profile, the credential deny-list and the run-environment allowlist are published under Apache-2.0 with the tests that prove them, in <a href="https://github.com/vimoxshah/clockwork/tree/main/packages/runner">packages/runner</a>. What they do not prove is that a downloaded build matches the source; releases come from CI with published checksums, and reproducible builds are not yet supported. Jobs run when your Mac is awake; for true overnight work, use an always-on machine.</p>
+    </div>
+  </div>
+</section>
+
+<section id="spec">
+  <div class="wrap">
+    <div class="head rv">
+      <h2>The spec sheet.</h2>
+      <p class="sub">Everything below ships in version 0.4.0. Where something is still in beta, the row says so.</p>
+    </div>
+    <dl class="spec rv">
+      <div><dt>Engines</dt><dd>Claude Code, Codex CLI, OpenCode and Hermes Agent, on the logins you already have. Switch per task.</dd></div>
+      <div><dt>Your own keys</dt><dd>OpenAI-compatible providers too: Anthropic, OpenAI, Google, OpenRouter, xAI, Mistral, DeepSeek, Ollama and custom gateways. Keys live in the macOS Keychain and are billed by the provider.</dd></div>
+      <div><dt>Triggers</dt><dd>The calendar: RRULE or cron, expanded in the schedule's own IANA zone with daylight-saving rules that are tested. Or an event: HMAC-verified webhooks and GitHub sources fire tasks. Two triggers on the free tier.</dd></div>
+      <div><dt>No double fire</dt><dd>Each occurrence is claimed in the same transaction that creates the run, so a crash, a restart or a second scheduler cannot run it twice. Sleeping through several occurrences yields one catch-up run.</dd></div>
+      <div><dt>Where it runs</dt><dd>A macOS Seatbelt sandbox around a fresh git worktree, or an ephemeral Docker container with no network by default and CPU, memory and process caps.</dd></div>
+      <div><dt>Chains</dt><dd>Sequence agents: scan, fix, test, open a PR. Each stage waits for its upstream and receives that report as <code>{{previous.report}}</code>.</dd></div>
+      <div><dt>Budgets</dt><dd>A dollar cap, a turn cap and a wall-clock timeout, enforced by the supervisor outside the model. Cost and reliability analytics by task, provider and day.</dd></div>
+      <div><dt>Approvals</dt><dd>Risky actions pause the run and ask. Silence for two minutes is a no. A plan mode exists for jobs that read untrusted input.</dd></div>
+      <div><dt>Delivery</dt><dd>macOS notifications. Telegram and an HMAC-signed webhook that fronts Slack, Discord, ntfy or anything else are shipped and in beta.</dd></div>
+      <div><dt>Your data</dt><dd>SQLite in one folder in your home directory. The API listens on loopback only. Thirty days of history on the free tier. Verified at one thousand scheduled tasks.</dd></div>
+      <div><dt>Requires</dt><dd>macOS 14 or newer on Apple silicon, Node 22, and at least one engine CLI on your PATH. The download is 3.4 MB.</dd></div>
+    </dl>
+  </div>
+</section>
+
+<section id="install" class="install">
+  <div class="wrap">
+    <div class="head rv">
+      <h2>Install in four commands.</h2>
+    </div>
+    <div class="grid rv">
+      <div class="c1-7">
+<pre class="cmd"><span class="p">$</span> brew tap vimoxshah/clockwork
+<span class="p">$</span> brew trust vimoxshah/clockwork
+<span class="p">$</span> brew install --cask clockwork
+<span class="p">$</span> xattr -dr com.apple.quarantine /Applications/Clockwork.app
+
+<span class="c"># or by hand: download the DMG, then</span>
+<span class="p">$</span> shasum -a 256 -c checksums-sha256.txt
+<span class="c"># expected for 0.4.0:</span>
+<span class="c"># 75dd370e40412222ad731bd23f9f6fc1200c1af7196914a767639301afd8e93a  Clockwork_0.4.0_aarch64.dmg</span>
+<span class="p">$</span> open -a Clockwork</pre>
+      </div>
+      <div class="c8-12">
+        <p class="note"><b>Clockwork is not notarised by Apple yet.</b> The build is unsigned, so macOS quarantines it and the last command clears that flag. Homebrew verifies the checksum first. The download buttons on this page fetch the <a class="dl" href="https://github.com/vimoxshah/clockwork/releases/download/v0.4.0/Clockwork_0.4.0_aarch64.dmg">DMG</a> directly from the GitHub release; verify it against <a href="https://github.com/vimoxshah/clockwork/releases/download/v0.4.0/checksums-sha256.txt" data-sums>checksums-sha256.txt</a> before you clear anything. Older builds are on the <a href="https://github.com/vimoxshah/clockwork/releases">releases page</a>.</p>
+        <p class="note"><code>brew trust</code> is needed because Homebrew refuses casks from third-party taps by default. You are saying you trust this one.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="pricing">
+  <div class="wrap">
+    <div class="head rv">
+      <h2>Free for personal use. Paid tiers exist, and are not for sale yet.</h2>
+      <p class="sub">Every line below is read from the same feature registry the daemon ships, and a test in the repository holds this page to it. No account, no card and no telemetry on any tier.</p>
+    </div>
+    <div class="tiers rv">
+      <div class="card">
+        <div class="tier lead">
+          <p class="tname">Free</p>
+          <p class="tprice">$0<small>personal, non-commercial use</small></p>
+          <ul>
+            <li data-feature="cli_engines">Claude Code, Codex CLI, OpenCode and Hermes Agent</li>
+            <li data-feature="byok_providers">Your own API keys, sealed in the macOS Keychain</li>
+            <li data-feature="custom_endpoints">Custom OpenAI-compatible endpoints</li>
+            <li data-feature="scheduling">Recurring schedules with RRULE or cron</li>
+            <li data-feature="quiet_hours">Quiet hours for notifications</li>
+            <li data-feature="approvals">Human approval gates that fail closed</li>
+            <li data-feature="budget_guards">Dollar, turn and wall-clock caps</li>
+            <li data-feature="agent_chains">Agent chains</li>
+            <li data-feature="container_execution">Ephemeral Docker execution</li>
+            <li data-feature="webhooks">Webhook delivery to Slack, Discord, ntfy or anything</li>
+            <li data-feature="event_triggers">Two event triggers</li>
+            <li data-feature="analytics_basic">90 days of cost and reliability analytics</li>
+            <li data-feature="retention">30 days of run history</li>
+          </ul>
+        </div>
+      </div>
+      <div class="card">
+        <div class="tier">
+          <p class="tname">Pro</p>
+          <p class="tprice">Built<small>not priced yet</small></p>
+          <ul>
+            <li data-feature="retention">One year of run history</li>
+            <li data-feature="audit_log">30-day audit log</li>
+            <li data-feature="policy_engine">Policy engine: engine allow-lists, cost ceilings, approval thresholds</li>
+            <li data-feature="event_triggers">50 event triggers</li>
+            <li data-feature="analytics_basic">Analytics past the 90-day window</li>
+          </ul>
+        </div>
+      </div>
+      <div class="card">
+        <div class="tier">
+          <p class="tname">Teams</p>
+          <p class="tprice">Built<small>not priced yet</small></p>
+          <ul>
+            <li data-feature="retention">Two years of run history</li>
+            <li data-feature="audit_log">Audit log across the retention window</li>
+            <li data-feature="policy_engine">Policy engine</li>
+            <li data-feature="event_triggers">Event triggers without a count cap</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <p class="tier-note rv">Commercial use of any tier needs a written licence. <a href="mailto:vmoksh.shah179@gmail.com?subject=Clockwork%20commercial%20licence">Ask for one</a>, or <a href="mailto:vmoksh.shah179@gmail.com?subject=Clockwork%20Pro%20and%20Teams">ask to be told</a> when Pro and Teams go on sale.</p>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="wrap">
+    <div class="grid">
+      <div class="c1-4 rv"><h2>Questions</h2></div>
+      <div class="c5-12 faq rv">
+        <details><summary>Do I need an API key?</summary><p>No. Clockwork drives the CLI you already log into: Claude Code, Codex, OpenCode or Hermes. You can also bring your own API keys; they are stored in the macOS Keychain and billed by the provider, never marked up.</p></details>
+        <details><summary>Does it run while my Mac is asleep?</summary><p>No. Runs execute only while the Mac is awake. When the Mac is plugged in, Clockwork arms a power assertion before a scheduled run; a closed lid on battery defeats it, and the report says so. A missed run follows the policy you chose: run late, skip, or ask. For true overnight work, use an always-on Mac.</p></details>
+        <details><summary>Why does macOS say the app is damaged?</summary><p>The build is not notarised, so Gatekeeper refuses it until the quarantine flag is cleared. Verify the checksum first, then run the xattr command from the install section.</p></details>
+        <details><summary>Where does my data live?</summary><p>In a folder in your home directory, in SQLite. The daemon listens on the loopback interface only. Nothing is sent anywhere unless you configure a delivery target yourself.</p></details>
+        <details><summary>Can an agent touch my main branch?</summary><p>No. Each run works in its own worktree on its own branch. A global deny-list that no profile can override blocks force-pushes to protected branches and package publishing, and journals every attempt.</p></details>
+        <details><summary>What does it cost?</summary><p>Nothing for personal, non-commercial use. Commercial use needs a licence; <a href="mailto:vmoksh.shah179@gmail.com?subject=Clockwork%20licence">email for one</a>. Provider usage is always a separate bill.</p></details>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="final">
+  <div class="wrap">
+    <div class="grid">
+      <div class="c1-7 rv">
+        <h2>Give your agents a work week.</h2>
+        <div class="btn-row">
+          <a class="btn primary dl" href="https://github.com/vimoxshah/clockwork/releases/download/v0.4.0/Clockwork_0.4.0_aarch64.dmg" download type="application/octet-stream">Download for Mac</a>
+          <a class="btn" href="https://github.com/vimoxshah/clockwork">Read the source</a>
+        </div>
+        <p class="fine">Apple silicon, macOS 14 or newer, <span data-size>3.4 MB</span>. Version <span data-ver>0.4.0</span>.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="grid ft">
+      <div class="ft-brand">
+        <a class="mark" href="#top" aria-label="Clockwork, home"><img src="mark.svg" width="24" height="24" alt="">Clockwork</a>
+        <p>The calendar where your coding agents show up for work. A macOS app by <a href="https://www.linkedin.com/in/vimoxshah/">Vimox Shah</a>.</p>
+      </div>
+      <nav class="ft-col" aria-label="Product">
+        <b>Product</b>
+        <a href="#day">How it works</a>
+        <a href="#agents">Agents</a>
+        <a href="#spec">Spec sheet</a>
+        <a href="#install">Install</a>
+        <a href="#pricing">Pricing and FAQ</a>
+        <a class="dl" href="https://github.com/vimoxshah/clockwork/releases/download/v0.4.0/Clockwork_0.4.0_aarch64.dmg">Download for Mac</a>
+      </nav>
+      <nav class="ft-col" aria-label="Trust">
+        <b>Trust</b>
+        <a href="https://github.com/vimoxshah/clockwork/blob/main/docs/security.md">Security model</a>
+        <a href="https://github.com/vimoxshah/clockwork/blob/main/docs/privacy.md">Privacy</a>
+        <a href="https://github.com/vimoxshah/clockwork/blob/main/docs/TERMS.md">Terms</a>
+        <a href="https://github.com/vimoxshah/clockwork/blob/main/LICENSE">Licence</a>
+        <a href="https://github.com/vimoxshah/clockwork">Source on GitHub</a>
+      </nav>
+      <nav class="ft-col" aria-label="Contact">
+        <b>Contact us</b>
+        <a href="mailto:vmoksh.shah179@gmail.com?subject=Clockwork">vmoksh.shah179@gmail.com</a>
+        <a href="https://www.linkedin.com/in/vimoxshah/">LinkedIn</a>
+        <a href="https://github.com/vimoxshah/clockwork/issues">Report a bug</a>
+        <a href="mailto:vmoksh.shah179@gmail.com?subject=Clockwork%20commercial%20licence">Commercial licence</a>
+      </nav>
+    </div>
+    <div class="ft-bottom">
+      <span>&copy; 2026 Vimox Shah. Clockwork is proprietary, source-available software. Free for personal use.</span>
+      <span class="mono">Version <span data-ver>0.4.0</span> for macOS 14 or newer, Apple silicon</span>
+    </div>
+  </div>
 </footer>
 
 <script>
-  // Release-notes signup. Posts to the site Worker; if that is unreachable or
-  // storage is not configured yet, it says so and points at the email link
-  // rather than silently swallowing the address.
-  (function () {
-    var f = document.getElementById('sub-form');
-    if (!f) return;
-    var msg = document.getElementById('sub-msg');
-    var btn = document.getElementById('sub-btn');
-    var ENDPOINT = 'https://clockwork.vmoksh-shah179.workers.dev/subscribe';
-    f.addEventListener('submit', function (e) {
-      e.preventDefault();
-      var email = document.getElementById('sub-email').value.trim();
-      if (!email) return;
-      btn.disabled = true;
-      msg.style.color = 'var(--mut)';
-      msg.textContent = 'Sending…';
-      fetch(ENDPOINT, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ email: email })
-      })
-        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
-        .then(function (res) {
-          if (res.ok && res.d.ok) {
-            msg.style.color = 'var(--success, #4bc97f)';
-            msg.textContent = res.d.already
-              ? "You're already on the list — thanks."
-              : "Thanks. You'll get release notes, nothing else.";
-            f.reset();
-          } else {
-            throw new Error(res.d && res.d.error ? res.d.error : 'failed');
-          }
-        })
-        .catch(function () {
-          msg.style.color = 'var(--mut)';
-          msg.innerHTML = "Sign-up isn't live yet — email " +
-            '<a href="mailto:vmoksh.shah179@gmail.com?subject=Clockwork%20release%20notes" style="color:var(--brass)">vmoksh.shah179@gmail.com</a>' +
-            ' and I\'ll add you.';
-        })
-        .finally(function () { btn.disabled = false; });
-    });
-  })();
+(function () {
+  'use strict';
+  var RM = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  // Scroll reveal (respects prefers-reduced-motion via CSS override above)
-  const io = new IntersectionObserver((es) => {
-    es.forEach((e) => e.isIntersecting && e.target.classList.add('in'));
-  }, { threshold: 0.12 });
-  document.querySelectorAll('.reveal').forEach((el) => io.observe(el));
+  /* The week. Computed from the real date so today is today and the red
+     line is now. Event times are example data; the profile names are real. */
+  var HOUR = 40;
+  var EVENTS = [
+    { d: 0, s: '07:00', e: '07:35', k: 'agent', t: 'Dep triage', f: 'Weekly dependency triage', p: 'Dep Surgeon', c: '$0.42' },
+    { d: 0, s: '09:30', e: '10:00', k: 'human', t: 'Standup' },
+    { d: 0, s: '13:00', e: '14:00', k: 'human', t: 'Lunch' },
+    { d: 0, s: '15:00', e: '16:30', k: 'human', t: 'Design', f: 'Design review' },
+    { d: 1, s: '01:30', e: '02:10', k: 'agent', t: 'Test sweep', f: 'Flaky test sweep', p: 'Test Doctor', c: '$0.88' },
+    { d: 1, s: '08:30', e: '08:50', k: 'agent', t: 'Digest', f: 'Repo health digest', p: 'Repo Health Monitor', c: '$0.19' },
+    { d: 1, s: '10:00', e: '11:00', k: 'human', t: '1:1' },
+    { d: 1, s: '14:00', e: '16:00', k: 'human', t: 'Deep work' },
+    { d: 2, s: '03:00', e: '03:40', k: 'agent', t: 'Sec audit', f: 'Security audit, report only', p: 'Security Auditor', c: '$0.61' },
+    { d: 2, s: '09:30', e: '10:00', k: 'human', t: 'Standup' },
+    { d: 2, s: '11:00', e: '11:30', k: 'ask', t: 'CI triage', f: 'CI failure triage', p: 'CI Investigator', c: '$0.20', ask: 'wants to re-run the failing job' },
+    { d: 2, s: '13:00', e: '14:00', k: 'human', t: 'Lunch' },
+    { d: 3, s: '01:30', e: '02:05', k: 'agent', t: 'Test sweep', f: 'Flaky test sweep', p: 'Test Doctor', c: '$0.74' },
+    { d: 3, s: '08:30', e: '08:50', k: 'agent', t: 'Digest', f: 'Repo health digest', p: 'Repo Health Monitor', c: '$0.17' },
+    { d: 3, s: '10:00', e: '12:00', k: 'human', t: 'Planning' },
+    { d: 3, s: '16:00', e: '16:30', k: 'agent', t: 'Changelog', f: 'Release notes draft', p: 'Changelog Writer', c: '$0.33' },
+    { d: 4, s: '08:30', e: '08:50', k: 'agent', t: 'Digest', f: 'Repo health digest', p: 'Repo Health Monitor', c: '$0.18' },
+    { d: 4, s: '09:30', e: '10:00', k: 'human', t: 'Standup' },
+    { d: 4, s: '14:00', e: '15:30', k: 'human', t: 'Deep work' },
+    { d: 4, s: '17:00', e: '17:30', k: 'agent', t: 'Docs check', f: 'Docs drift check', p: 'Docs Scribe', c: '$0.29' },
+    { d: 4, s: '20:30', e: '21:00', k: 'agent', t: 'Perf run', f: 'Performance baseline', p: 'Performance Engineer', c: '$0.55' },
+    { d: 6, s: '20:00', e: '20:40', k: 'agent', t: 'Bug #212', f: 'Bug hunt: issue #212', p: 'Bug Hunter', c: '$0.97' }
+  ];
+  var head = document.getElementById('week-head'), body = document.getElementById('week-body'), detail = document.getElementById('detail');
+  if (!head || !body) return;
+
+  function mins(t) { var a = t.split(':'); return (+a[0]) * 60 + (+a[1]); }
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  var now = new Date();
+  var monday = new Date(now); monday.setHours(0, 0, 0, 0); monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+  var todayIdx = (now.getDay() + 6) % 7;
+  var nowH = now.getHours();
+  var START = Math.min(7, Math.max(0, nowH - 1)), END = Math.max(22, Math.min(24, nowH + 2));
+  var DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  var h = '<div class="cell"></div>';
+  for (var i = 0; i < 7; i++) {
+    var d = new Date(monday); d.setDate(monday.getDate() + i);
+    h += '<div class="cell' + (i === todayIdx ? ' today' : '') + '">' + DAYS[i] + '<b>' + d.getDate() + ' ' + MONTHS[d.getMonth()] + '</b></div>';
+  }
+  head.innerHTML = h;
+
+  var height = (END - START) * HOUR;
+  body.style.height = height + 'px';
+  var g = '<div class="gutter">';
+  for (var hr = START + 1; hr < END; hr++) g += '<span style="top:' + ((hr - START) * HOUR) + 'px">' + pad(hr) + ':00</span>';
+  g += '</div>';
+  var nowMin = now.getHours() * 60 + now.getMinutes();
+  var idx = 0;
+  for (var day = 0; day < 7; day++) {
+    g += '<div class="day' + (day === todayIdx ? ' today' : '') + '">';
+    for (var l = START + 1; l < END; l++) g += '<div class="hour-line" style="top:' + ((l - START) * HOUR) + 'px"></div>';
+    for (var e = 0; e < EVENTS.length; e++) {
+      var ev = EVENTS[e]; if (ev.d !== day) continue;
+      var top = (mins(ev.s) - START * 60) / 60 * HOUR, hgt = Math.max(22, (mins(ev.e) - mins(ev.s)) / 60 * HOUR - 2);
+      if (top < 0 || top > height) continue;
+      var past = day < todayIdx || (day === todayIdx && mins(ev.e) <= nowMin);
+      var cls = ev.k === 'agent' ? (past ? 'ev agent' : 'ev agent booked') : ev.k === 'ask' ? 'ev ask' : 'ev human';
+      var sub = ev.k === 'human' ? '' : '<small>' + (ev.k === 'ask' ? 'waiting for you' : (past ? ev.p + ' · ' + ev.c : ev.p)) + '</small>';
+      g += '<button type="button" class="' + cls + '" data-i="' + e + '" data-past="' + (past ? 1 : 0) + '" style="top:' + top + 'px;height:' + hgt + 'px;--i:' + (idx++) + '" aria-label="' + ev.t + (ev.f ? ', ' + ev.f : '') + ', ' + ev.s + ' to ' + ev.e + '">' + '<span class="t">' + ev.t + '</span>' + (hgt > 30 ? sub : '') + '</button>';
+    }
+    g += '</div>';
+  }
+  g += '<div class="now" id="now"></div><div class="now-label" id="now-label"></div>';
+  body.innerHTML = g;
+
+  var nowEl = document.getElementById('now'), nowLbl = document.getElementById('now-label');
+  function tick() {
+    var n = new Date(), m = n.getHours() * 60 + n.getMinutes();
+    var y = (m - START * 60) / 60 * HOUR;
+    var show = y >= 0 && y <= height;
+    nowEl.style.display = nowLbl.style.display = show ? '' : 'none';
+    if (show) { nowEl.style.top = y + 'px'; nowLbl.style.top = y + 'px'; nowLbl.textContent = pad(n.getHours()) + ':' + pad(n.getMinutes()); }
+    var labels = body.querySelectorAll('.gutter span');
+    for (var q = 0; q < labels.length; q++) labels[q].style.opacity = (show && Math.abs(parseFloat(labels[q].style.top) - y) < 10) ? '0' : '';
+  }
+  tick(); setInterval(tick, 30000);
+
+  function showDetail(i, isPast) {
+    var ev = EVENTS[i]; if (!ev) return;
+    var day = new Date(monday); day.setDate(monday.getDate() + ev.d);
+    var when = DAYS[ev.d] + ' ' + day.getDate() + ' ' + MONTHS[day.getMonth()] + ', ' + ev.s + ' to ' + ev.e;
+    var status, meta;
+    if (ev.k === 'human') { status = '<span class="st">your calendar</span>'; meta = when + ' · from your ICS subscription, read-only'; }
+    else if (ev.k === 'ask') { status = '<span class="st ask">waiting for you</span>'; meta = when + ' · ' + ev.p + ' ' + ev.ask + '. No answer in two minutes means no.'; }
+    else if (isPast) { status = '<span class="st done">completed</span>'; meta = when + ' · ' + ev.p + ' · ' + ev.c + ' · report in your inbox'; }
+    else { status = '<span class="st">booked</span>'; meta = when + ' · ' + ev.p + ' · runs unattended in its own worktree'; }
+    detail.innerHTML = '<b>' + (ev.f || ev.t) + '</b>' + status + '<span class="m">' + meta + '</span>';
+  }
+  var first = body.querySelector('.ev.agent[data-past="1"]') || body.querySelector('.ev');
+  if (first) showDetail(+first.dataset.i, first.dataset.past === '1');
+  body.addEventListener('mouseover', function (e) { var b = e.target.closest('.ev'); if (b) showDetail(+b.dataset.i, b.dataset.past === '1'); });
+  body.addEventListener('focusin', function (e) { var b = e.target.closest('.ev'); if (b) showDetail(+b.dataset.i, b.dataset.past === '1'); });
+  body.addEventListener('click', function (e) { var b = e.target.closest('.ev'); if (b) showDetail(+b.dataset.i, b.dataset.past === '1'); });
+
+  /* On a narrow screen, start the week scrolled to today. */
+  var scroller = document.querySelector('.week-scroll');
+  if (scroller && scroller.scrollWidth > scroller.clientWidth) {
+    var col = (scroller.scrollWidth - 56) / 7;
+    scroller.scrollLeft = Math.max(0, 56 + col * todayIdx - (scroller.clientWidth - 56) / 2 - col / 2);
+  }
+
+  /* Keep every download link on the newest DMG. The hard-coded 0.4.0 URL is
+     the fallback when this fetch fails or the API is rate-limited. */
+  if (window.fetch) {
+    fetch('https://api.github.com/repos/vimoxshah/clockwork/releases/latest', { headers: { Accept: 'application/vnd.github+json' } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (rel) {
+        if (!rel || !rel.assets) return;
+        var dmg = rel.assets.filter(function (a) { return /aarch64.*\.dmg$/i.test(a.name); })[0] || rel.assets.filter(function (a) { return /\.dmg$/i.test(a.name); })[0];
+        if (!dmg) return;
+        var sums = rel.assets.filter(function (a) { return /checksums/i.test(a.name); })[0];
+        document.querySelectorAll('a.dl').forEach(function (a) { a.href = dmg.browser_download_url; });
+        if (sums) document.querySelectorAll('[data-sums]').forEach(function (a) { a.href = sums.browser_download_url; a.textContent = sums.name; });
+        var ver = String(rel.tag_name || '').replace(/^v/, '');
+        if (ver) document.querySelectorAll('[data-ver]').forEach(function (el) { el.textContent = ver; });
+        if (dmg.size) document.querySelectorAll('[data-size]').forEach(function (el) { el.textContent = (dmg.size / 1048576).toFixed(1) + ' MB'; });
+      })
+      .catch(function () {});
+  }
+
+  /* Section reveals: hierarchy on arrival, nothing more. */
+  var els = [].slice.call(document.querySelectorAll('.rv'));
+  if (RM || !('IntersectionObserver' in window)) { els.forEach(function (el) { el.classList.add('in'); }); return; }
+  var io = new IntersectionObserver(function (entries) { entries.forEach(function (en) { if (en.isIntersecting) { en.target.classList.add('in'); io.unobserve(en.target); } }); }, { threshold: .1 });
+  els.forEach(function (el) { io.observe(el); });
+  setTimeout(function () { els.forEach(function (el) { if (el.getBoundingClientRect().top < innerHeight) el.classList.add('in'); }); }, 1200);
+})();
 </script>
 </body>
 </html>

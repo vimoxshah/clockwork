@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#10141C"/><stop offset="1" stop-color="#171D28"/></linearGradient>
+    <radialGradient id="glow" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#3A2A14" stop-opacity=".55"/><stop offset="1" stop-color="#10141C" stop-opacity="0"/></radialGradient>
+  </defs>
+  <rect width="64" height="64" rx="14.5" fill="url(#bg)"/>
+  <circle cx="32" cy="32" r="22" fill="url(#glow)"/>
+  <circle cx="32" cy="32" r="24.4" fill="none" stroke="#E9A83B" stroke-width="2.3"/>
+  <circle cx="32" cy="32" r="21.3" fill="none" stroke="#E9A83B" stroke-width="1.3"/>
+  <g fill="#C48A2B">
+    <rect x="31.5" y="19.7" width="1" height="2.9" rx=".2"/>
+    <rect x="41.4" y="31.5" width="2.9" height="1" rx=".2"/>
+    <rect x="31.5" y="41.4" width="1" height="2.9" rx=".2"/>
+    <rect x="19.7" y="31.5" width="2.9" height="1" rx=".2"/>
+  </g>
+  <g stroke="#E9A83B" stroke-linecap="round" fill="none">
+    <path d="M32 32 L23.4 40.2" stroke-width="1.9"/>
+    <path d="M32 32 L23.5 47.3" stroke-width="1.15"/>
+  </g>
+  <circle cx="32" cy="32" r="1.5" fill="#E9A83B" stroke="#10141C" stroke-width=".7"/>
+</svg>
