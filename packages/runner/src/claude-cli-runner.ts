@@ -13,6 +13,7 @@ import { execFileSync } from 'node:child_process';
 import {
   appendFileSync,
   mkdtempSync,
+  rmSync,
   statfsSync,
   writeFileSync,
 } from 'node:fs';
@@ -27,7 +28,10 @@ import type {
 } from '@clockwork/shared';
 import { BudgetGuard } from './budget-guard.js';
 import { fold, newAccumulator, parseStreamLine } from './stream-parser.js';
-import { generateSeatbeltProfile, wrapWithSandbox, type SandboxSpec } from './sandbox.js';
+import { applySandbox, toolCacheEnv, type SandboxSpec } from './sandbox.js';
+import { PermissionServer } from './permission-server.js';
+import { evaluateCommand } from './deny-list.js';
+import { writeFloorHook, floorHookCommand, floorHookSettings } from './floor-hook.js';
 import { buildRunEnv } from './run-env.js';
 
 const GRACE_MS = 30_000;
@@ -35,8 +39,13 @@ const DEFAULT_DISK_FLOOR_BYTES = 2 * 1024 * 1024 * 1024; // S-88
 
 export interface CliRunnerOptions {
   claudeBin?: string;
-  /** when provided, spawn inside sandbox-exec with this spec */
+  /** Seatbelt spec for the spawn. null = CW_SANDBOX=off escape hatch (caller logs it). */
   sandbox?: SandboxSpec | null;
+  /**
+   * Host the permission bridge and point the CLI at it (default true). Off only
+   * for tests that drive a fake binary and assert exact argv.
+   */
+  permissionBridge?: boolean;
   diskFloorBytes?: number;
   /** injectable clock for tests */
   now?: () => number;
@@ -112,24 +121,97 @@ export class ClaudeCliRunner implements AgentRunner {
       argv.push('--max-turns', String(job.budget.maxTurns));
     }
 
-    let fullArgv = [this.bin, ...argv];
-    let sandboxProfilePath: string | null = null;
-    if (this.opts.sandbox) {
-      try {
-        const { profile } = generateSeatbeltProfile(this.opts.sandbox);
-        sandboxProfilePath = path.join(mkdtempSync(path.join(os.tmpdir(), 'cw-sb-')), 'profile.sb');
-        writeFileSync(sandboxProfilePath, profile, 'utf8');
-        fullArgv = wrapWithSandbox(fullArgv, sandboxProfilePath);
-      } catch (e) {
-        ctx.io.onLog(`[sandbox] profile generation failed: ${String(e)}`);
-        return fail('failed', 'internal', now() - startedAtMs, journalPath, String(e));
+    // Permission bridge: the CLI asks Clockwork before every gated tool call and
+    // WAITS for the answer — the hold is bounded by the run's wall-clock, not a
+    // fixed window. Contract verified on CLI 2.1.261; see permission-server.ts.
+    const timeoutMs = job.budget.timeoutSec * 1000;
+    let bridge: PermissionServer | null = null;
+    // Temp dirs created for this run (the cw-mcp-* config dir, the cw-sb-*
+    // sandbox profile dir). Removed once the child is truly done with them —
+    // AFTER the bridge closes — so a held approval socket never gets orphaned
+    // mid-read. Never left to accumulate across runs (T-114/S-88 hygiene).
+    const tempDirs: string[] = [];
+    const cleanupTempDirs = (): void => {
+      for (const d of tempDirs.splice(0, tempDirs.length)) {
+        try {
+          rmSync(d, { recursive: true, force: true });
+        } catch {
+          /* best-effort; a leaked temp dir is not a run failure */
+        }
       }
+    };
+    if (this.opts.permissionBridge !== false) {
+      bridge = new PermissionServer({
+        log: (l) => ctx.io.onLog(l),
+        decide: async ({ toolName, input }) => {
+          const d = await ctx.io.onPermissionRequest({ tool: toolName, input });
+          if (d === 'ESCALATE') return { behavior: 'deny', message: 'Clockwork: escalation is not available for this run.' };
+          return d.behavior === 'allow' ? { behavior: 'allow', updatedInput: input } : d;
+        },
+        // Deny-list policy floor (FR-11/T-114): consulted over /floor by the
+        // PreToolUse hook below for EVERY Bash call, in every
+        // --permission-mode — unlike `decide` above, which acceptEdits mode
+        // never calls for Bash (verified live on CLI 2.1.261, 2026-09-05:
+        // `git push --force origin main` executed unasked). Only a genuine
+        // FLOOR hit denies here; an ordinary (non-floor) deny-list hit still
+        // goes through the normal permission flow via `decide`.
+        floor: ({ toolName, input }) => {
+          const record = (input ?? {}) as Record<string, unknown>;
+          if (typeof record.command !== 'string') return { denied: false };
+          const v = evaluateCommand(record.command);
+          if (v.floor) {
+            const reason = v.reason ?? 'blocked by global policy floor';
+            ctx.io.onPolicyDeny?.({ tool: toolName, command: record.command, reason });
+            ctx.io.onLog(`[floor] denied: ${reason}`);
+          }
+          return { denied: v.floor, reason: v.reason };
+        },
+      });
+      try {
+        await bridge.start();
+      } catch (e) {
+        return fail('failed', 'internal', now() - startedAtMs, journalPath, `permission bridge failed to start: ${String(e)}`);
+      }
+      // Kept out of the worktree so it never appears in the run's diffstat.
+      const mcpDir = mkdtempSync(path.join(os.tmpdir(), 'cw-mcp-'));
+      tempDirs.push(mcpDir);
+      const mcpPath = path.join(mcpDir, 'permissions.json');
+      writeFileSync(mcpPath, JSON.stringify(bridge.mcpConfig(timeoutMs)), 'utf8');
+      argv.push('--permission-prompts', 'host', '--permission-prompt-tool', bridge.toolFlag, '--mcp-config', mcpPath);
+
+      // PreToolUse hook (T-114): the CLI runs this for EVERY Bash call, before
+      // it would ever reach the MCP tool above, regardless of
+      // --permission-mode. Closes the acceptEdits gap: without it the deny-list
+      // floor above is only asked for tool calls the CLI itself gates.
+      const hookPath = writeFloorHook(mcpDir, bridge.floorUrl!);
+      const hookCommand = floorHookCommand(process.execPath, hookPath);
+      argv.push('--settings', floorHookSettings(hookCommand));
+    }
+
+    // Seatbelt wrap. A refused spec (credential path in the allowlist) fails the
+    // run; it never degrades to an unsandboxed spawn.
+    let fullArgv: string[];
+    try {
+      const sandboxResult = applySandbox([this.bin, ...argv], this.opts.sandbox);
+      fullArgv = sandboxResult.argv;
+      if (sandboxResult.profilePath) tempDirs.push(path.dirname(sandboxResult.profilePath));
+    } catch (e) {
+      void bridge?.close();
+      cleanupTempDirs();
+      ctx.io.onLog(`[sandbox] profile generation failed: ${String(e)}`);
+      return fail('failed', 'internal', now() - startedAtMs, journalPath, String(e));
     }
 
     // Sanitized env: only what Node + the CLI genuinely need (arch §7.3).
     // The allowlist itself lives in run-env.ts — see that file for why this is
-    // a security boundary and not a convenience.
-    const env = buildRunEnv({ SHELL: '/bin/zsh' });
+    // a security boundary and not a convenience. MCP_TOOL_TIMEOUT lifts the
+    // CLI's 60s HTTP default so a held approval survives until the run's own
+    // timeout; the cache vars keep package managers inside the sandbox.
+    const env = buildRunEnv({
+      SHELL: '/bin/zsh',
+      MCP_TOOL_TIMEOUT: String(Math.max(60_000, timeoutMs)),
+      ...toolCacheEnv(),
+    });
 
     const child = spawn(fullArgv[0]!, fullArgv.slice(1), {
       cwd: ctx.worktreePath,
@@ -138,6 +220,8 @@ export class ClaudeCliRunner implements AgentRunner {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     if (!child.pid) {
+      void bridge?.close();
+      cleanupTempDirs();
       return fail('failed', 'runner_crashed', now() - startedAtMs, journalPath, 'spawn failed');
     }
     const pgid = child.pid; // detached => pgid == child pid
@@ -235,6 +319,10 @@ export class ClaudeCliRunner implements AgentRunner {
         clearInterval(heartbeat);
         clearInterval(diskTimer);
         clearTimeout(timeoutTimer);
+        void (async () => {
+          await bridge?.close();
+          cleanupTempDirs(); // AFTER the bridge closes — never mid-read of a held socket
+        })();
         resolve(fail('failed', 'runner_crashed', now() - startedAtMs, journalPath, String(err)));
       });
 
@@ -242,6 +330,10 @@ export class ClaudeCliRunner implements AgentRunner {
         clearInterval(heartbeat);
         clearInterval(diskTimer);
         clearTimeout(timeoutTimer);
+        void (async () => {
+          await bridge?.close(); // drops any still-held approval socket
+          cleanupTempDirs(); // AFTER the bridge closes — never mid-read of a held socket
+        })();
         guard.finalize(acc.totalCostUsd);
 
         const base = {

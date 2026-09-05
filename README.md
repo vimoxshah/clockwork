@@ -70,6 +70,9 @@ REPEAT  Make it weekly. Search your retained run history.
   safety rails, and an output contract
 - 🛡 **Human-in-the-loop approvals** — risky actions pause the run and ask you;
   unanswered asks fail safe (never silently approved)
+- 🧱 **Policy floor in every mode** — force-pushes to protected branches and
+  package publishing are refused before they run on the Claude engine, even when
+  the CLI would not have asked (a `PreToolUse` hook, fail-closed, ~60 ms per call)
 - 🔎 **Searchable execution history** — FTS across every report and transcript;
   ⌘K command palette everywhere
 - 💰 **Budget enforcement by the supervisor** — USD soft cap, turn limits,
@@ -239,11 +242,19 @@ Full list: [docs/SHORTCUTS.md](docs/SHORTCUTS.md)
 ## ⚖️ Security Model
 
 - **Isolation:** each run gets a fresh git worktree + branch cut from base;
-  macOS Seatbelt (`sandbox-exec`) profile restricts writes to that worktree
-- **Credential hygiene:** sanitized child environment; deny-list blocks reads
-  of `.ssh`, `.aws`, `.gnupg`, Keychains; secret masking in reports
-- **Approvals:** sensitive tool calls pause the run; ~2-minute decision window,
-  then fail-safe auto-deny (unattended mode) — recorded for audit either way
+  a macOS Seatbelt (`sandbox-exec`) profile restricts writes to that worktree,
+  Clockwork-managed tool caches, and the engine's own state dirs — for every
+  engine, including the BYOK agent's shell. Turning it off (`CW_SANDBOX=off`)
+  is journaled and stamped on the report.
+- **Credential hygiene:** sanitized child environment (allowlist, so
+  `SSH_AUTH_SOCK` and provider keys never reach the agent); the sandbox denies
+  reads of `.ssh`, `.aws`, `.gnupg`, gcloud, browser profiles, shell history;
+  secret masking in reports. Keychain *files* stay readable — Claude Code needs
+  its own OAuth item — see `docs/security.md` for why.
+- **Approvals (Claude engine):** gated tool calls pause the run and **hold until
+  you answer or the run's wall-clock budget ends**, then fail-safe deny — recorded
+  for audit either way. Other engines have no permission hook; the sandbox is
+  their containment.
 - **Budgets:** USD soft cap + turn cap + wall-clock timeout enforced by the
   supervisor process, not by the model's self-restraint
 - **Local-only:** daemon binds 127.0.0.1; bearer token file is 0600; no

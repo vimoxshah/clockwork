@@ -2,6 +2,8 @@ export * from './worktree.js';
 export * from './profile-materializer.js';
 export * from './safety-journal.js';
 export * from './sandbox.js';
+export * from './permission-server.js';
+export * from './floor-hook.js';
 export * from './stream-parser.js';
 export * from './deny-list.js';
 export * from './budget-guard.js';

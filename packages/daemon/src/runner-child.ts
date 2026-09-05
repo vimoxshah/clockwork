@@ -7,7 +7,20 @@
  */
 import { readFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
-import { ClaudeCliRunner, MockRunner, CodexRunner, OpenCodeRunner, HermesRunner, evaluateCommand, evaluatePathRead } from '@clockwork/runner';
+import {
+  ClaudeCliRunner,
+  MockRunner,
+  CodexRunner,
+  OpenCodeRunner,
+  HermesRunner,
+  evaluateCommand,
+  evaluatePathRead,
+  buildSandboxSpec,
+  escapeRegexLiteral,
+  SANDBOX_PROFILE_VERSION,
+  type SandboxSpec,
+} from '@clockwork/runner';
+import os from 'node:os';
 import type { ChildToDaemon, DaemonToChild } from './runner-protocol.js';
 import type { JobSpec, RunOutcome } from '@clockwork/shared';
 
@@ -18,6 +31,24 @@ if (!specPath || !nonce) {
 }
 
 const job = JSON.parse(readFileSync(specPath, 'utf8')) as JobSpec;
+const startedAtMs = Date.now();
+
+// BYOK credential delivery (ADR-035). WHY stdin and not env: macOS exposes a
+// process's exec-time argv/env to any OTHER same-user process — sandboxed or
+// not — via sysctl KERN_PROCARGS2. The Seatbelt profile has to allow
+// sysctl-read (Node needs it to run at all), so a sibling runner-child, even
+// one contained by its own profile, can read a credential that was ever
+// placed in this process's env, no matter how quickly it is deleted
+// afterward — a scrub only stops future children spawned FROM here, not a
+// third party sampling this process's own KERN_PROCARGS2 record. Only a
+// transport neither process ever puts in its argv/env closes that: the
+// existing daemon<->child JSONL channel over a pipe that only the daemon
+// holds the write end of.
+const CREDENTIAL_TIMEOUT_MS = 15_000;
+let resolveCredential!: (c: { byokKey: string; byokBaseUrl: string }) => void;
+const credential = new Promise<{ byokKey: string; byokBaseUrl: string }>((resolve) => {
+  resolveCredential = resolve;
+});
 
 function send(msg: ChildToDaemon): void {
   try {
@@ -45,6 +76,8 @@ rl.on('line', (line) => {
       pendingPermissions.delete(msg.reqId);
       resolve(msg.behavior === 'allow' ? { behavior: 'allow' } : { behavior: 'deny', message: msg.message });
     }
+  } else if (msg.t === 'credential') {
+    resolveCredential({ byokKey: msg.byokKey, byokBaseUrl: msg.byokBaseUrl });
   }
 });
 
@@ -55,16 +88,49 @@ async function main(): Promise<void> {
   // CW_MOCK_STEP_MS makes the deterministic mock observable on fast machines
   // (full-loop tests sample intermediate states).
   const stepMs = Number(process.env.CW_MOCK_STEP_MS ?? '0');
+
+  // Seatbelt containment for the engine process (FR-26). CW_SANDBOX=off is the
+  // only way out, and it is logged here, journaled by the daemon, and stamped
+  // on the report — never silent.
+  const sandboxOff = process.env.CW_SANDBOX === 'off';
+  let sandbox: SandboxSpec | null = null;
+  if (sandboxOff) {
+    send({ t: 'log', line: '[sandbox] DISABLED by CW_SANDBOX=off — writes and credential reads are NOT contained for this run' });
+  } else {
+    const home = os.homedir();
+    sandbox = buildSandboxSpec({
+      worktreePath: job.worktreePath,
+      scratchPath: job.scratchPath,
+      repoPath: job.repoPath,
+      contextRoots: job.profile?.contextRoots ?? [],
+      // Each engine keeps session state under $HOME; deny it and the engine
+      // fails to start (opencode hangs without ~/.opencode — probed 2026-09-05).
+      // Scoped to the engine actually running.
+      engineStatePaths:
+        job.engine === 'codex'
+          ? [`${home}/.codex`]
+          : job.engine === 'opencode'
+            ? [`${home}/.opencode`, `${home}/.local/share/opencode`, `${home}/.config/opencode`, `${home}/.cache/opencode`]
+            : job.engine === 'hermes'
+              ? [`${home}/.hermes`]
+              : [],
+      // hermes's write_file stages through $HOME/.hermes-tmp.<pid> then moves it;
+      // without this exact-name allow every file write fails (probed 2026-09-05).
+      engineWriteRegexes: job.engine === 'hermes' ? [`^${escapeRegexLiteral(home)}/\\.hermes-tmp\\.[0-9]+$`] : [],
+    });
+  }
+  send({ t: 'sandbox', enabled: !sandboxOff, profileVersion: sandboxOff ? null : SANDBOX_PROFILE_VERSION });
+
   const runner =
     process.env.CW_ENGINE === 'mock'
       ? new MockRunner(stepMs > 0 ? { steps: [{ delayMs: stepMs }] } : {})
       : job.engine === 'codex'
-        ? new CodexRunner()
+        ? new CodexRunner({ sandbox })
         : job.engine === 'opencode'
-          ? new OpenCodeRunner()
+          ? new OpenCodeRunner({ sandbox })
           : job.engine === 'hermes'
-            ? new HermesRunner()
-            : new ClaudeCliRunner();
+            ? new HermesRunner({ sandbox })
+            : new ClaudeCliRunner({ sandbox });
 
   // FR-2a: live-reference file attachments resolved at execution time.
   let effectiveJob: JobSpec = job;
@@ -86,6 +152,8 @@ async function main(): Promise<void> {
     onHeartbeat: () => send({ t: 'heartbeat' }),
     onLog: (line: string) => send({ t: 'log', line }),
     onArtifact: (path: string) => send({ t: 'artifact', path }),
+    onPolicyDeny: (p: { tool: string; command: string; reason: string }) =>
+      send({ t: 'floor', tool: p.tool, command: p.command, reason: p.reason }),
     onPermissionRequest: async (p: { tool: string; input: unknown }) => {
       // deny-list floor FIRST (policy layer, FR-11); floor hits are never approvable
       const input = (p.input ?? {}) as Record<string, unknown>;
@@ -102,13 +170,16 @@ async function main(): Promise<void> {
       send({ t: 'permission', reqId, tool: p.tool, input: p.input });
       return new Promise<{ behavior: 'allow' } | { behavior: 'deny'; message: string }>((resolve) => {
         pendingPermissions.set(reqId, resolve);
-        // M1 fail-safe (ADR-020): CLI engine cannot hold approvals — auto-deny after grace.
+        // Hold until a human answers or the run's own wall-clock budget ends.
+        // The old fixed 120s window (ADR-020) existed because CLI 2.1.238 had no
+        // way to wait; 2.1.261 does, so the run's timeout is the only bound.
+        const remainingMs = Math.max(5_000, job.budget.timeoutSec * 1000 - (Date.now() - startedAtMs));
         setTimeout(() => {
           if (pendingPermissions.has(reqId)) {
             pendingPermissions.delete(reqId);
-            resolve({ behavior: 'deny', message: 'No human reachable in unattended mode (M1 fail-safe).' });
+            resolve({ behavior: 'deny', message: "No human answered before the run's wall-clock budget ended (fail-safe deny)." });
           }
-        }, 120_000);
+        }, remainingMs);
       });
     },
   };
@@ -123,24 +194,31 @@ async function main(): Promise<void> {
   let outcome: RunOutcome;
   try {
     if ((job as any).byokId) {
-      // ADR-028: BYOK API-agent execution. Credential arrives via env
-      // (CW_BYOK_KEY / CW_BYOK_BASE_URL), injected by the daemon at spawn time;
-      // it is never written to the jobspec file or logs.
+      // ADR-028/035: BYOK API-agent execution. Credential arrives over stdin
+      // (the 'credential' message), injected by the daemon right after spawn;
+      // it is never written to the jobspec file, env, or logs. Bounded wait so
+      // a stdin write that never arrives (broken pipe, protocol bug) fails the
+      // run instead of hanging it.
       const { runApiAgent } = await import('@clockwork/runner');
-      const apiKey = process.env.CW_BYOK_KEY ?? '';
-      const baseUrl = process.env.CW_BYOK_BASE_URL ?? '';
-      if (!apiKey || !baseUrl) {
+      const cred = await Promise.race([
+        credential,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), CREDENTIAL_TIMEOUT_MS)),
+      ]);
+      const byokKey = cred?.byokKey ?? '';
+      const byokBaseUrl = cred?.byokBaseUrl ?? '';
+      if (!byokKey || !byokBaseUrl) {
         outcome = { state: 'failed', failureReason: 'auth', summary: 'BYOK credential not provided to runner', artifacts: [], costUsd: 0, turns: 0 };
       } else {
         const r = await runApiAgent({
-          baseUrl,
-          apiKey,
+          baseUrl: byokBaseUrl,
+          apiKey: byokKey,
           model: job.model || 'default',
           systemPrompt: job.profile?.systemPromptExtra ?? 'You are a helpful autonomous agent working in a repository workspace.',
           prompt: effectiveJob.prompt,
           cwd: job.worktreePath || job.scratchPath || process.cwd(),
           maxTurns: job.budget.maxTurns,
           timeoutSec: job.budget.timeoutSec,
+          sandbox,
           onLog: (line: string) => send({ t: 'log', line }),
         });
         // Stream usage as it lands (same channel CLI engines use).

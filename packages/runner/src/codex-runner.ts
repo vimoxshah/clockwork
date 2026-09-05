@@ -7,10 +7,12 @@
  *   {"type":"turn.failed","error":{"message":"..."}}
  */
 import { spawn, type ChildProcess } from 'node:child_process';
+import { rmSync } from 'node:fs';
 import path from 'node:path';
 import { BudgetGuard } from './budget-guard.js';
 import { classifyError } from './stream-parser.js';
 import { buildRunEnv } from './run-env.js';
+import { applySandbox, toolCacheEnv, type SandboxSpec } from './sandbox.js';
 import type {
   AgentRunner,
   JobContext,
@@ -34,7 +36,7 @@ export class CodexRunner implements AgentRunner {
   readonly engine = 'codex' as const;
   private livePgids = new Set<number>();
 
-  constructor(private readonly opts: { graceMs?: number } = {}) {}
+  constructor(private readonly opts: { graceMs?: number; sandbox?: SandboxSpec | null } = {}) {}
 
   async start(job: JobSpecLike, ctx: JobContext): Promise<RunOutcome> {
     return this.execute(job, ctx);
@@ -61,24 +63,52 @@ export class CodexRunner implements AgentRunner {
         { onLog: (l) => ctx.io.onLog(l) },
       );
 
+      // Exactly one Seatbelt layer. macOS refuses to apply codex's own
+      // `workspace-write` profile inside Clockwork's deny-default profile
+      // (`sandbox_apply: Operation not permitted`, probed 2026-09-05), so when
+      // ours is on, codex's is off and ours is the containment. Only with
+      // CW_SANDBOX=off does codex fall back to its own sandbox.
+      const innerSandbox = this.opts.sandbox ? 'danger-full-access' : 'workspace-write';
       const argv = [
         'exec',
         '--json',
         '--skip-git-repo-check',
         '-s',
-        'workspace-write',
+        innerSandbox,
         ...(job.model ? ['-c', `model="${job.model}"`] : []),
         buildPrompt(job),
       ];
-      const env = buildRunEnv();
+      const env = buildRunEnv(toolCacheEnv());
 
-      const child: ChildProcess = spawn('codex', argv, {
+      let wrapped: string[];
+      let profilePath: string | null = null;
+      try {
+        const sandboxResult = applySandbox(['codex', ...argv], this.opts.sandbox);
+        wrapped = sandboxResult.argv;
+        profilePath = sandboxResult.profilePath;
+      } catch (e) {
+        resolve({ state: 'failed', failureReason: 'internal', summary: `sandbox profile refused: ${String(e)}`, artifacts: [], costUsd: 0, turns: 0 });
+        return;
+      }
+      // Per-run Seatbelt profile dir (cw-sb-*): applySandbox already wrote it to
+      // disk before spawn; nothing else removes it, so every run leaked one
+      // until this cleaned up on every exit path (close, error, spawn failure).
+      const cleanupProfileDir = (): void => {
+        if (!profilePath) return;
+        try {
+          rmSync(path.dirname(profilePath), { recursive: true, force: true });
+        } catch {
+          /* best-effort; a leaked temp dir is not a run failure */
+        }
+      };
+      const child: ChildProcess = spawn(wrapped[0]!, wrapped.slice(1), {
         cwd: path.join(ctx.worktreePath),
         env,
         detached: true,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       if (!child.pid) {
+        cleanupProfileDir();
         resolve({
           state: 'failed',
           failureReason: 'runner_crashed',
@@ -172,11 +202,29 @@ export class CodexRunner implements AgentRunner {
 
       const heartbeat = setInterval(() => ctx.io.onHeartbeat(), 15_000);
 
+      child.on('error', (err) => {
+        clearInterval(heartbeat);
+        clearTimeout(timeoutTimer);
+        ctx.signal.removeEventListener('abort', onAbort);
+        this.livePgids.delete(pgid);
+        cleanupProfileDir();
+        resolve({
+          sessionId,
+          artifacts: [],
+          state: 'failed',
+          failureReason: 'runner_crashed',
+          summary: String(err),
+          costUsd: guard.snapshot.costUsd,
+          turns,
+        });
+      });
+
       child.on('close', () => {
         clearInterval(heartbeat);
         clearTimeout(timeoutTimer);
         ctx.signal.removeEventListener('abort', onAbort);
         this.livePgids.delete(pgid);
+        cleanupProfileDir();
 
         const base = {
           sessionId,

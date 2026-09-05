@@ -15,8 +15,16 @@ export type ChildToDaemon =
   | { t: 'artifact'; path: string }
   | { t: 'rateLimit'; info: Record<string, unknown> }
   | { t: 'permission'; reqId: string; tool: string; input: unknown }
+  /** Sent once before the engine spawns; enabled=false is the CW_SANDBOX=off escape hatch. */
+  | { t: 'sandbox'; enabled: boolean; profileVersion: number | null }
+  /** A PreToolUse policy-floor hit (FR-11/T-114) — the deny-list floor denied
+   *  a command outside the normal permission flow; see safety-journal.ts. */
+  | { t: 'floor'; tool: string; command: string; reason: string }
   | { t: 'outcome'; outcome: RunOutcome };
 
 export type DaemonToChild =
-  | { t: 'decision'; reqId: string; behavior: 'allow' } 
-  | { t: 'decision'; reqId: string; behavior: 'deny'; message: string };
+  | { t: 'decision'; reqId: string; behavior: 'allow' }
+  | { t: 'decision'; reqId: string; behavior: 'deny'; message: string }
+  /** BYOK credential delivery (ADR-035): stdin, never env — see run-manager.ts
+   *  spawnChild and runner-child.ts's credential promise for why. */
+  | { t: 'credential'; byokKey: string; byokBaseUrl: string };

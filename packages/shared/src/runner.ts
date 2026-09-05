@@ -34,6 +34,13 @@ export interface RunnerIO {
   /** Claude rate_limit_event telemetry → capacity model (FR-7, estimate-grade). */
   onRateLimit?(info: Record<string, unknown>): void;
   onLog(line: string): void;
+  /**
+   * A PreToolUse policy-floor hit (FR-11/T-114): the deny-list floor denied a
+   * command the CLI's own permission-prompt-tool path never asked about
+   * (acceptEdits skips it for Bash). Optional so existing RunnerIO
+   * implementers are unaffected until they choose to journal it.
+   */
+  onPolicyDeny?(p: { tool: string; command: string; reason: string }): void;
 }
 
 export interface RunOutcome {
