@@ -207,6 +207,11 @@ export class RunManager {
     writeFileSync(specPath, JSON.stringify(spec));
 
     const nonce = newId();
+    // BYOK credential resolution happens here, in the daemon, exactly as before
+    // (ADR-027/028) — but the result is held in a LOCAL and delivered to the
+    // child over stdin after spawn, never through env. See the doc comment on
+    // resolveByokCredential for why an env var is not a security boundary here.
+    const byokCredential = this.resolveByokCredential(spec);
     // Sanitized env (arch §7.3): nothing but the minimum. No bearer token, no delivery creds.
     // USER/LOGNAME required for macOS keychain ACL identification (verified 2026-08-21).
     const env: Record<string, string> = {
@@ -217,7 +222,6 @@ export class RunManager {
       CW_ENGINE: process.env.CW_ENGINE ?? '', // test hook only
       ...(process.env.CW_MOCK_STEP_MS ? { CW_MOCK_STEP_MS: process.env.CW_MOCK_STEP_MS } : {}), // test hook
       ...(process.env.CW_SANDBOX ? { CW_SANDBOX: process.env.CW_SANDBOX } : {}), // escape hatch; journaled + stamped on the report
-      ...this.byokEnv(spec), // BYOK credential injection (ADR-027/028) — keychain read happens here, in the daemon
       ...(process.env.USER ? { USER: process.env.USER } : {}),
       ...(process.env.LOGNAME ? { LOGNAME: process.env.LOGNAME } : {}),
     };
@@ -236,6 +240,24 @@ export class RunManager {
     });
     const pgid = child.pid!;
     this.liveChildren.set(runId, child);
+
+    // ADR-035: BYOK credential travels over stdin, never env. macOS exposes a
+    // process's exec-time environment to any other same-user process via
+    // sysctl KERN_PROCARGS2 — sandboxed or not, since Node itself needs
+    // sysctl-read to run, so the Seatbelt profile cannot close that door. stdin
+    // is a pipe only the daemon holds the write end of, so it is the actual
+    // boundary. Safe to write before 'ready': stdin is a pipe and the child's
+    // readline reader is listening on 'line' from the moment it starts up, so
+    // nothing here is lost to a race. Never logged, never journaled.
+    if (byokCredential) {
+      try {
+        child.stdin!.write(
+          JSON.stringify({ t: 'credential', byokKey: byokCredential.byokKey, byokBaseUrl: byokCredential.byokBaseUrl }) + '\n',
+        );
+      } catch {
+        /* broken pipe — runner-child's credential wait times out and fails the run safely */
+      }
+    }
 
     this.deps.db
       .prepare('UPDATE runs SET pid=?, pgid=?, proc_started_at=?, heartbeat_at=?, journal_path=?, started_at=?, state=? , state_changed_at=? WHERE id=?')
@@ -759,29 +781,38 @@ export class RunManager {
   }
 
   /**
-   * BYOK credential env (ADR-027/028). Resolved lazily at spawn in the daemon
-   * process; the secret travels only via child env, never the jobspec file.
-   * Returns {} when the task is not a BYOK task or resolution fails (the run
-   * will then fail fast with an auth error inside the runner).
+   * BYOK credential resolution (ADR-027/028; delivery moved to stdin under
+   * ADR-035 — see spawnChild). Resolved lazily at spawn in the daemon process;
+   * the secret is held in a local and never written to the jobspec file, env,
+   * a log line, or recordEvent/journal.
+   *
+   * Returns null when the task is not a BYOK task at all (spawnChild uses that
+   * to decide whether to write a 'credential' message — never for a non-BYOK
+   * run). Returns an object with empty fields when the task IS a BYOK task but
+   * resolution fails (config missing, env var unset, keychain miss) — the
+   * child still gets an explicit 'credential' message, so it fails fast with
+   * the same auth error as before rather than waiting out the no-message
+   * timeout.
    */
-  private byokEnv(spec: JobSpec): Record<string, string> {
-    const byokId = (spec as unknown as { byokId?: string | null }).byokId;
-    if (!byokId) return {};
+  private resolveByokCredential(spec: JobSpec): { byokKey: string; byokBaseUrl: string } | null {
+    const byokId = spec.byokId;
+    if (!byokId) return null;
     try {
       const store = new ByokStore({ db: this.deps.db });
       const cfg = store.get(byokId);
-      if (!cfg) return {};
-      const envOut: Record<string, string> = { CW_BYOK_BASE_URL: store.baseUrlFor(cfg) };
+      if (!cfg) return { byokKey: '', byokBaseUrl: '' };
+      const byokBaseUrl = store.baseUrlFor(cfg);
+      let byokKey = '';
       if (cfg.auth === 'env' && cfg.env_var && process.env[cfg.env_var]) {
-        envOut.CW_BYOK_KEY = process.env[cfg.env_var] as string;
+        byokKey = process.env[cfg.env_var] as string;
       } else if (cfg.auth === 'keychain') {
         try {
-          envOut.CW_BYOK_KEY = keychainGet(cfg.id);
+          byokKey = keychainGet(cfg.id);
         } catch { /* absent key → runner fails fast with auth */ }
       }
-      return envOut;
+      return { byokKey, byokBaseUrl };
     } catch {
-      return {};
+      return { byokKey: '', byokBaseUrl: '' };
     }
   }
 

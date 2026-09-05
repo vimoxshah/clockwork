@@ -61,6 +61,7 @@ describe('runner env wiring', () => {
  * macOS Seatbelt profile". Same source-reading approach as above, same reason.
  */
 const RUNNER_CHILD = resolve(SRC, '../../daemon/src/runner-child.ts');
+const RUN_MANAGER = resolve(SRC, '../../daemon/src/run-manager.ts');
 const API_AGENT = 'api-agent-runner.ts';
 
 describe('sandbox wiring', () => {
@@ -84,8 +85,54 @@ describe('sandbox wiring', () => {
     expect(bare, `runners constructed with no sandbox option: ${bare.join(', ')}`).toEqual([]);
   });
 
-  it('runner-child scrubs the BYOK key from its own env after reading it', () => {
+  /**
+   * ADR-034: the BYOK credential travels over the daemon<->child stdin JSONL
+   * channel, never through env. macOS exposes a process's exec-time env to
+   * ANY other same-user process — sandboxed or not — via sysctl
+   * KERN_PROCARGS2 (the Seatbelt profile must allow sysctl-read for Node
+   * itself to run, so it cannot close that door). A `delete process.env.*`
+   * scrub only stops future children spawned FROM the credentialed process;
+   * it does nothing about a sibling process reading this process's own
+   * KERN_PROCARGS2 record before or after the scrub. Only a transport that
+   * never puts the secret in argv/env in the first place closes that gap —
+   * these two guards prove neither side of the channel does.
+   */
+  it('run-manager never puts the BYOK credential in the child env', () => {
+    const src = readFileSync(RUN_MANAGER, 'utf8');
+    const offenders = [/CW_BYOK_KEY:/, /CW_BYOK_KEY\s*=/, /envOut\.CW_BYOK_KEY/].filter((re) => re.test(src));
+    expect(
+      offenders,
+      'run-manager.ts assigns CW_BYOK_KEY into an object literal — that object is passed as the spawned child\'s env, and macOS exposes exec-time env to any same-user process via KERN_PROCARGS2, sandboxed or not. The credential must travel over stdin only.',
+    ).toEqual([]);
+  });
+
+  it('runner-child never reads the BYOK credential from its own env, and awaits it over stdin instead', () => {
     const src = readFileSync(RUNNER_CHILD, 'utf8');
-    expect(/delete process\.env\.CW_BYOK_KEY/.test(src), 'CW_BYOK_KEY stays readable by every child the agent spawns').toBe(true);
+    expect(
+      /process\.env\.CW_BYOK_KEY/.test(src),
+      'runner-child.ts still reads CW_BYOK_KEY from env — that value is readable by any same-user process via KERN_PROCARGS2 (sysctl-read is required for Node to run at all, sandboxed or not), so a scrub after reading it is not a boundary. The credential must arrive over stdin only.',
+    ).toBe(false);
+    expect(
+      /t === 'credential'/.test(src),
+      'runner-child.ts must handle the {t:"credential"} message from run-manager.ts — that is the only channel the BYOK secret should ever travel over.',
+    ).toBe(true);
+  });
+
+  /**
+   * Per-run Seatbelt profile dirs (T-114-adjacent): applySandbox() writes a
+   * fresh `cw-sb-` directory (containing profile.sb) under os.tmpdir() and
+   * returns the path. claude-cli-runner already removed it; codex/opencode/
+   * hermes did not, so every non-Claude-CLI run — and every api-agent
+   * run_command call — leaked one directory forever. These runners need a
+   * real binary to actually spawn, so this stays a source-reading guard like
+   * the ones above; sandbox-production-spec.test.ts and the api-agent test
+   * below prove the mechanism behaviourally.
+   */
+  it('every CLI runner captures profilePath and removes it with rmSync', () => {
+    const offenders = RUNNERS.filter((f) => {
+      const src = read(f);
+      return !/profilePath/.test(src) || !/rmSync\(/.test(src);
+    });
+    expect(offenders, `runners that never clean up their sandbox profile dir: ${offenders.join(', ')}`).toEqual([]);
   });
 });

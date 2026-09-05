@@ -20,7 +20,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { PermissionServer } from '../src/permission-server.js';
 import { evaluateCommand } from '../src/deny-list.js';
-import { writeFloorHook } from '../src/floor-hook.js';
+import { writeFloorHook, floorHookSettings } from '../src/floor-hook.js';
 
 let server: PermissionServer;
 let dir: string;
@@ -115,5 +115,16 @@ describe('floor-hook.mjs — PreToolUse fail-closed hook', () => {
     const r = await runHook(hookPath, 'ls');
     expect(r.status).toBe(2);
     expect(r.stderr).toMatch(/Clockwork policy floor unreachable/);
+  });
+});
+
+describe('floorHookSettings pins the hook switch', () => {
+  it('sets disableAllHooks:false so a repo .claude/settings.json cannot turn the floor off', () => {
+    const parsed = JSON.parse(floorHookSettings("'/usr/bin/true'")) as { disableAllHooks?: unknown; hooks?: unknown };
+    // Probed on CLI 2.1.261 (2026-09-06): without this key, `{"disableAllHooks": true}`
+    // committed in the repo silently disables the PreToolUse hook and the gated
+    // command runs unasked. CLI-flag settings outrank project settings.
+    expect(parsed.disableAllHooks).toBe(false);
+    expect(parsed.hooks).toBeDefined();
   });
 });

@@ -74,9 +74,11 @@ This bounds *mistakes*, not adversaries.
 
 A global-only deny-list blocks force-pushes to protected branches, package
 publishing, and credential-path access attempts, and journals every hit
-(FR-27). On the Claude engine it is consulted for every Bash call through the
-`PreToolUse` hook described below; other engines have no per-command hook and
-rely on the sandbox. It shapes normal behavior; it does NOT stop a determined adversarial
+(FR-27). On the Claude engine its **floor** entries (force-push to a protected
+branch, package publishing) are enforced for every Bash call through the
+`PreToolUse` hook described below; non-floor entries still only apply to calls
+the CLI chooses to prompt for. Other engines have no per-command hook and rely
+on the sandbox. It shapes normal behavior; it does NOT stop a determined adversarial
 prompt from routing around patterns. The sandbox above is what bounds damage.
 
 `bypassPermissions` is not offered in H1. Permission modes are `plan`
@@ -96,6 +98,11 @@ jobs. Imported templates/profiles arrive disabled with a security preview.
 - Delivery credentials live outside the daemon DB (keychain at packaging; env/
   file bridge for CLI installs) and are **never visible to runner processes** —
   runners get sanitized envs and stdio IPC only.
+- BYOK provider keys travel to the runner over the daemon⇄child **stdin
+  channel, never the environment**. A process's exec-time environment stays
+  readable through `sysctl` (`KERN_PROCARGS2`) by any same-user process,
+  sandboxed or not, so an env var that is "read then deleted" is not a boundary
+  (found in review 2026-09-06; the transport is the fix, the profile cannot be).
 - The local API is loopback-only with a bearer token stored `0600`.
 
 ## Engine capability honesty
@@ -133,8 +140,12 @@ floor hit exits 2 and the CLI refuses the call with the reason. It is
 **fail-closed**: bridge unreachable, malformed input, timeout — every error path
 also exits 2, so a CLI format change breaks runs loudly instead of silently
 un-protecting them. Hooks fire in every permission mode, so coverage no longer
-depends on what the CLI chooses to prompt for. Cost per Bash call: about 60 ms
-(Node start plus one loopback round trip, median of ten).
+depends on what the CLI chooses to prompt for. The payload also pins
+`disableAllHooks: false`: the CLI honours that switch from a repo's own
+`.claude/settings.json`, and without the pin one committed key turned the floor
+off while the report still said `sandboxed: true` (probed 2026-09-06; CLI-flag
+settings outrank project settings, so the pin wins). Cost per Bash call: about
+60 ms (Node start plus one loopback round trip, median of ten).
 
 Verified 2026-09-06 through the production `runner-child`: `npm view …` still
 prompted (bridge intact), `git push --force origin main` came back as
@@ -145,7 +156,14 @@ ran; recorded as a `policy_deny` event and a `deny_list_hit` journal entry.
 `permissions.allow` rules in `~/.claude/settings.json` and the developer's own
 `SessionStart`/`SessionEnd` hooks apply to unattended runs. The floor hook holds
 regardless (deny beats allow in the CLI's hook precedence); pinning
-`--setting-sources` is a product decision left open.
+`--setting-sources` is a product decision left open. The hook matches the
+`Bash` tool only: an MCP server the repo declares in `.mcp.json` (kept on
+purpose — `--strict-mcp-config` would drop it) that runs shell on the agent's
+behalf is not matched, so the floor does not see those calls; the sandbox still
+bounds them. The permission bridge listens on loopback without a bearer token, so
+a sandboxed agent that reads the port from its own argv could post fake approval
+prompts into the inbox (noise, not an escalation — decisions route back by
+request id); a per-run header is the planned fix.
 
 ## Reporting a security issue
 

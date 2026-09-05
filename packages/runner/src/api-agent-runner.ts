@@ -8,7 +8,8 @@
  * Credential is resolved from the BYOK store at run start and injected into the
  * request only — never logged or persisted.
  */
-import { writeFileSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import { buildRunEnv } from './run-env.js';
 import { applySandbox, toolCacheEnv, type SandboxSpec } from './sandbox.js';
 
@@ -122,16 +123,25 @@ const TOOLS = [
   },
 ];
 
-async function execTool(name: string, args: Record<string, string>, cwd: string, sandbox: SandboxSpec | null): Promise<string> {
+/** Exported for sandbox-cleanup testing (api-agent-run-command-sandbox.test.ts); not part of the daemon<->runner contract. */
+export async function execTool(name: string, args: Record<string, string>, cwd: string, sandbox: SandboxSpec | null): Promise<string> {
   const { execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
   const run = promisify(execFile);
   if (name === 'run_command') {
     const command = args.command ?? '';
+    // applySandbox is called once per run_command tool call, so every call
+    // writes a fresh cw-sb-*/profile.sb under os.tmpdir(). Nothing else in
+    // this file removed it — a long-running BYOK agent that calls run_command
+    // repeatedly leaked one profile dir per call. Clean up the ONE dir this
+    // call created once the call is done, whether it succeeded or threw.
+    let profilePath: string | null = null;
     try {
       // The shell gets the same allowlisted env and Seatbelt wrap as every CLI
       // engine. Before this it inherited process.env — including the BYOK key.
-      const wrapped = applySandbox(['/bin/bash', '-c', command], sandbox).argv;
+      const sandboxResult = applySandbox(['/bin/bash', '-c', command], sandbox);
+      profilePath = sandboxResult.profilePath;
+      const wrapped = sandboxResult.argv;
       const { stdout } = await run(wrapped[0]!, wrapped.slice(1), {
         cwd,
         env: buildRunEnv(toolCacheEnv()),
@@ -142,10 +152,17 @@ async function execTool(name: string, args: Record<string, string>, cwd: string,
     } catch (e) {
       const err = e as { stdout?: string; stderr?: string; message?: string };
       return `EXIT-ERROR: ${err.stderr ?? err.message ?? 'unknown'}`.slice(0, 6000);
+    } finally {
+      if (profilePath) {
+        try {
+          rmSync(path.dirname(profilePath), { recursive: true, force: true });
+        } catch {
+          /* best-effort; a leaked temp dir is not a run failure */
+        }
+      }
     }
   }
   if (name === 'write_file') {
-    const path = await import('node:path');
     const { existsSync, realpathSync } = await import('node:fs');
     // This write happens in the unsandboxed runner-child, so the prefix check
     // IS the boundary. Resolve symlinks first: a link inside the worktree that

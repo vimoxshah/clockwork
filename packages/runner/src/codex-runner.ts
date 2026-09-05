@@ -7,6 +7,7 @@
  *   {"type":"turn.failed","error":{"message":"..."}}
  */
 import { spawn, type ChildProcess } from 'node:child_process';
+import { rmSync } from 'node:fs';
 import path from 'node:path';
 import { BudgetGuard } from './budget-guard.js';
 import { classifyError } from './stream-parser.js';
@@ -80,12 +81,26 @@ export class CodexRunner implements AgentRunner {
       const env = buildRunEnv(toolCacheEnv());
 
       let wrapped: string[];
+      let profilePath: string | null = null;
       try {
-        wrapped = applySandbox(['codex', ...argv], this.opts.sandbox).argv;
+        const sandboxResult = applySandbox(['codex', ...argv], this.opts.sandbox);
+        wrapped = sandboxResult.argv;
+        profilePath = sandboxResult.profilePath;
       } catch (e) {
         resolve({ state: 'failed', failureReason: 'internal', summary: `sandbox profile refused: ${String(e)}`, artifacts: [], costUsd: 0, turns: 0 });
         return;
       }
+      // Per-run Seatbelt profile dir (cw-sb-*): applySandbox already wrote it to
+      // disk before spawn; nothing else removes it, so every run leaked one
+      // until this cleaned up on every exit path (close, error, spawn failure).
+      const cleanupProfileDir = (): void => {
+        if (!profilePath) return;
+        try {
+          rmSync(path.dirname(profilePath), { recursive: true, force: true });
+        } catch {
+          /* best-effort; a leaked temp dir is not a run failure */
+        }
+      };
       const child: ChildProcess = spawn(wrapped[0]!, wrapped.slice(1), {
         cwd: path.join(ctx.worktreePath),
         env,
@@ -93,6 +108,7 @@ export class CodexRunner implements AgentRunner {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       if (!child.pid) {
+        cleanupProfileDir();
         resolve({
           state: 'failed',
           failureReason: 'runner_crashed',
@@ -186,11 +202,29 @@ export class CodexRunner implements AgentRunner {
 
       const heartbeat = setInterval(() => ctx.io.onHeartbeat(), 15_000);
 
+      child.on('error', (err) => {
+        clearInterval(heartbeat);
+        clearTimeout(timeoutTimer);
+        ctx.signal.removeEventListener('abort', onAbort);
+        this.livePgids.delete(pgid);
+        cleanupProfileDir();
+        resolve({
+          sessionId,
+          artifacts: [],
+          state: 'failed',
+          failureReason: 'runner_crashed',
+          summary: String(err),
+          costUsd: guard.snapshot.costUsd,
+          turns,
+        });
+      });
+
       child.on('close', () => {
         clearInterval(heartbeat);
         clearTimeout(timeoutTimer);
         ctx.signal.removeEventListener('abort', onAbort);
         this.livePgids.delete(pgid);
+        cleanupProfileDir();
 
         const base = {
           sessionId,

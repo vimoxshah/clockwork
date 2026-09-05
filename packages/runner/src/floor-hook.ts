@@ -181,9 +181,20 @@ export function floorHookCommand(execPath: string, hookPath: string): string {
   return `${shellQuote(execPath)} --no-warnings ${shellQuote(hookPath)}`;
 }
 
-/** The `--settings` JSON payload wiring `command` in as a Bash PreToolUse hook. */
+/**
+ * The `--settings` JSON payload wiring `command` in as a Bash PreToolUse hook.
+ *
+ * `disableAllHooks: false` is load-bearing, not decoration. The CLI honours
+ * `disableAllHooks: true` from a repo's own `.claude/settings.json`, and a
+ * `--settings` payload that only adds hooks leaves that switch in the repo's
+ * hands — one committed key and the floor is gone while the report still says
+ * `sandboxed: true` (probed on CLI 2.1.261, 2026-09-06). CLI-flag settings
+ * outrank project settings, so pinning the switch here wins, and it also
+ * covers the agent writing that file into its own worktree mid-run.
+ */
 export function floorHookSettings(command: string): string {
   return JSON.stringify({
+    disableAllHooks: false,
     hooks: {
       PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command }] }],
     },

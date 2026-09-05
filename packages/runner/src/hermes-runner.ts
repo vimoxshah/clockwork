@@ -99,8 +99,11 @@ export class HermesRunner implements AgentRunner {
       const bin = this.opts.hermesBin ?? 'hermes';
       // The usage file lives in a temp dir outside the worktree; the sandbox must be told.
       let wrapped: string[];
+      let profilePath: string | null = null;
       try {
-        wrapped = applySandbox([bin, ...argv], this.opts.sandbox, { extraWritePaths: [path.dirname(usagePath)] }).argv;
+        const sandboxResult = applySandbox([bin, ...argv], this.opts.sandbox, { extraWritePaths: [path.dirname(usagePath)] });
+        wrapped = sandboxResult.argv;
+        profilePath = sandboxResult.profilePath;
       } catch (e) {
         cleanup();
         resolve({ state: 'failed', failureReason: 'internal', summary: `sandbox profile refused: ${String(e)}`, artifacts: [], costUsd: 0, turns: 0 });
@@ -148,6 +151,21 @@ export class HermesRunner implements AgentRunner {
       child.stderr!.on('data', (c: string) => {
         stderrTail = (stderrTail + c).slice(-4000);
         ctx.io.onHeartbeat();
+      });
+
+      child.on('error', (err) => {
+        clearTimeout(timeoutTimer);
+        ctx.signal.removeEventListener('abort', onAbort);
+        this.livePgids.delete(pgid);
+        cleanup();
+        resolve({
+          state: 'failed',
+          failureReason: 'runner_crashed',
+          summary: String(err),
+          artifacts: [],
+          costUsd: 0,
+          turns: 1,
+        });
       });
 
       child.on('close', (code) => {
@@ -199,6 +217,15 @@ export class HermesRunner implements AgentRunner {
         try {
           rmSync(path.dirname(usagePath), { recursive: true, force: true });
         } catch {}
+        // Per-run Seatbelt profile dir (cw-sb-*): applySandbox already wrote it
+        // to disk before spawn; nothing else removed it, so every run leaked
+        // one until this cleaned up on every exit path (close, error, spawn
+        // failure, sandbox refusal).
+        if (profilePath) {
+          try {
+            rmSync(path.dirname(profilePath), { recursive: true, force: true });
+          } catch {}
+        }
       }
     });
   }

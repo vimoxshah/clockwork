@@ -6,6 +6,8 @@
  * by time only.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
+import { rmSync } from 'node:fs';
+import path from 'node:path';
 import { buildRunEnv } from './run-env.js';
 import { applySandbox, toolCacheEnv, type SandboxSpec } from './sandbox.js';
 import type { AgentRunner, JobContext, JobSpecLike, RunOutcome } from '@clockwork/shared';
@@ -50,12 +52,26 @@ export class OpenCodeRunner implements AgentRunner {
       const env = buildRunEnv(toolCacheEnv());
 
       let wrapped: string[];
+      let profilePath: string | null = null;
       try {
-        wrapped = applySandbox(['opencode', ...argv], this.opts.sandbox).argv;
+        const sandboxResult = applySandbox(['opencode', ...argv], this.opts.sandbox);
+        wrapped = sandboxResult.argv;
+        profilePath = sandboxResult.profilePath;
       } catch (e) {
         resolve({ state: 'failed', failureReason: 'internal', summary: `sandbox profile refused: ${String(e)}`, artifacts: [], costUsd: 0, turns: 0 });
         return;
       }
+      // Per-run Seatbelt profile dir (cw-sb-*): applySandbox already wrote it to
+      // disk before spawn; nothing else removes it, so every run leaked one
+      // until this cleaned up on every exit path (close, error, spawn failure).
+      const cleanupProfileDir = (): void => {
+        if (!profilePath) return;
+        try {
+          rmSync(path.dirname(profilePath), { recursive: true, force: true });
+        } catch {
+          /* best-effort; a leaked temp dir is not a run failure */
+        }
+      };
       const child: ChildProcess = spawn(wrapped[0]!, wrapped.slice(1), {
         cwd: ctx.worktreePath,
         env,
@@ -63,6 +79,7 @@ export class OpenCodeRunner implements AgentRunner {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       if (!child.pid) {
+        cleanupProfileDir();
         resolve({
           state: 'failed',
           failureReason: 'runner_crashed',
@@ -100,10 +117,26 @@ export class OpenCodeRunner implements AgentRunner {
         ctx.io.onHeartbeat();
       });
 
+      child.on('error', (err) => {
+        clearTimeout(timeoutTimer);
+        ctx.signal.removeEventListener('abort', onAbort);
+        this.livePgids.delete(pgid);
+        cleanupProfileDir();
+        resolve({
+          state: 'failed',
+          failureReason: 'runner_crashed',
+          summary: String(err),
+          artifacts: [],
+          costUsd: 0,
+          turns: 1,
+        });
+      });
+
       child.on('close', (code) => {
         clearTimeout(timeoutTimer);
         ctx.signal.removeEventListener('abort', onAbort);
         this.livePgids.delete(pgid);
+        cleanupProfileDir();
 
         const summary = lastMeaningfulChunk(stdoutAll);
         const aborted = this.livePgids.size >= 0 && ctx.signal.aborted;

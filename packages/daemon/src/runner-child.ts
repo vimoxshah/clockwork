@@ -33,13 +33,22 @@ if (!specPath || !nonce) {
 const job = JSON.parse(readFileSync(specPath, 'utf8')) as JobSpec;
 const startedAtMs = Date.now();
 
-// BYOK credential (ADR-027/028) arrives in THIS process's env only. Read it once
-// and scrub it, so nothing this child spawns — the agent's own shell included —
-// can `echo $CW_BYOK_KEY`. Before this scrub, it could.
-const byokKey = process.env.CW_BYOK_KEY ?? '';
-const byokBaseUrl = process.env.CW_BYOK_BASE_URL ?? '';
-delete process.env.CW_BYOK_KEY;
-delete process.env.CW_BYOK_BASE_URL;
+// BYOK credential delivery (ADR-035). WHY stdin and not env: macOS exposes a
+// process's exec-time argv/env to any OTHER same-user process — sandboxed or
+// not — via sysctl KERN_PROCARGS2. The Seatbelt profile has to allow
+// sysctl-read (Node needs it to run at all), so a sibling runner-child, even
+// one contained by its own profile, can read a credential that was ever
+// placed in this process's env, no matter how quickly it is deleted
+// afterward — a scrub only stops future children spawned FROM here, not a
+// third party sampling this process's own KERN_PROCARGS2 record. Only a
+// transport neither process ever puts in its argv/env closes that: the
+// existing daemon<->child JSONL channel over a pipe that only the daemon
+// holds the write end of.
+const CREDENTIAL_TIMEOUT_MS = 15_000;
+let resolveCredential!: (c: { byokKey: string; byokBaseUrl: string }) => void;
+const credential = new Promise<{ byokKey: string; byokBaseUrl: string }>((resolve) => {
+  resolveCredential = resolve;
+});
 
 function send(msg: ChildToDaemon): void {
   try {
@@ -67,6 +76,8 @@ rl.on('line', (line) => {
       pendingPermissions.delete(msg.reqId);
       resolve(msg.behavior === 'allow' ? { behavior: 'allow' } : { behavior: 'deny', message: msg.message });
     }
+  } else if (msg.t === 'credential') {
+    resolveCredential({ byokKey: msg.byokKey, byokBaseUrl: msg.byokBaseUrl });
   }
 });
 
@@ -183,10 +194,18 @@ async function main(): Promise<void> {
   let outcome: RunOutcome;
   try {
     if ((job as any).byokId) {
-      // ADR-028: BYOK API-agent execution. Credential arrives via env
-      // (CW_BYOK_KEY / CW_BYOK_BASE_URL), injected by the daemon at spawn time;
-      // it is never written to the jobspec file or logs.
+      // ADR-028/035: BYOK API-agent execution. Credential arrives over stdin
+      // (the 'credential' message), injected by the daemon right after spawn;
+      // it is never written to the jobspec file, env, or logs. Bounded wait so
+      // a stdin write that never arrives (broken pipe, protocol bug) fails the
+      // run instead of hanging it.
       const { runApiAgent } = await import('@clockwork/runner');
+      const cred = await Promise.race([
+        credential,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), CREDENTIAL_TIMEOUT_MS)),
+      ]);
+      const byokKey = cred?.byokKey ?? '';
+      const byokBaseUrl = cred?.byokBaseUrl ?? '';
       if (!byokKey || !byokBaseUrl) {
         outcome = { state: 'failed', failureReason: 'auth', summary: 'BYOK credential not provided to runner', artifacts: [], costUsd: 0, turns: 0 };
       } else {

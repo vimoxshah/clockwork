@@ -322,7 +322,7 @@ export const JobSpec = z.object({
   prompt: z.string(),
   engine: Engine,
   model: z.string().nullable(),
-  /** BYOK config id snapshot (ADR-027); credential itself is injected via env at spawn, never serialized */
+  /** BYOK config id snapshot (ADR-027); the credential itself is delivered to the runner over the daemon⇄child stdin channel (ADR-035), never serialized here and never placed in env */
   byokId: z.string().nullable(),
   permissionMode: PermissionMode,
   budget: Budget,
