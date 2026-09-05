@@ -1,5 +1,5 @@
 /**
- * ADR-034 finding #2: applySandbox() writes a fresh `cw-sb-` directory
+ * ADR-035 finding #2: applySandbox() writes a fresh `cw-sb-` directory
  * (containing profile.sb) under os.tmpdir() on EVERY call. ClaudeCliRunner
  * cleans its own up; codex/opencode/hermes now do too (see
  * runner-env-wiring.test.ts's source guard — they need a real binary to

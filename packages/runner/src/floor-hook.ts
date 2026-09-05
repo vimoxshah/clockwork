@@ -69,7 +69,11 @@ function deny(reason) {
 // fail-OPEN this file exists to prevent if some unforeseen path leaves the
 // process idle without ever reaching exit(). The allow path clearTimeout()s
 // it explicitly; every other path calls process.exit() before it would fire.
+// Shared "final answer given" flag: once the watchdog has denied, a late allow
+// from the bridge must not turn into exit(0).
+let settled = false;
 const watchdog = setTimeout(() => {
+  settled = true;
   deny('Clockwork policy floor unreachable: hook watchdog expired');
 }, WATCHDOG_MS);
 
@@ -100,7 +104,6 @@ process.stdin.on('end', () => {
   const toolInput = input ? input.tool_input : undefined;
   const body = JSON.stringify({ tool_name: toolName, tool_input: toolInput });
 
-  let settled = false;
   const req = http.request(
     FLOOR_URL,
     {

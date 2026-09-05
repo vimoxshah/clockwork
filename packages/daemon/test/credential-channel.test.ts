@@ -1,5 +1,5 @@
 /**
- * ADR-034: the BYOK credential must travel to runner-child over stdin, never
+ * ADR-035: the BYOK credential must travel to runner-child over stdin, never
  * through the spawned child's env — macOS exposes a process's exec-time env
  * to any other same-user process via sysctl KERN_PROCARGS2 (the Seatbelt
  * profile has to allow sysctl-read for Node to run at all, so it cannot close
@@ -158,7 +158,7 @@ afterAll(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-describe('BYOK credential delivery: stdin, never env (ADR-034)', () => {
+describe('BYOK credential delivery: stdin, never env (ADR-035)', () => {
   it('a BYOK run gets no CW_BYOK_KEY/CW_BYOK_BASE_URL in its spawned env, and the credential arrives as a stdin line', async () => {
     process.env.CW_TEST_BYOK_SECRET = 'sk-test-shhh-do-not-log';
     const store = new ByokStore({ db: db as unknown as { prepare: (s: string) => any; transaction?: (fn: () => void) => unknown } });

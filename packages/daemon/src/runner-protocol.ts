@@ -25,6 +25,6 @@ export type ChildToDaemon =
 export type DaemonToChild =
   | { t: 'decision'; reqId: string; behavior: 'allow' }
   | { t: 'decision'; reqId: string; behavior: 'deny'; message: string }
-  /** BYOK credential delivery (ADR-034): stdin, never env — see run-manager.ts
+  /** BYOK credential delivery (ADR-035): stdin, never env — see run-manager.ts
    *  spawnChild and runner-child.ts's credential promise for why. */
   | { t: 'credential'; byokKey: string; byokBaseUrl: string };

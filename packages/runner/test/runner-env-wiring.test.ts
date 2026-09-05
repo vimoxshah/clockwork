@@ -86,7 +86,7 @@ describe('sandbox wiring', () => {
   });
 
   /**
-   * ADR-034: the BYOK credential travels over the daemon<->child stdin JSONL
+   * ADR-035: the BYOK credential travels over the daemon<->child stdin JSONL
    * channel, never through env. macOS exposes a process's exec-time env to
    * ANY other same-user process — sandboxed or not — via sysctl
    * KERN_PROCARGS2 (the Seatbelt profile must allow sysctl-read for Node

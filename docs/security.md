@@ -103,6 +103,10 @@ jobs. Imported templates/profiles arrive disabled with a security preview.
   readable through `sysctl` (`KERN_PROCARGS2`) by any same-user process,
   sandboxed or not, so an env var that is "read then deleted" is not a boundary
   (found in review 2026-09-06; the transport is the fix, the profile cannot be).
+  One qualifier: a BYOK config that reads its key from an environment variable
+  (`auth: 'env'`) has the key in the **daemon's** own exec-time environment by
+  construction, and that stays readable through the same `sysctl` path.
+  Keychain-backed configs are fully closed; prefer them.
 - The local API is loopback-only with a bearer token stored `0600`.
 
 ## Engine capability honesty
