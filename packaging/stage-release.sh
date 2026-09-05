@@ -57,6 +57,7 @@ LATEST="https://github.com/vimoxshah/clockwork/releases/latest/download/Clockwor
 /usr/bin/sed -i '' -E "s#href=\"https://github.com/vimoxshah/clockwork/releases/download/v[0-9.]+/Clockwork_[0-9.]+_aarch64\.dmg\"#href=\"${LATEST}\"#g" "$PAGE"
 /usr/bin/sed -i '' -E "s#\"softwareVersion\": \"[0-9.]+\"#\"softwareVersion\": \"${VERSION}\"#" "$PAGE"
 /usr/bin/sed -i '' -E "s#\"downloadUrl\": \"[^\"]+\"#\"downloadUrl\": \"${LATEST}\"#" "$PAGE"
+/usr/bin/sed -i '' -E "s#href=\"https://github.com/vimoxshah/clockwork/releases/download/v[0-9.]+/checksums-sha256.txt\"#href=\"https://github.com/vimoxshah/clockwork/releases/latest/download/checksums-sha256.txt\"#g" "$PAGE"
 /usr/bin/sed -i '' -E "s#Download Clockwork [0-9.]+ for Mac#Download Clockwork ${VERSION} for Mac#" "$PAGE"
 
 # keep the cask host in sync with BASE_URL
