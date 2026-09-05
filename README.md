@@ -70,6 +70,9 @@ REPEAT  Make it weekly. Search your retained run history.
   safety rails, and an output contract
 - 🛡 **Human-in-the-loop approvals** — risky actions pause the run and ask you;
   unanswered asks fail safe (never silently approved)
+- 🧱 **Policy floor in every mode** — force-pushes to protected branches and
+  package publishing are refused before they run on the Claude engine, even when
+  the CLI would not have asked (a `PreToolUse` hook, fail-closed, ~60 ms per call)
 - 🔎 **Searchable execution history** — FTS across every report and transcript;
   ⌘K command palette everywhere
 - 💰 **Budget enforcement by the supervisor** — USD soft cap, turn limits,

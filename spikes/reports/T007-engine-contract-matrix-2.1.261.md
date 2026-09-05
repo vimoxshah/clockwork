@@ -49,10 +49,11 @@ With both fixed, inside the sandbox on 2.1.261: `touch` in worktree ✅ created 
 | deny | `sandbox enabled=true v2` at 0.1s → `permission Bash npm view left-pad version` at 40s → held 12s → deny → model reported the exact deny text, command never ran → `completed`, exit 0. |
 | allow | same → held 8s → allow → `npm view` executed inside the production-built profile (cache root + engine paths merged) and returned stdout. |
 | **floor bypass** | in the allow run, step 2 `git push --force origin main` **executed without any permission request** (`permission_denials: []`; git failed only because the probe repo had no commits). `evaluateCommand` returns `floor:true` for it — the floor was never consulted. Developer settings had no matching allow rule. `acceptEdits` on 2.1.261 does not prompt for this command. |
+| **floor closed** (2026-09-06) | same prompt through the production `runner-child` with the PreToolUse hook wired: `npm view` prompted at 29.7s (held 8s, allowed, ran); `git push --force origin main` → `floor` message at 95.8s with "force-push to protected branch 'main' is blocked by global deny-list", never executed; `echo done` ran; `completed`, exit 0. Hook cost: 60 ms median per Bash call (10 allow calls: 55–72 ms; deny 59 ms, full reason on stderr). |
 
 ## Not decided here (surfaced for the maker)
 
-- **Policy-floor coverage under `acceptEdits`** (row above). Options: unattended tasks in `default` mode (the bridge makes that viable now); inject deny-list patterns as CLI `permissions.deny` via `--settings`; or both.
+- ~~Policy-floor coverage under `acceptEdits`~~ — closed by the PreToolUse hook (ADR-035); see the "floor closed" row.
 
 - **Settings leak.** The run inherits `HOME`, so the CLI loads `~/.claude/settings.json`. Any `permissions.allow` rule there pre-empts the prompt tool. `--setting-sources` (user,project,local) exists in 2.1.261 and can pin what an unattended run loads. Whether interactive allow rules should apply unattended is a product decision.
 - `--strict-mcp-config` was **not** added: it would drop the repo's own `.mcp.json` servers, a behaviour change for existing tasks.

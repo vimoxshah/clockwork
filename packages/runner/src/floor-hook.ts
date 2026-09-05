@@ -54,8 +54,12 @@ const POST_TIMEOUT_MS = ${POST_TIMEOUT_MS};
 const WATCHDOG_MS = ${WATCHDOG_MS};
 
 function deny(reason) {
-  process.stderr.write(String(reason) + '\\n');
-  process.exit(2);
+  // On macOS a pipe-backed stderr write is asynchronous, so exiting right
+  // after write() can truncate the reason the model reads. Exit from the
+  // write callback; the ref'd fallback still guarantees exit(2) if the
+  // callback never fires (stderr closed). Either way the exit code is 2.
+  setTimeout(() => process.exit(2), 1000);
+  process.stderr.write(String(reason) + '\\n', () => process.exit(2));
 }
 
 // A hang anywhere below (stdin never closes, a socket wedges past its own

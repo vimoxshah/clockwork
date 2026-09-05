@@ -74,7 +74,9 @@ This bounds *mistakes*, not adversaries.
 
 A global-only deny-list blocks force-pushes to protected branches, package
 publishing, and credential-path access attempts, and journals every hit
-(FR-27). It shapes normal behavior; it does NOT stop a determined adversarial
+(FR-27). On the Claude engine it is consulted for every Bash call through the
+`PreToolUse` hook described below; other engines have no per-command hook and
+rely on the sandbox. It shapes normal behavior; it does NOT stop a determined adversarial
 prompt from routing around patterns. The sandbox above is what bounds damage.
 
 `bypassPermissions` is not offered in H1. Permission modes are `plan`
@@ -107,26 +109,43 @@ visible to the model, so the agent cannot approve itself.
 
 Codex, OpenCode and Hermes expose no permission hook; for them the sandbox and
 budgets are the containment, and the UI hides approval affordances. There is no
-"SDK engine".
+"SDK engine". Two engine specifics (ADR-035): **Codex runs with its own
+`workspace-write` sandbox off while Clockwork's is on** — macOS refuses to apply a
+second Seatbelt inside a `(deny default)` profile (`sandbox_apply: Operation not
+permitted`, every allow bisected), so exactly one layer applies and it is ours;
+only `CW_SANDBOX=off` falls back to codex's. Codex's inner sandbox also blocked
+shell-command network; under Clockwork's profile network is allowed, as for every
+engine. **Hermes 0.21.0's oneshot path ignores `--in`**, so `HermesRunner` sets
+`TERMINAL_CWD` to the worktree; before this its file writes landed in `$HOME`.
 
-**Known gap, not yet closed — the policy floor only sees what the CLI asks
-about.** Probed 2026-09-05 through the production runner on CLI 2.1.261 under
-`acceptEdits`: `npm view left-pad version` was sent to the prompt tool; **`git
-push --force origin main` was executed with no prompt at all** (transcript shows
-the tool call and git's error; `permission_denials` empty). Clockwork's deny-list
-would have refused it (`floor:true`, "force-push to protected branch") — it was
-never consulted. The developer's `~/.claude/settings.json` had no matching allow
-rule, so this is the CLI's own `acceptEdits` behaviour, not a settings leak. The
-run also inherits `HOME`, so any `permissions.allow` rule in that file would be
-honoured before the prompt tool too.
+**Closed 2026-09-06 — the policy floor now sees every Bash call (ADR-035).**
+Probed 2026-09-05 through the production runner on CLI 2.1.261 under
+`acceptEdits`: `npm view left-pad version` was sent to the prompt tool, but
+**`git push --force origin main` executed with no prompt at all** — the CLI's own
+`acceptEdits` behaviour, not a settings leak. The deny-list would have refused it
+and was never consulted.
 
-Until this is closed, "a policy floor denies catastrophic commands" is true only
-for commands the CLI chooses to prompt for. Candidate fixes, for the maker to
-choose: run unattended tasks in `default` mode now that the bridge exists (every
-non-allowlisted call is asked, so the floor evaluates everything — at the cost of
-more prompts); inject the floor as CLI `permissions.deny` rules via `--settings`;
-pin `--setting-sources` so a developer's interactive allow rules never apply to
-an unattended run.
+The fix: every run injects a Claude Code `PreToolUse` hook (matcher `Bash`)
+through `--settings`. The hook (`packages/runner/src/floor-hook.ts`, generated
+per run next to the MCP config, no imports beyond `node:http`) posts the command
+to the bridge's `/floor` route, where the supervisor runs `evaluateCommand`; a
+floor hit exits 2 and the CLI refuses the call with the reason. It is
+**fail-closed**: bridge unreachable, malformed input, timeout — every error path
+also exits 2, so a CLI format change breaks runs loudly instead of silently
+un-protecting them. Hooks fire in every permission mode, so coverage no longer
+depends on what the CLI chooses to prompt for. Cost per Bash call: about 60 ms
+(Node start plus one loopback round trip, median of ten).
+
+Verified 2026-09-06 through the production `runner-child`: `npm view …` still
+prompted (bridge intact), `git push --force origin main` came back as
+"force-push to protected branch 'main' is blocked by global deny-list" and never
+ran; recorded as a `policy_deny` event and a `deny_list_hit` journal entry.
+
+**Still open, surfaced not hidden:** the run inherits `HOME`, so
+`permissions.allow` rules in `~/.claude/settings.json` and the developer's own
+`SessionStart`/`SessionEnd` hooks apply to unattended runs. The floor hook holds
+regardless (deny beats allow in the CLI's hook precedence); pinning
+`--setting-sources` is a product decision left open.
 
 ## Reporting a security issue
 
