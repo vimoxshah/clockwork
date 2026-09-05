@@ -9,6 +9,8 @@
  * request only — never logged or persisted.
  */
 import { writeFileSync } from 'node:fs';
+import { buildRunEnv } from './run-env.js';
+import { applySandbox, toolCacheEnv, type SandboxSpec } from './sandbox.js';
 
 export interface ApiAgentJob {
   baseUrl: string;
@@ -19,6 +21,8 @@ export interface ApiAgentJob {
   cwd: string;
   maxTurns: number;
   timeoutSec: number;
+  /** Seatbelt spec for the agent's shell. null = CW_SANDBOX=off (caller logs it). */
+  sandbox?: SandboxSpec | null;
   onLog?: (line: string) => void;
 }
 
@@ -87,7 +91,7 @@ export async function runApiAgent(job: ApiAgentJob): Promise<ApiAgentResult> {
 
       messages.push(choice as { role: string; content: string | null });
       for (const tc of choice.tool_calls) {
-        const result = await execTool(tc.function.name, JSON.parse(tc.function.arguments || '{}'), job.cwd);
+        const result = await execTool(tc.function.name, JSON.parse(tc.function.arguments || '{}'), job.cwd, job.sandbox ?? null);
         log(`[api-agent] tool ${tc.function.name} → ${result.slice(0, 120).replace(/\n/g, ' ')}`);
         messages.push({ role: 'tool', tool_call_id: tc.id, name: tc.function.name, content: result.slice(0, 12_000) });
       }
@@ -118,14 +122,22 @@ const TOOLS = [
   },
 ];
 
-async function execTool(name: string, args: Record<string, string>, cwd: string): Promise<string> {
+async function execTool(name: string, args: Record<string, string>, cwd: string, sandbox: SandboxSpec | null): Promise<string> {
   const { execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
   const run = promisify(execFile);
   if (name === 'run_command') {
     const command = args.command ?? '';
     try {
-      const { stdout } = await run('/bin/bash', ['-c', command], { cwd, timeout: 120_000, maxBuffer: 4 * 1024 * 1024 });
+      // The shell gets the same allowlisted env and Seatbelt wrap as every CLI
+      // engine. Before this it inherited process.env — including the BYOK key.
+      const wrapped = applySandbox(['/bin/bash', '-c', command], sandbox).argv;
+      const { stdout } = await run(wrapped[0]!, wrapped.slice(1), {
+        cwd,
+        env: buildRunEnv(toolCacheEnv()),
+        timeout: 120_000,
+        maxBuffer: 4 * 1024 * 1024,
+      });
       return stdout || '(no output)';
     } catch (e) {
       const err = e as { stdout?: string; stderr?: string; message?: string };
@@ -134,9 +146,17 @@ async function execTool(name: string, args: Record<string, string>, cwd: string)
   }
   if (name === 'write_file') {
     const path = await import('node:path');
-    const target = path.resolve(cwd, args.path ?? 'untitled.txt');
-    if (!target.startsWith(path.resolve(cwd))) return 'ERROR: path escapes workspace';
-    writeFileSync(target, args.content ?? '');
+    const { existsSync, realpathSync } = await import('node:fs');
+    // This write happens in the unsandboxed runner-child, so the prefix check
+    // IS the boundary. Resolve symlinks first: a link inside the worktree that
+    // points at ~/.ssh/authorized_keys passes a plain string-prefix test.
+    const root = realpathSync(cwd);
+    const target = path.resolve(root, args.path ?? 'untitled.txt');
+    let probe = target;
+    while (!existsSync(probe)) probe = path.dirname(probe);
+    const real = path.join(realpathSync(probe), path.relative(probe, target));
+    if (real !== root && !real.startsWith(root + path.sep)) return 'ERROR: path escapes workspace';
+    writeFileSync(real, args.content ?? '');
     return `wrote ${args.path}`;
   }
   return `ERROR: unknown tool ${name}`;

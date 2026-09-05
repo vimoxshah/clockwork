@@ -7,6 +7,7 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { buildRunEnv } from './run-env.js';
+import { applySandbox, toolCacheEnv, type SandboxSpec } from './sandbox.js';
 import type { AgentRunner, JobContext, JobSpecLike, RunOutcome } from '@clockwork/shared';
 
 const GRACE_MS = 30_000;
@@ -25,7 +26,7 @@ export class OpenCodeRunner implements AgentRunner {
   readonly engine = 'opencode' as const;
   private livePgids = new Set<number>();
 
-  constructor(private readonly opts: { graceMs?: number } = {}) {}
+  constructor(private readonly opts: { graceMs?: number; sandbox?: SandboxSpec | null } = {}) {}
 
   async start(job: JobSpecLike, ctx: JobContext): Promise<RunOutcome> {
     return this.execute(job, ctx);
@@ -46,9 +47,16 @@ export class OpenCodeRunner implements AgentRunner {
   private execute(job: JobSpecLike, ctx: JobContext): Promise<RunOutcome> {
     return new Promise<RunOutcome>((resolve) => {
       const argv = ['run', buildPrompt(job)];
-      const env = buildRunEnv();
+      const env = buildRunEnv(toolCacheEnv());
 
-      const child: ChildProcess = spawn('opencode', argv, {
+      let wrapped: string[];
+      try {
+        wrapped = applySandbox(['opencode', ...argv], this.opts.sandbox).argv;
+      } catch (e) {
+        resolve({ state: 'failed', failureReason: 'internal', summary: `sandbox profile refused: ${String(e)}`, artifacts: [], costUsd: 0, turns: 0 });
+        return;
+      }
+      const child: ChildProcess = spawn(wrapped[0]!, wrapped.slice(1), {
         cwd: ctx.worktreePath,
         env,
         detached: true,

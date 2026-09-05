@@ -157,6 +157,46 @@ export function pruneBranch(repoPath: string, branch: string): void {
   runGit(['branch', '-D', branch], repoPath);
 }
 
+export interface WorktreeState {
+  exists: boolean;
+  /** uncommitted or untracked changes present */
+  dirty: boolean;
+  /** a git operation was in flight when the process died: rebase | merge | cherry-pick | revert | bisect */
+  interruptedOp: string | null;
+}
+
+/**
+ * What a run left behind. Drives the finalize decision "prune or preserve" and
+ * the report line that tells the human. In a LINKED worktree `.git` is a file
+ * pointing into the main repo's worktrees/ dir, so the operation markers
+ * (rebase-merge, MERGE_HEAD, …) are NOT under <worktree>/.git/ — the only
+ * correct lookup is `git rev-parse --git-path <marker>`.
+ */
+export function inspectWorktree(worktreePath: string): WorktreeState {
+  if (!existsSync(worktreePath)) return { exists: false, dirty: false, interruptedOp: null };
+  const status = runGit(['status', '--porcelain', '--untracked-files=normal'], worktreePath);
+  const dirty = status.code === 0 && status.out.trim().length > 0;
+  const markers: Array<[string, string]> = [
+    ['rebase-merge', 'rebase'],
+    ['rebase-apply', 'rebase'],
+    ['MERGE_HEAD', 'merge'],
+    ['CHERRY_PICK_HEAD', 'cherry-pick'],
+    ['REVERT_HEAD', 'revert'],
+    ['BISECT_LOG', 'bisect'],
+  ];
+  let interruptedOp: string | null = null;
+  for (const [marker, op] of markers) {
+    const r = runGit(['rev-parse', '--git-path', marker], worktreePath);
+    if (r.code !== 0) continue;
+    const p = r.out.trim();
+    if (p && existsSync(path.isAbsolute(p) ? p : path.join(worktreePath, p))) {
+      interruptedOp = op;
+      break;
+    }
+  }
+  return { exists: true, dirty, interruptedOp };
+}
+
 /** Diffstat for the report (FR-15): name-only + numstat vs merge-base. */
 export function diffStat(worktreePath: string, baseSha: string): Array<{ path: string; additions: number; deletions: number; binary: boolean }> {
   const r = runGit(['diff', '--numstat', baseSha], worktreePath);

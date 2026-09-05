@@ -218,8 +218,26 @@ describe('full loop through child process (MockRunner engine)', () => {
     await waitFor(() => stateOf(runId) === 'running');
     const row = db.prepare('SELECT pgid FROM runs WHERE id=?').get(runId) as any;
     expect(row.pgid).toBeGreaterThan(0);
+    // The daemon marks a run 'running' at SPAWN, before the child has executed a
+    // single line — so cancelling on that signal alone races the child's first
+    // message and `sandboxed` would be legitimately null (nothing was contained
+    // because no engine ever launched). Wait for the containment stamp so we are
+    // interrupting a run that is genuinely under way.
+    await waitFor(() =>
+      db.prepare(`SELECT 1 FROM events WHERE run_id=? AND kind='sandbox_status'`).get(runId) !== undefined,
+    );
     rm.cancel(runId);
     await waitFor(() => stateOf(runId) === 'cancelled');
+
+    // An interrupted run keeps its worktree even though it committed nothing —
+    // the S-39 prune is for runs that ENDED cleanly. Before 2026-09-05 this path
+    // force-deleted whatever a killed agent left behind.
+    const done = db.prepare('SELECT worktree_path, report_json FROM runs WHERE id=?').get(runId) as any;
+    expect(existsSync(done.worktree_path)).toBe(true);
+    const report = JSON.parse(done.report_json);
+    expect(report.worktreeState).toEqual({ preserved: true, path: done.worktree_path, dirty: false, interruptedOp: null, reason: 'interrupted' });
+    expect(report.sandboxed).toBe(true); // runner-child reported its containment status before spawning
+
     delete process.env.CW_MOCK_STEP_MS;
     delete process.env.CW_ENGINE;
   }, 60_000);

@@ -78,9 +78,13 @@ jobs:
         id: sum
         run: |
           cd src-tauri/target/release/bundle/dmg
+          # Stable-named copy so the landing page can point at
+          # /releases/latest/download/Clockwork_aarch64.dmg and never go stale.
+          # The versioned file stays: the Homebrew cask pins its sha256 to it.
+          cp Clockwork_*_aarch64.dmg Clockwork_aarch64.dmg
           shasum -a 256 *.dmg > checksums-sha256.txt
           cat checksums-sha256.txt
-          echo "dmg=$(ls *.dmg)" >> $GITHUB_OUTPUT
+          echo "dmg=$(ls Clockwork_[0-9]*_aarch64.dmg)" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release + upload assets (REST, no gh)
         if: startsWith(github.ref, 'refs/tags/')
@@ -98,7 +102,7 @@ jobs:
           \`\`\`
 
           ### Install
-          1. Download Clockwork_${VER}_aarch64.dmg (Apple Silicon)
+          1. Download Clockwork_${VER}_aarch64.dmg (Apple Silicon; Clockwork_aarch64.dmg is the same file under a stable name)
           2. Open the DMG and drag Clockwork to Applications
           3. Launch — pair with your local daemon using ~/.clockwork/api-token
 

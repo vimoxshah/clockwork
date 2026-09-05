@@ -11,6 +11,7 @@ import path from 'node:path';
 import { BudgetGuard } from './budget-guard.js';
 import { classifyError } from './stream-parser.js';
 import { buildRunEnv } from './run-env.js';
+import { applySandbox, toolCacheEnv, type SandboxSpec } from './sandbox.js';
 import type {
   AgentRunner,
   JobContext,
@@ -34,7 +35,7 @@ export class CodexRunner implements AgentRunner {
   readonly engine = 'codex' as const;
   private livePgids = new Set<number>();
 
-  constructor(private readonly opts: { graceMs?: number } = {}) {}
+  constructor(private readonly opts: { graceMs?: number; sandbox?: SandboxSpec | null } = {}) {}
 
   async start(job: JobSpecLike, ctx: JobContext): Promise<RunOutcome> {
     return this.execute(job, ctx);
@@ -61,18 +62,31 @@ export class CodexRunner implements AgentRunner {
         { onLog: (l) => ctx.io.onLog(l) },
       );
 
+      // Exactly one Seatbelt layer. macOS refuses to apply codex's own
+      // `workspace-write` profile inside Clockwork's deny-default profile
+      // (`sandbox_apply: Operation not permitted`, probed 2026-09-05), so when
+      // ours is on, codex's is off and ours is the containment. Only with
+      // CW_SANDBOX=off does codex fall back to its own sandbox.
+      const innerSandbox = this.opts.sandbox ? 'danger-full-access' : 'workspace-write';
       const argv = [
         'exec',
         '--json',
         '--skip-git-repo-check',
         '-s',
-        'workspace-write',
+        innerSandbox,
         ...(job.model ? ['-c', `model="${job.model}"`] : []),
         buildPrompt(job),
       ];
-      const env = buildRunEnv();
+      const env = buildRunEnv(toolCacheEnv());
 
-      const child: ChildProcess = spawn('codex', argv, {
+      let wrapped: string[];
+      try {
+        wrapped = applySandbox(['codex', ...argv], this.opts.sandbox).argv;
+      } catch (e) {
+        resolve({ state: 'failed', failureReason: 'internal', summary: `sandbox profile refused: ${String(e)}`, artifacts: [], costUsd: 0, turns: 0 });
+        return;
+      }
+      const child: ChildProcess = spawn(wrapped[0]!, wrapped.slice(1), {
         cwd: path.join(ctx.worktreePath),
         env,
         detached: true,

@@ -8,15 +8,38 @@
 ### 1. OS sandbox = THE containment boundary
 
 Every run executes inside a per-run macOS Seatbelt profile
-(`packages/runner/src/sandbox.ts`, versioned in source):
+(`packages/runner/src/sandbox.ts`, versioned in source). Every engine spawn —
+Claude, Codex, OpenCode, Hermes, and the BYOK agent's shell — is wrapped by
+`applySandbox()`; `runner-child` builds the spec. A source-reading test
+(`packages/runner/test/runner-env-wiring.test.ts`, "sandbox wiring") fails the
+build if any runner stops calling it.
+
+> **Correction (2026-09-05, ADR-034).** Before this date the profile and its
+> escape tests existed but no production run was inside one — the runner was
+> constructed without a spec. If you installed an earlier build, your runs
+> were contained by the run-env allowlist and worktree isolation only. This
+> document now describes what ships.
 
 **Enforced:**
 - **Writes are default-denied.** A run may write only to:
   - its own worktree or scratch directory,
   - `/dev/null` (git requires it),
-  - scoped engine-state subpaths: `~/.claude/{projects,statsig,shell-snapshots,logs}`.
+  - Clockwork-managed tool caches under `~/.clockwork/cache/` (npm, pnpm,
+    yarn, pip, XDG, cargo, go, gem/bundler, uv, poetry, gradle, composer,
+    nuget) — redirected there by env so package managers work without
+    opening `$HOME`,
+  - the Claude CLI's per-run work dir `/tmp/claude-<uid>/<cwd-slug>` and its
+    cwd-tracking file `/tmp/claude-<hex>-cwd` (exact-name regex; without these
+    the CLI's Bash tool cannot start a shell),
+  - scoped engine-state subpaths: `~/.claude/{projects,statsig,shell-snapshots,logs}`,
+    and for the engine actually running: `~/.codex`, `~/.opencode` + opencode's
+    share/config/cache dirs, or `~/.hermes` (+ hermes's `$HOME/.hermes-tmp.<pid>`
+    staging file by exact-name regex).
   A run **cannot** modify global Claude config that future runs would load, cannot
   write to your home directory, other repos, or system locations.
+- **Escape hatch is loud, never silent.** `CW_SANDBOX=off` disables the wrap
+  for a run; it is logged in the run's live log, written to the safety journal
+  as `sandbox_disabled`, and stamped on the report as `sandboxed: false`.
 - **Credential paths are explicitly unreadable:** `~/.ssh`, `~/.aws`, `~/.gnupg`,
   `~/.config/gcloud`, browser profiles, cookies, shell histories.
   Symlinks are resolved at profile-generation time; a context root pointing into
@@ -75,10 +98,35 @@ jobs. Imported templates/profiles arrive disabled with a security preview.
 
 ## Engine capability honesty
 
-The default engine (headless `claude -p`) has no permission-callback hook as of
-CLI 2.1.238 (verified, ADR-020): M1 runs fail safe on permission blocks rather
-than hanging. HITL approvals require the SDK engine (opt-in). Capability flags
-drive the UI so it degrades honestly per engine.
+The Claude engine (headless `claude -p`) asks Clockwork before each gated tool
+call through `--permission-prompt-tool`, served by a loopback HTTP MCP server in
+the runner (verified on CLI 2.1.261, ADR-034 — this replaces ADR-020's "no hook
+as of 2.1.238"). A request **holds until a human answers or the run's wall-clock
+budget ends**, then fail-safe denies; both outcomes are recorded. The tool is not
+visible to the model, so the agent cannot approve itself.
+
+Codex, OpenCode and Hermes expose no permission hook; for them the sandbox and
+budgets are the containment, and the UI hides approval affordances. There is no
+"SDK engine".
+
+**Known gap, not yet closed — the policy floor only sees what the CLI asks
+about.** Probed 2026-09-05 through the production runner on CLI 2.1.261 under
+`acceptEdits`: `npm view left-pad version` was sent to the prompt tool; **`git
+push --force origin main` was executed with no prompt at all** (transcript shows
+the tool call and git's error; `permission_denials` empty). Clockwork's deny-list
+would have refused it (`floor:true`, "force-push to protected branch") — it was
+never consulted. The developer's `~/.claude/settings.json` had no matching allow
+rule, so this is the CLI's own `acceptEdits` behaviour, not a settings leak. The
+run also inherits `HOME`, so any `permissions.allow` rule in that file would be
+honoured before the prompt tool too.
+
+Until this is closed, "a policy floor denies catastrophic commands" is true only
+for commands the CLI chooses to prompt for. Candidate fixes, for the maker to
+choose: run unattended tasks in `default` mode now that the bridge exists (every
+non-allowlisted call is asked, so the floor evaluates everything — at the cost of
+more prompts); inject the floor as CLI `permissions.deny` rules via `--settings`;
+pin `--setting-sources` so a developer's interactive allow rules never apply to
+an unattended run.
 
 ## Reporting a security issue
 

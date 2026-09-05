@@ -47,6 +47,21 @@ export const DeliveryReceipt = z.object({
 });
 export type DeliveryReceipt = z.infer<typeof DeliveryReceipt>;
 
+/**
+ * What happened to the run's worktree at finalize. `reason` names why it was
+ * kept — 'committed' | 'interrupted' | 'in_progress_op' | 'dirty' — and is null
+ * when it was pruned (clean, committed nothing, ended normally) or when the run
+ * had no repo.
+ */
+export const WorktreeStateRecord = z.object({
+  preserved: z.boolean(),
+  path: z.string().nullable(),
+  dirty: z.boolean(),
+  interruptedOp: z.string().nullable(),
+  reason: z.string().nullable(),
+});
+export type WorktreeStateRecord = z.infer<typeof WorktreeStateRecord>;
+
 export const RunReport = z.object({
   runId: z.string(),
   taskId: z.string(),
@@ -63,6 +78,8 @@ export const RunReport = z.object({
   baseSha: z.string().nullable(),
   basedOnLocalState: z.boolean().default(false), // S-35 banner
   committedSomething: z.boolean().default(false), // S-39: analysis-only runs are valid
+  sandboxed: z.boolean().nullable().default(null), // false = CW_SANDBOX=off; null = engine never reported
+  worktreeState: WorktreeStateRecord.nullable().default(null), // null = no repo, or report predates the field
   diffStat: z.array(DiffFileStat).default([]),
   artifacts: z.array(z.string()).default([]),
   transcriptPath: z.string().nullable(),

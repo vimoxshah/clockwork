@@ -24,6 +24,7 @@ import {
   diffStat,
   hasCommitsBeyondBase,
   preflightRepo,
+  inspectWorktree,
   pruneBranch,
   removeWorktree,
   runGit,
@@ -215,6 +216,7 @@ export class RunManager {
       LANG: process.env.LANG ?? 'en_US.UTF-8',
       CW_ENGINE: process.env.CW_ENGINE ?? '', // test hook only
       ...(process.env.CW_MOCK_STEP_MS ? { CW_MOCK_STEP_MS: process.env.CW_MOCK_STEP_MS } : {}), // test hook
+      ...(process.env.CW_SANDBOX ? { CW_SANDBOX: process.env.CW_SANDBOX } : {}), // escape hatch; journaled + stamped on the report
       ...this.byokEnv(spec), // BYOK credential injection (ADR-027/028) — keychain read happens here, in the daemon
       ...(process.env.USER ? { USER: process.env.USER } : {}),
       ...(process.env.LOGNAME ? { LOGNAME: process.env.LOGNAME } : {}),
@@ -348,16 +350,31 @@ export class RunManager {
         this.deps.broadcast({ type: 'usage.updated', window: kind, at: now });
         break;
       }
+      case 'sandbox': {
+        this.recordEvent(now, runId, 'sandbox_status', { enabled: msg.enabled, profileVersion: msg.profileVersion });
+        if (!msg.enabled) this.deps.safetyJournal.record('sandbox_disabled', 'CW_SANDBOX=off', runId);
+        break;
+      }
+      case 'floor': {
+        // PreToolUse policy-floor hit (FR-11/T-114): denied outside the normal
+        // permission flow, so it gets its own event + safety-journal entry
+        // rather than riding the 'permission'/approval path above.
+        this.recordEvent(now, runId, 'policy_deny', { tool: msg.tool, command: msg.command.slice(0, 300), reason: msg.reason });
+        this.deps.safetyJournal.record('deny_list_hit', `${msg.tool}: ${msg.reason}`, runId);
+        break;
+      }
       case 'permission': {
-        // Record the request; the child holds its callback open for ~2 min.
-        // A human decision (POST /approvals/:id/respond → respondToChild)
-        // reaches the live run; otherwise the child fail-safe auto-denies
-        // (M1 unattended mode, ADR-020) and finalize resolves the row.
+        // Record the request; the child holds its callback open until a human
+        // answers or the run's wall-clock budget ends (mirrors runner-child).
+        // A decision (POST /approvals/:id/respond → respondToChild) reaches the
+        // live run; otherwise the child fail-safe denies and finalize resolves the row.
         const approvalId = newId();
         const reqId = (msg as { reqId?: string }).reqId ?? null;
+        const startedAt = this.getRun(runId)?.started_at ?? now;
+        const timeoutAt = Math.max(now + 5_000, startedAt + spec.budget.timeoutSec * 1000);
         this.deps.db
           .prepare(`INSERT INTO approvals (id, run_id, kind, payload_json, requested_at, timeout_at, fallback) VALUES (?, ?, 'permission', ?, ?, ?, ?)`)
-          .run(approvalId, runId, JSON.stringify({ tool: msg.tool, reqId }), now, now + 120_000, 'deny-and-continue');
+          .run(approvalId, runId, JSON.stringify({ tool: msg.tool, reqId }), now, timeoutAt, 'deny-and-continue');
         this.recordEvent(now, runId, 'approval_requested', { tool: msg.tool, reqId });
         this.deps.broadcast({ type: 'approval.requested', approvalId, runId, at: now });
         break;
@@ -397,6 +414,42 @@ export class RunManager {
       }
     }
 
+    // S-39, narrowed (2026-09-05): "analysis-only runs leave no litter" applies
+    // only when the run ENDED cleanly and the worktree IS clean. A run killed by
+    // timeout, budget, cancel or crash — or one that left uncommitted work or a
+    // rebase/merge in flight — keeps its worktree for the next run or the human
+    // to recover. Before this, `git worktree remove --force` erased exactly the
+    // half-done state a timed-out rebase leaves behind.
+    let worktreeState: RunReport['worktreeState'] = null;
+    if (spec.repoPath && r.worktree_path) {
+      const inspected = inspectWorktree(r.worktree_path);
+      if (inspected.exists) {
+        const interrupted =
+          outcome.state === 'timed_out' ||
+          outcome.state === 'budget_exceeded' ||
+          outcome.state === 'cancelled' ||
+          (outcome.state === 'failed' && ('failureReason' in outcome ? outcome.failureReason : undefined) === 'runner_crashed');
+        const reason = committedSomething
+          ? 'committed'
+          : interrupted
+            ? 'interrupted'
+            : inspected.interruptedOp
+              ? 'in_progress_op'
+              : inspected.dirty
+                ? 'dirty'
+                : null;
+        if (reason === null && r.branch) {
+          try {
+            removeWorktree(spec.repoPath, r.worktree_path);
+            pruneBranch(spec.repoPath, r.branch);
+          } catch {}
+          worktreeState = { preserved: false, path: null, dirty: false, interruptedOp: null, reason: null };
+        } else {
+          worktreeState = { preserved: true, path: r.worktree_path, dirty: inspected.dirty, interruptedOp: inspected.interruptedOp, reason };
+        }
+      }
+    }
+
     const report: RunReport = {
       runId,
       taskId: spec.taskId,
@@ -412,6 +465,8 @@ export class RunManager {
       baseSha: null,
       basedOnLocalState: false,
       committedSomething,
+      sandboxed: this.sandboxedFor(runId),
+      worktreeState,
       diffStat: diffRows,
       artifacts: outcome.artifacts ?? [],
       transcriptPath: outcome.transcriptPath ?? null,
@@ -436,14 +491,6 @@ export class RunManager {
       queueDelayMs: r.started_at && r.scheduled_for ? Math.max(0, r.started_at - r.scheduled_for) : 0,
       repoLockDelayMs: 0,
     };
-
-    // S-39: analysis-only runs → prune branch immediately
-    if (spec.repoPath && !committedSomething && r.branch && existsSync(r.worktree_path ?? '')) {
-      try {
-        removeWorktree(spec.repoPath, r.worktree_path!);
-        pruneBranch(spec.repoPath, r.branch);
-      } catch {}
-    }
 
     const tx = this.deps.db.transaction(() => {
       const terminalMap: Record<string, RunState> = {
@@ -756,6 +803,20 @@ export class RunManager {
       .prepare(`SELECT occurrence_at FROM schedule_occurrences WHERE schedule_id=? AND disposition='coalesced' ORDER BY occurrence_at DESC LIMIT 50`)
       .all(scheduleId) as unknown as Array<{ occurrence_at: number }>;
     return rows.map((r) => r.occurrence_at);
+  }
+
+  /** What the child reported before spawning its engine; null for runs that predate the protocol message. */
+  private sandboxedFor(runId: string): boolean | null {
+    const row = this.deps.db
+      .prepare(`SELECT data_json FROM events WHERE run_id=? AND kind='sandbox_status' ORDER BY at DESC LIMIT 1`)
+      .get(runId) as { data_json: string } | undefined;
+    if (!row) return null;
+    try {
+      const d = JSON.parse(row.data_json) as { enabled?: unknown };
+      return typeof d.enabled === 'boolean' ? d.enabled : null;
+    } catch {
+      return null;
+    }
   }
 
   approvalsFor(runId: string): Array<{ id: string; kind: string; requestedAt: number }> {

@@ -51,3 +51,41 @@ describe('runner env wiring', () => {
     expect(offenders, `runners declaring their own env object: ${offenders.join(', ')}`).toEqual([]);
   });
 });
+
+/**
+ * Sandbox wiring. sandbox.ts and its escape suite prove the PROFILE contains
+ * a process; nothing below proves a production run is ever inside one. Until
+ * this block existed, no runner was — `new ClaudeCliRunner()` at the
+ * runner-child call site passed no spec, and the other engines had no hook at
+ * all — while docs/security.md said "every run executes inside a per-run
+ * macOS Seatbelt profile". Same source-reading approach as above, same reason.
+ */
+const RUNNER_CHILD = resolve(SRC, '../../daemon/src/runner-child.ts');
+const API_AGENT = 'api-agent-runner.ts';
+
+describe('sandbox wiring', () => {
+  it('every engine runner routes its argv through the shared sandbox helper', () => {
+    const offenders = RUNNERS.filter((f) => !/applySandbox\(/.test(read(f)));
+    expect(offenders, `runners that never wrap with sandbox-exec: ${offenders.join(', ')}`).toEqual([]);
+  });
+
+  it('the BYOK api-agent shell also routes through the sandbox helper and the env allowlist', () => {
+    const src = read(API_AGENT);
+    expect(/applySandbox\(/.test(src), 'api-agent-runner never wraps its bash in sandbox-exec').toBe(true);
+    expect(/buildRunEnv\(/.test(src), 'api-agent-runner execFile inherits process.env (leaks CW_BYOK_KEY)').toBe(true);
+  });
+
+  it('runner-child constructs a SandboxSpec and hands it to every runner it builds', () => {
+    expect(existsSync(RUNNER_CHILD), 'runner-child.ts moved — guard is blind').toBe(true);
+    const src = readFileSync(RUNNER_CHILD, 'utf8');
+    expect(/buildSandboxSpec\(/.test(src), 'runner-child never builds a SandboxSpec').toBe(true);
+    // A constructor call with no options is exactly the production bug this guards against.
+    const bare = src.match(/new (ClaudeCliRunner|CodexRunner|OpenCodeRunner|HermesRunner)\(\s*\)/g) ?? [];
+    expect(bare, `runners constructed with no sandbox option: ${bare.join(', ')}`).toEqual([]);
+  });
+
+  it('runner-child scrubs the BYOK key from its own env after reading it', () => {
+    const src = readFileSync(RUNNER_CHILD, 'utf8');
+    expect(/delete process\.env\.CW_BYOK_KEY/.test(src), 'CW_BYOK_KEY stays readable by every child the agent spawns').toBe(true);
+  });
+});

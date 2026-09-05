@@ -332,6 +332,21 @@ function ReportDetail({ runId, version }: { runId: string; version: number }): J
         <div className="empty">Report not finalized yet — check back once the run completes.</div>
       )}
       <FailureBanner reason={run.outcome_reason} />
+      {report?.sandboxed === false && (
+        <div className="error-banner" role="alert">
+          <strong>Sandbox was off for this run</strong> (CW_SANDBOX=off). Writes and credential reads were not contained.
+        </div>
+      )}
+      {report?.worktreeState?.preserved && report.worktreeState.reason !== 'committed' && (
+        <div className="hint mono">
+          Worktree preserved at {report.worktreeState.path}
+          {report.worktreeState.interruptedOp
+            ? ` — interrupted during ${report.worktreeState.interruptedOp}; inspect before the next run touches it`
+            : report.worktreeState.dirty
+              ? ' — uncommitted changes left behind'
+              : ' — the run was interrupted, so nothing was pruned'}
+        </div>
+      )}
 
       {report?.diffStat?.length > 0 && (
         <table className="diffstat-table mono">

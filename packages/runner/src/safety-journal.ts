@@ -12,7 +12,9 @@ export type JournalKind =
   | 'budget_hard_stop'
   | 'approval_decision'
   | 'orphan_terminated'
-  | 'preflight_failure';
+  | 'preflight_failure'
+  /** CW_SANDBOX=off escape hatch used for a run — loud by design. */
+  | 'sandbox_disabled';
 
 export interface JournalEntry {
   at: number;
