@@ -1,6 +1,6 @@
 {
   "name": "clockwork",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "description": "The calendar where your agents show up for work.",
   "packageManager": "pnpm@11.22.0",
