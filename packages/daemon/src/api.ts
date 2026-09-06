@@ -6,7 +6,7 @@
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import { z } from 'zod';
 import fastifyStatic from '@fastify/static';
-import { existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, renameSync, realpathSync, statSync } from 'node:fs';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { randomBytes, timingSafeEqual, createHash } from 'node:crypto';
@@ -96,6 +96,57 @@ export function rotateToken(dataDir: string): string {
   return next;
 }
 
+/**
+ * Shared $HOME confinement + credential-directory refusal, used by both
+ * /fs/browse and POST /calendars/ics/import-path. Extracted so there is
+ * exactly one place that decides what a path is allowed to touch — callers
+ * translate `reason` into their own route-appropriate status code and
+ * wording.
+ *
+ * Reimport does NOT call this: its sourcePath was already guarded once, at
+ * import time, and re-validating a path the daemon itself recorded would
+ * only let it silently start ignoring a source whose containing directory
+ * later (legitimately) picked up a `.git`-style false positive. It still
+ * fails safely — a missing/unreadable file 422s below.
+ */
+type HomeGuardResult = { ok: true; path: string } | { ok: false; reason: 'not_found' | 'outside_home' | 'credential_dir' };
+
+function guardHomeScopedPath(inputPath: string): HomeGuardResult {
+  const home = process.env.HOME ?? '/';
+  let real: string;
+  try {
+    real = realpathSync(inputPath);
+  } catch {
+    return { ok: false, reason: 'not_found' };
+  }
+  if (!(real === home || real.startsWith(home + '/'))) {
+    return { ok: false, reason: 'outside_home' };
+  }
+  for (const deny of ['.ssh', '.aws', '.gnupg', 'Library/Keychains']) {
+    if (real.includes(deny)) return { ok: false, reason: 'credential_dir' };
+  }
+  return { ok: true, path: real };
+}
+
+// Body-size ceiling for POST /calendars/ics/import: JSON-wrapping a 5 MiB ICS
+// payload (ics.ts MAX_ICS_BYTES) adds escaping + envelope overhead, and
+// Fastify's own default bodyLimit (1 MiB) would otherwise reject a legitimate
+// upload before the route ever runs its own, more specific 422. Route-scoped
+// so every other endpoint keeps the stock 1 MiB ceiling.
+const IMPORT_BODY_LIMIT = 12 * 1024 * 1024;
+
+/** label precedence: explicit body.label > X-WR-CALNAME > filename w/o extension > fallback. */
+function deriveImportLabel(explicit: unknown, calName: string | null, filename: string): string {
+  const trimmedExplicit = typeof explicit === 'string' ? explicit.trim() : '';
+  if (trimmedExplicit) return trimmedExplicit;
+  if (calName && calName.trim()) return calName.trim();
+  if (filename) {
+    const base = filename.replace(/\.[^./\\]+$/, '').trim();
+    if (base) return base;
+  }
+  return 'Imported calendar';
+}
+
 export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance; token: string; sseClients: Set<FastifyReply> }> {
   const app = Fastify({ logger: false });
 
@@ -153,6 +204,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       /^\/(analytics|retention|audit|policies|capabilities|targets|byok|delivery-config|triggers|trigger-events|ics|usage)/.test(url) ||
       /^\/(license|support|auth)\//.test(url) || // S-review: control plane + diagnostics must not be anonymous
       /^\/(calendars|templates)\//.test(url) || // S-audit: ICS export leaks task data; template preview is control plane
+      /^\/fs\//.test(url) || // /fs/browse discloses directory AND file names under $HOME — never anonymous
       url.startsWith('/events');
     if (!needsAuth) return; // /health + static UI assets carry no user data
     // S-audit: /events used to accept ?token= because EventSource cannot set
@@ -766,24 +818,35 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     }
     bookings.sort((a, b) => a.at - b.at);
 
-    // Human events from subscribed ICS feeds (read-only; never written to).
+    // Human events from calendar sources (read-only; never written to). A
+    // `url` source is re-fetched live; a `file` source is a frozen import —
+    // it is re-parsed from the stored copy and MUST NOT trigger a fetch.
     let humans: Array<{ uid: string; name: string; at: number; allDay: boolean }> = [];
     try {
-      const { loadIcsSources, fetchIcs } = await import('./ics.js');
+      const { loadIcsSources, fetchIcs, readIcsImport, parseIcs } = await import('./ics.js');
       const sources = loadIcsSources(deps.dataDir);
       const seen = new Set<string>();
       for (const src of sources) {
         try {
-          const res = await fetchIcs(src.url);
-          if (!res.ok || !res.events) continue;
-          for (const ev of res.events) {
+          let events: Array<{ uid: string; summary: string; startMs: number; allDay: boolean }> | undefined;
+          if (src.kind === 'file') {
+            const text = readIcsImport(deps.dataDir, src.id);
+            if (text == null) continue;
+            events = parseIcs(text);
+          } else {
+            if (!src.url) continue;
+            const res = await fetchIcs(src.url);
+            if (!res.ok || !res.events) continue;
+            events = res.events;
+          }
+          for (const ev of events) {
             if (ev.startMs < from || ev.startMs > to) continue;
             if (seen.has(ev.uid)) continue;
             seen.add(ev.uid);
             humans.push({ uid: ev.uid, name: ev.summary, at: ev.startMs, allDay: ev.allDay });
           }
         } catch {
-          /* one bad feed must not break the calendar */
+          /* one bad feed/import must not break the calendar */
         }
       }
       humans.sort((a, b) => a.at - b.at);
@@ -794,7 +857,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     return { from, to, runs: runRows, bookings, humans };
   });
 
-  // ---- ICS calendar sources (read-only subscriptions; Settings → Calendars) ----
+  // ---- ICS calendar sources (read-only subscriptions + frozen file imports; Settings → Calendars) ----
   app.get('/calendars/ics', async () => {
     const { loadIcsSources } = await import('./ics.js');
     return loadIcsSources(deps.dataDir);
@@ -809,15 +872,143 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     if (!probe.ok) return reply.code(422).send({ error: probe.error ?? 'feed unreachable' });
     const sources = loadIcsSources(deps.dataDir);
     const id = `ics_${Date.now().toString(36)}`;
-    sources.push({ id, url, label });
+    sources.push({
+      id, kind: 'url', url, label,
+      importedAt: null, eventCount: null, sourcePath: null, sourceName: null,
+    });
     saveIcsSources(deps.dataDir, sources);
     return { id, label, url, events: probe.events?.length ?? 0 };
   });
+
+  // Upload: the browser reads the file and posts its text. Frozen snapshot —
+  // re-import (re-upload) is the only way to refresh it, since there is no
+  // path on this machine to re-read from.
+  app.post('/calendars/ics/import', { bodyLimit: IMPORT_BODY_LIMIT }, async (req, reply) => {
+    const body = req.body as any;
+    const content = typeof body?.content === 'string' ? body.content : '';
+    if (!content) return reply.code(422).send({ error: 'no calendar content was provided' });
+    const { validateAndParseIcs, loadIcsSources, saveIcsSources, writeIcsImport } = await import('./ics.js');
+    const result = validateAndParseIcs(content);
+    if (!result.ok) return reply.code(422).send({ error: result.error });
+    const filename = typeof body?.filename === 'string' ? body.filename.trim() : '';
+    const label = deriveImportLabel(body?.label, result.calName ?? null, filename);
+    const id = `ics_${newId()}`;
+    writeIcsImport(deps.dataDir, id, content);
+    const importedAt = Date.now();
+    const eventCount = result.events?.length ?? 0;
+    const sources = loadIcsSources(deps.dataDir);
+    sources.push({
+      id, kind: 'file', url: null, label,
+      importedAt, eventCount, sourcePath: null, sourceName: filename || null,
+    });
+    saveIcsSources(deps.dataDir, sources);
+    return reply.code(201).send({ id, kind: 'file', label, eventCount, importedAt });
+  });
+
+  // Import-path: the daemon reads the file itself (so it can be re-imported
+  // later). Confined to $HOME, refuses credential directories — same guard
+  // /fs/browse uses to decide what may even be listed.
+  app.post('/calendars/ics/import-path', async (req, reply) => {
+    const body = req.body as any;
+    const inputPath = typeof body?.path === 'string' ? body.path.trim() : '';
+    if (!inputPath) return reply.code(422).send({ error: 'no path was provided' });
+    if (!/\.(ics|ical)$/i.test(inputPath)) {
+      return reply.code(422).send({ error: 'only .ics or .ical files can be imported' });
+    }
+    const guard = guardHomeScopedPath(inputPath);
+    if (!guard.ok) {
+      if (guard.reason === 'not_found') return reply.code(422).send({ error: 'that file does not exist' });
+      if (guard.reason === 'outside_home') {
+        return reply.code(403).send({ error: 'that path is outside your home folder — only files under $HOME can be imported' });
+      }
+      return reply.code(403).send({ error: 'that path is inside a credential directory and cannot be imported' });
+    }
+    // Re-test the extension on the RESOLVED path: `~/x.ics` may be a symlink to
+    // `~/notes.txt`, and the pre-guard check only saw what the caller typed.
+    if (!/\.(ics|ical)$/i.test(guard.path)) {
+      return reply.code(422).send({ error: 'only .ics or .ical files can be imported' });
+    }
+    const { MAX_ICS_BYTES } = await import('./ics.js');
+    // Check the size before reading. validateAndParseIcs also enforces the
+    // ceiling, but only once the whole file is already in memory — a 400 MB
+    // file under $HOME would be allocated in full just to be refused.
+    try {
+      const st = statSync(guard.path);
+      if (!st.isFile()) return reply.code(422).send({ error: 'that path is not a file' });
+      if (st.size > MAX_ICS_BYTES) {
+        return reply.code(422).send({ error: 'that file is larger than 5 MiB — export a smaller date range and try again' });
+      }
+    } catch {
+      return reply.code(422).send({ error: 'that file does not exist' });
+    }
+    let content: string;
+    try {
+      content = readFileSync(guard.path, 'utf8');
+    } catch (e) {
+      return reply.code(422).send({ error: `could not read that file: ${String((e as Error).message ?? e).slice(0, 100)}` });
+    }
+    const { validateAndParseIcs, loadIcsSources, saveIcsSources, writeIcsImport } = await import('./ics.js');
+    const result = validateAndParseIcs(content);
+    if (!result.ok) return reply.code(422).send({ error: result.error });
+    const filename = path.basename(guard.path);
+    const label = deriveImportLabel(body?.label, result.calName ?? null, filename);
+    const id = `ics_${newId()}`;
+    writeIcsImport(deps.dataDir, id, content);
+    const importedAt = Date.now();
+    const eventCount = result.events?.length ?? 0;
+    const sources = loadIcsSources(deps.dataDir);
+    sources.push({
+      id, kind: 'file', url: null, label,
+      importedAt, eventCount, sourcePath: guard.path, sourceName: filename,
+    });
+    saveIcsSources(deps.dataDir, sources);
+    return reply.code(201).send({ id, kind: 'file', label, eventCount, importedAt });
+  });
+
+  // Re-import: re-read sourcePath and replace the stored copy. Only possible
+  // for a file source that was imported FROM a path — an uploaded file has
+  // no path on this machine to go back to.
+  app.post('/calendars/ics/:id/reimport', async (req, reply) => {
+    const id = String((req.params as any).id ?? '');
+    const { loadIcsSources, saveIcsSources, writeIcsImport, validateAndParseIcs, MAX_ICS_BYTES } = await import('./ics.js');
+    const sources = loadIcsSources(deps.dataDir);
+    const idx = sources.findIndex((s) => s.id === id);
+    if (idx === -1) return reply.code(404).send({ error: 'calendar source not found' });
+    const src = sources[idx]!;
+    if (src.kind !== 'file') {
+      return reply.code(409).send({ error: 'this is a live subscription, not an imported file — there is nothing to re-import' });
+    }
+    if (!src.sourcePath) {
+      return reply.code(409).send({ error: 'this calendar was uploaded, not read from a file on disk — import the file again to refresh it' });
+    }
+    let content: string;
+    try {
+      // Same pre-read size guard as import-path: the file may have grown
+      // since it was first imported.
+      const st = statSync(src.sourcePath);
+      if (st.size > MAX_ICS_BYTES) {
+        return reply.code(422).send({ error: 'that file is now larger than 5 MiB — export a smaller date range and import it again' });
+      }
+      content = readFileSync(src.sourcePath, 'utf8');
+    } catch {
+      return reply.code(422).send({ error: 'that file no longer exists at its original location' });
+    }
+    const result = validateAndParseIcs(content);
+    if (!result.ok) return reply.code(422).send({ error: result.error });
+    writeIcsImport(deps.dataDir, id, content);
+    const importedAt = Date.now();
+    const eventCount = result.events?.length ?? 0;
+    sources[idx] = { ...src, eventCount, importedAt };
+    saveIcsSources(deps.dataDir, sources);
+    return { id, eventCount, importedAt };
+  });
+
   app.delete('/calendars/ics/:id', async (req) => {
-    const { loadIcsSources, saveIcsSources } = await import('./ics.js');
+    const { loadIcsSources, saveIcsSources, deleteIcsImport } = await import('./ics.js');
     const id = String((req.params as any).id ?? '');
     const remaining = loadIcsSources(deps.dataDir).filter((s) => s.id !== id);
     saveIcsSources(deps.dataDir, remaining);
+    deleteIcsImport(deps.dataDir, id);
     return { removed: id, kept: remaining.length };
   });
 
@@ -1426,36 +1617,48 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     }
   });
 
-  // ---- filesystem browse (repo picker; read-only, home-scoped) ----
+  // ---- filesystem browse (repo picker / ICS file picker; read-only, home-scoped) ----
   app.get('/fs/browse', async (req, reply) => {
     const { readdirSync, statSync } = await import('node:fs');
     const home = process.env.HOME ?? '/';
     let dir = String((req.query as any).path ?? '').trim() || home;
-    try {
-      dir = (await import('node:fs')).realpathSync(dir);
-    } catch {
-      return reply.code(422).send({ error: 'path not found' });
+    // Safety: stay under $HOME and never list credential dirs (shared with import-path).
+    const guard = guardHomeScopedPath(dir);
+    if (!guard.ok) {
+      if (guard.reason === 'not_found') return reply.code(422).send({ error: 'path not found' });
+      if (guard.reason === 'outside_home') return reply.code(403).send({ error: 'outside home directory' });
+      return reply.code(403).send({ error: 'credential directory' });
     }
-    // Safety: stay under $HOME and never list credential dirs.
-    if (!(dir === home || dir.startsWith(home + '/'))) {
-      return reply.code(403).send({ error: 'outside home directory' });
-    }
-    for (const deny of ['.ssh', '.aws', '.gnupg', 'Library/Keychains']) {
-      if (dir.includes(deny)) return reply.code(403).send({ error: 'credential directory' });
-    }
+    dir = guard.path;
+    // Optional `files=ics,ical` — when present, matching FILES are listed
+    // alongside directories. Absent = unchanged directories-only behaviour.
+    const filesParam = String((req.query as any).files ?? '').trim();
+    const wantExts = filesParam
+      ? new Set(filesParam.split(',').map((e) => e.trim().toLowerCase()).filter(Boolean))
+      : null;
     let entries: Array<{ name: string; type: 'dir' | 'file'; isGit: boolean }> = [];
     try {
-      entries = readdirSync(dir, { withFileTypes: true })
+      const dirents = readdirSync(dir, { withFileTypes: true });
+      const dirEntries = dirents
         .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
-        .slice(0, 500)
         .map((e) => {
           let isGit = false;
           try {
             isGit = statSync(`${dir}/${e.name}/.git`).isDirectory();
           } catch {}
           return { name: e.name, type: 'dir' as const, isGit };
-        })
-        .sort((a, b) => a.name.localeCompare(b.name));
+        });
+      const fileEntries = wantExts
+        ? dirents
+            .filter((e) => e.isFile() && !e.name.startsWith('.'))
+            .filter((e) => wantExts!.has((e.name.split('.').pop() ?? '').toLowerCase()))
+            .map((e) => ({ name: e.name, type: 'file' as const, isGit: false }))
+        : [];
+      // Cap each kind separately. Concatenating first meant a folder with 500+
+      // subdirectories listed none of the files the caller explicitly asked for.
+      entries = [...dirEntries.slice(0, 500), ...fileEntries.slice(0, 500)].sort((a, b) =>
+        a.name.localeCompare(b.name),
+      );
     } catch (e) {
       return reply.code(500).send({ error: `unreadable: ${String(e).slice(0, 60)}` });
     }
