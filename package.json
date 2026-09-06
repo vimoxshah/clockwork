@@ -9,7 +9,7 @@
   },
   "scripts": {
     "lint": "eslint 'packages/*/src/**/*.ts?(x)' 'packages/*/test/**/*.ts' 'spikes/src/**/*.ts'",
-    "typecheck": "tsc -b packages/shared packages/runner packages/daemon",
+    "typecheck": "tsc -b packages/shared packages/runner packages/daemon && tsc --noEmit -p packages/ui",
     "test": "vitest run",
     "test:watch": "vitest",
     "build": "pnpm -r --filter './packages/*' build",
