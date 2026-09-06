@@ -41,7 +41,7 @@ import { TaskRepo, ProfileRepo, RunRepo, indexTask } from './repo.js';
 import { PlanExecute } from './plan-execute.js';
 import type { RunManager } from './run-manager.js';
 import type { Scheduler } from './scheduler.js';
-import { nextOccurrenceAfter } from './recurrence.js';
+import { nextOccurrenceAfter, type ScheduleLike } from './recurrence.js';
 import { OfficeHours, isKnownZone } from './office-hours.js';
 import { Sentinels } from './sentinel.js';
 import { isGitRepo } from '@clockwork/runner';
@@ -57,7 +57,17 @@ export interface ApiDeps {
   dataDir: string;
   runManager: RunManager;
   scheduler: Scheduler;
+  /** The version THIS PROCESS started with — fixed for its whole lifetime. */
   version: string;
+  /**
+   * The version the build ON DISK declares right now, re-read on demand. A
+   * long-lived daemon keeps serving `version` while the build under it — and
+   * the UI bundle served out of that build — moves on (S-80, the stale-daemon
+   * trap). Injected rather than imported from ./main.js, which would make
+   * api <-> main a cycle; left unset, /health reports `installedVersion: null`
+   * and never claims a skew it cannot prove.
+   */
+  installedVersion?: () => string | null;
 }
 
 export function loadOrCreateToken(dataDir: string): string {
@@ -168,6 +178,51 @@ export function rotateToken(dataDir: string): string {
   writeFileSync(tmpPath, next, { mode: 0o600 });
   renameSync(tmpPath, finalPath);
   return next;
+}
+
+/**
+ * How far save-time materialization looks for the first fire, one rung at a
+ * time. It stops at the rung that answers, so the work stays proportional to
+ * how OFTEN a schedule fires, not to how far ahead it fires.
+ *
+ * The rungs are not arbitrary:
+ *  - 8 days answers everything sub-daily through weekly, which is where the
+ *    dense rules live. A per-minute rule is decided here and never expanded
+ *    across the wide window (measured: a DTSTART-anchored `FREQ=MINUTELY` costs
+ *    ~18ms at 8 days and ~1.6s at 732).
+ *  - 70 days covers fortnightly and monthly, including `FREQ=MONTHLY;
+ *    BYMONTHDAY=31`, whose Jan-31 → Mar-31 gap is 59 days.
+ *  - 366*2 is `nextOccurrenceAfter`'s own default. The last rung must equal it:
+ *    save then accepts exactly what the scheduler will later be able to
+ *    re-materialize, so nothing can be stored that the tick loop cannot see.
+ */
+const SAVE_HORIZON_LADDER_DAYS = [8, 70, 366 * 2];
+
+/**
+ * First fire for a schedule being SAVED. Returns null only when the schedule
+ * genuinely has no future occurrence the scheduler could ever reach.
+ *
+ * A single narrow window is the bug this replaces: at seven days, a monthly or
+ * fortnightly recurrence created mid-cycle has no occurrence to find, so an
+ * RRULE was refused outright ("RRULE has no future occurrences") and a cron was
+ * stored with `next_fire = NULL` — which `Scheduler.tick`'s `next_fire IS NOT
+ * NULL` filter then ignores forever.
+ *
+ * @param s the schedule to expand (rrule or cron; `once` never comes here).
+ * @param afterMs materialize the first occurrence strictly after this instant.
+ * @param resolve expander, injectable so tests can observe the rungs tried.
+ * @returns the first fire in UTC epoch ms, or null when there is none.
+ */
+export function nextFireForSave(
+  s: ScheduleLike,
+  afterMs: number,
+  resolve: (s: ScheduleLike, afterMs: number, horizonDays?: number) => number | null = nextOccurrenceAfter,
+): number | null {
+  for (const horizonDays of SAVE_HORIZON_LADDER_DAYS) {
+    const hit = resolve(s, afterMs, horizonDays);
+    if (hit !== null) return hit;
+  }
+  return null;
 }
 
 export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance; token: string; sseClients: Set<FastifyReply> }> {
@@ -432,10 +487,21 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     const nextFire = (
       deps.db.prepare('SELECT MIN(next_fire) nf FROM schedules WHERE enabled=1 AND next_fire IS NOT NULL').get() as any
     ).nf;
+    // Read per request and never cached: the point of the field is that this
+    // process does not change while the file under it does. A throwing reader
+    // is not allowed to be the thing that takes /health down.
+    let installedVersion: string | null = null;
+    try {
+      installedVersion = deps.installedVersion?.() ?? null;
+    } catch {
+      installedVersion = null;
+    }
     return {
       ok: true,
       apiVersion: API_VERSION,
       daemonVersion: deps.version,
+      installedVersion,
+      versionSkew: installedVersion !== null && installedVersion !== deps.version,
       paused: isPaused(),
       activeRuns: active,
       queuedRuns: queued,
@@ -518,7 +584,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       nextFire = input.schedule.runAt ?? null;
     } else if (input.schedule.kind === 'rrule' || input.schedule.kind === 'cron') {
       try {
-        nextFire = nextOccurrenceAfter(
+        nextFire = nextFireForSave(
           {
             kind: input.schedule.kind === 'rrule' ? 'rrule' : 'cron',
             rrule: input.schedule.rrule,
@@ -526,7 +592,6 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
             tz: input.schedule.tz,
           },
           Date.now(),
-          7, // save-time horizon check: must have a fire within a week? no — full horizon but bounded work
         );
         if (nextFire == null && input.schedule.kind === 'rrule') {
           return { ok: false, error: 'RRULE has no future occurrences' };
@@ -1430,6 +1495,9 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       mcp_allow_json: d.mcpAllow ? JSON.stringify(d.mcpAllow) : existing.mcp_allow_json,
       context_roots_json: d.contextRoots ? JSON.stringify(d.contextRoots) : existing.context_roots_json,
       system_prompt_extra: d.systemPromptExtra ?? existing.system_prompt_extra,
+      // upsert persists delivery_json; this merge never supplied one, so a
+      // delivery-config edit was dropped one layer above the repo that stores it.
+      delivery_json: d.delivery ? JSON.stringify(d.delivery) : existing.delivery_json,
     });
     return profiles.get(existing.id);
   });

@@ -276,7 +276,17 @@ export async function main(argv: string[] = process.argv): Promise<number> {
     },
   });
 
-  const { app, token } = await buildServer({ db, dataDir, runManager, scheduler, version: DAEMON_VERSION });
+  // `installedVersion` is the other half of the stale-daemon trap: the drift
+  // watch below only shouts on stderr, which nobody reads. /health carries it
+  // so the UI can put "restart needed" in front of a human.
+  const { app, token } = await buildServer({
+    db,
+    dataDir,
+    runManager,
+    scheduler,
+    version: DAEMON_VERSION,
+    installedVersion: () => readInstalledVersion(),
+  });
 
   // startup sweep (S-14/S-30/S-31/S-81): same path as wake catch-up
   const recovery = runManager.recoverySweep();

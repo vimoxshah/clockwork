@@ -220,3 +220,99 @@ describe('calendar expansion path (/calendar, limit 62) is unchanged', () => {
     expect(got).toEqual(occurrencesBetween(s, from, to, 500).map(iso));
   });
 });
+
+describe('rrule window bounds live in the schedule wall clock, not in UTC', () => {
+  // The rrule branch iterates occurrences as fake-UTC Dates whose UTC
+  // components ARE the schedule's LOCAL wall clock — `wallTimeToUtcMs` is what
+  // turns one into an instant. Bounding `between()` with the UTC components of
+  // the window instants instead slides the whole window by the zone offset:
+  // west of UTC it swallows the first |offset| hours after `from`, east of UTC
+  // it drops the last `offset` hours before `to`.
+
+  it('west of UTC: a 09:00 ET daily materialized at 06:00 ET fires TODAY, not tomorrow', () => {
+    const s: ScheduleLike = { kind: 'rrule', rrule: 'FREQ=DAILY;BYHOUR=9;BYMINUTE=0', tz: 'America/New_York' };
+    const todayAt9 = inZone(2026, 3, 10, 9, 0, 'America/New_York'); // 13:00Z (EDT)
+
+    // 06:00 ET is 10:00Z. A UTC-read window starts at wall 10:00 and never sees
+    // wall 09:00, so the next fire skipped a 09:00 that is three hours away.
+    expect(iso(nextOccurrenceAfter(s, inZone(2026, 3, 10, 6, 0, 'America/New_York'))!)).toBe(iso(todayAt9));
+    // The two neighbours that were already correct must stay correct.
+    expect(iso(nextOccurrenceAfter(s, inZone(2026, 3, 10, 3, 0, 'America/New_York'))!)).toBe(iso(todayAt9));
+    expect(iso(nextOccurrenceAfter(s, inZone(2026, 3, 10, 10, 0, 'America/New_York'))!)).toBe(
+      iso(inZone(2026, 3, 11, 9, 0, 'America/New_York')),
+    );
+  });
+
+  it('west of UTC: the whole offset-wide band after `from` is enumerated, not skipped', () => {
+    // /calendar asks for a forward window starting at "now". With `now` inside
+    // the band [midnight local, midnight local + |offset|) a UTC-read window
+    // loses the first day of every booking series in the zone.
+    const s: ScheduleLike = { kind: 'rrule', rrule: 'FREQ=DAILY;BYHOUR=9;BYMINUTE=0', tz: 'America/New_York' };
+    const from = inZone(2026, 3, 10, 6, 0, 'America/New_York');
+    const to = from + 3 * DAY_MS;
+    expect(occurrencesBetween(s, from, to, 62).map(iso)).toEqual([
+      iso(inZone(2026, 3, 10, 9, 0, 'America/New_York')),
+      iso(inZone(2026, 3, 11, 9, 0, 'America/New_York')),
+      iso(inZone(2026, 3, 12, 9, 0, 'America/New_York')),
+    ]);
+  });
+
+  it('east of UTC: the occurrence landing exactly ON the upper bound is kept', () => {
+    // (fromMsExcl, toMsIncl] is CLOSED above, so `to` itself belongs to the
+    // window. Read in UTC the window ends at wall 00:00 and never reaches the
+    // wall 09:00 that produced it.
+    const s: ScheduleLike = { kind: 'rrule', rrule: 'FREQ=DAILY;BYHOUR=9;BYMINUTE=0', tz: 'Asia/Tokyo' };
+    const from = inZone(2026, 3, 10, 9, 0, 'Asia/Tokyo'); // 2026-03-10T00:00Z
+    const to = inZone(2026, 3, 11, 9, 0, 'Asia/Tokyo'); // 2026-03-11T00:00Z
+    expect(occurrencesBetween(s, from, to, 500).map(iso)).toEqual([iso(to)]);
+  });
+
+  it('a fall-back repeat does not hide occurrences behind the ambiguous upper bound', () => {
+    // America/New_York 2026-11-01: 02:00 EDT rewinds to 01:00 EST, so 05:00Z
+    // and 06:30Z both read as 01:xx local — a 30-minute WALL window over a
+    // 90-minute INSTANT window. The 01:45 occurrence sits above the upper wall
+    // bound while its instant (05:45Z, the S-21 first pass) is inside the
+    // window, so the wall window has to reach past the repeat and let the exact
+    // instant filter do the real bounding. 02:45 local is already EST → 07:45Z,
+    // outside the window, and must NOT come back.
+    const s: ScheduleLike = {
+      kind: 'rrule',
+      rrule: 'DTSTART:20261101T000000Z\nRRULE:FREQ=HOURLY;BYMINUTE=45',
+      tz: 'America/New_York',
+    };
+    const from = Date.parse('2026-11-01T05:00:00.000Z');
+    const to = Date.parse('2026-11-01T06:30:00.000Z');
+    expect(occurrencesBetween(s, from, to, 500).map(iso)).toEqual(['2026-11-01T05:45:00.000Z']);
+  });
+
+  it('a spring-forward gap does not hide the occurrence pushed past the LOWER bound', () => {
+    // The mirror of the fall-back case, and the reason BOTH bounds are padded.
+    // wallTimeToUtcMs resolves a nonexistent local time forward (S-20) and
+    // Luxon shifts it by the whole gap, so on 2026-03-08 wall 02:45 lands at
+    // 03:45 EDT = 07:45Z while wall 03:00 lands at 07:00Z — wall->instant is
+    // NOT monotone across a gap. An occurrence can therefore sit BELOW the
+    // lower wall bound with its instant still ahead of `fromMsExcl`: at 03:30
+    // EDT the 02:45 fire is fifteen minutes in the future, and bounding on the
+    // wall clock alone skips it to the next day.
+    const s: ScheduleLike = { kind: 'rrule', rrule: 'FREQ=DAILY;BYHOUR=2;BYMINUTE=45', tz: 'America/New_York' };
+    const at0330edt = Date.parse('2026-03-08T07:30:00.000Z');
+    expect(iso(nextOccurrenceAfter(s, at0330edt)!)).toBe('2026-03-08T07:45:00.000Z');
+  });
+
+  it('an unresolvable tz degrades exactly as it does today — no throw, no finite instant', () => {
+    // NOT a bug fix, a guard pin. Reading the window in the schedule's zone
+    // means an unresolvable zone now reaches `between()`, and an Invalid Date
+    // bound there would throw instead of degrading. This pins the PRE-EXISTING
+    // contract unchanged: wallTimeToUtcMs already yields NaN for such a zone
+    // (the `at <= from || at > to` filter cannot reject NaN, so it survives
+    // into the result), and /calendar's per-schedule try/catch is what keeps
+    // one broken row from taking the month down.
+    const s: ScheduleLike = { kind: 'rrule', rrule: 'FREQ=DAILY;BYHOUR=9;BYMINUTE=0', tz: 'Not/AZone' };
+    let got: number[] = [];
+    expect(() => {
+      got = occurrencesBetween(s, ANCHOR, ANCHOR + 5 * DAY_MS, 62);
+    }).not.toThrow();
+    expect(got.some((n) => Number.isFinite(n))).toBe(false); // never a plausible-but-wrong instant
+    expect(() => nextOccurrenceAfter(s, ANCHOR)).not.toThrow();
+  });
+});
