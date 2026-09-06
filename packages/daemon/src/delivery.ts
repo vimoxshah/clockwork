@@ -124,7 +124,7 @@ export class OsChannel implements DeliveryChannel {
 export class TelegramChannel implements DeliveryChannel {
   readonly name = 'telegram';
 
-  private async post(text: string, chatId: string, cred: DeliveryConfigCred): Promise<void> {
+  private async post(text: string, chatId: string, cred: DeliveryConfigCred, extra?: Record<string, unknown>): Promise<void> {
     if (!cred.telegramBotToken) throw new Error('missing telegram bot token');
     const res = await fetch(`https://api.telegram.org/bot${cred.telegramBotToken}/sendMessage`, {
       method: 'POST',
@@ -133,6 +133,7 @@ export class TelegramChannel implements DeliveryChannel {
         chat_id: chatId,
         text,
         disable_web_page_preview: true,
+        ...extra,
       }),
     });
     if (!res.ok) {
@@ -145,8 +146,24 @@ export class TelegramChannel implements DeliveryChannel {
     await this.post(formatReportText(payload), chatId, cred);
   }
 
+  /**
+   * Reachable approvals (inbound half, ADR-036): the message carries an
+   * inline keyboard so a decision can be made from the chat itself, without
+   * opening Clockwork. `callback_data` stays well under Telegram's 64-byte
+   * cap (`a:<26-char ULID>` / `d:<26-char ULID>` — 28 bytes). The poller
+   * (telegram-approvals.ts) parses this exact prefix.
+   */
   async sendApproval(payload: ApprovalNotifyPayload, chatId: string, cred: DeliveryConfigCred): Promise<void> {
-    await this.post(formatApprovalText(payload), chatId, cred);
+    await this.post(formatApprovalText(payload), chatId, cred, {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: 'Approve', callback_data: `a:${payload.approvalId}` },
+            { text: 'Deny', callback_data: `d:${payload.approvalId}` },
+          ],
+        ],
+      },
+    });
   }
 }
 

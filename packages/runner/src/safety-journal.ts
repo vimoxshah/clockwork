@@ -14,7 +14,10 @@ export type JournalKind =
   | 'orphan_terminated'
   | 'preflight_failure'
   /** CW_SANDBOX=off escape hatch used for a run — loud by design. */
-  | 'sandbox_disabled';
+  | 'sandbox_disabled'
+  /** Reachable approvals (inbound half, ADR-036): a decision made from a
+   *  remote channel (Telegram inline keyboard) rather than the local UI. */
+  | 'remote_decision';
 
 export interface JournalEntry {
   at: number;

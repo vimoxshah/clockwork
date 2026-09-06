@@ -70,7 +70,8 @@ REPEAT  Make it weekly. Search your retained run history.
   safety rails, and an output contract
 - 🛡 **Human-in-the-loop approvals** — risky actions pause the run and ask you;
   unanswered asks fail safe (never silently approved), and pings your configured
-  channels (macOS notification, Telegram, webhook) when a run is waiting
+  channels (macOS notification, Telegram, webhook) when a run is waiting —
+  approve or deny from Telegram itself, no need to open the app
 - 🧱 **Policy floor in every mode** — force-pushes to protected branches and
   package publishing are refused before they run on the Claude engine, even when
   the CLI would not have asked (a `PreToolUse` hook, fail-closed, ~60 ms per call)

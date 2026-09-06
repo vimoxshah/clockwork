@@ -45,6 +45,18 @@ import {
   type ApprovalNotifyPayload,
 } from './delivery.js';
 
+/** Reachable approvals (ADR-036): where a decision on an approval came from. */
+export type RespondSource = { kind: 'api' } | { kind: 'telegram'; userId: string; chatId: string };
+
+/** Discriminated outcome of RunManager.respondToApproval — see its docstring. */
+export type RespondResult =
+  | { status: 'resolved'; forwarded: boolean }
+  | { status: 'run_gone'; forwarded: false }
+  | { status: 'already_resolved' }
+  | { status: 'not_found' };
+
+export type ApprovalDecision = 'approved' | 'denied';
+
 export interface RunManagerDeps {
   db: DB;
   clock: Clock;
@@ -846,6 +858,66 @@ export class RunManager {
     }
   }
 
+  /**
+   * Reachable approvals (ADR-036): the ONE place a human decision is ever
+   * recorded, whichever surface it came from (the local API route, or a
+   * Telegram inline-keyboard tap). CAS on responded_at (S-57, first writer
+   * wins) → forward to the live child if one is still holding the decision
+   * window open → broadcast → journal a remote_decision for non-local
+   * sources. Both callers get identical CAS/forwarding/broadcast behaviour by
+   * construction, since there is exactly one code path.
+   */
+  respondToApproval(
+    approvalId: string,
+    decision: ApprovalDecision,
+    source: RespondSource,
+    extra?: Record<string, unknown>,
+  ): RespondResult {
+    const now = this.deps.clock.now();
+    const responseJson = JSON.stringify({ ...(extra ?? {}), decision, source });
+    const upd = this.deps.db
+      .prepare(`UPDATE approvals SET responded_at=?, response_json=? WHERE id=? AND responded_at IS NULL`)
+      .run(now, responseJson, approvalId);
+    if (upd.changes === 0) {
+      const exists = this.deps.db.prepare('SELECT id FROM approvals WHERE id=?').get(approvalId);
+      return { status: exists ? 'already_resolved' : 'not_found' };
+    }
+
+    // Forward into the live run when the child's decision window is still open.
+    let forwarded = false;
+    let hadReqId = false;
+    let runId: string | null = null;
+    try {
+      const row = this.deps.db.prepare('SELECT run_id, payload_json FROM approvals WHERE id=?').get(approvalId) as any;
+      if (row) {
+        runId = row.run_id;
+        const payload = typeof row.payload_json === 'string' ? JSON.parse(row.payload_json) : row.payload_json ?? {};
+        if (payload.reqId) {
+          hadReqId = true;
+          forwarded = this.respondToChild(row.run_id, String(payload.reqId), decision === 'approved');
+        }
+      }
+    } catch {
+      /* forwarding best-effort; the CAS record stands either way */
+    }
+
+    if (source.kind === 'telegram') {
+      this.deps.safetyJournal.record(
+        'remote_decision',
+        `telegram user ${source.userId} in chat ${source.chatId}: ${decision === 'approved' ? 'allow' : 'deny'}`,
+        runId ?? undefined,
+      );
+    }
+    this.deps.broadcast({ type: 'approval.responded', approvalId, runId, decision, source: source.kind, at: now });
+    this.pump();
+
+    // A reqId means the child was actively holding a decision window open for
+    // this exact approval; if respondToChild couldn't reach it, the decision
+    // is durably recorded but nothing live received it (S-51/S-52 doc above).
+    if (hadReqId && !forwarded) return { status: 'run_gone', forwarded: false };
+    return { status: 'resolved', forwarded };
+  }
+
   // ---------- supervision primitives ----------
   private killGroupIdentityVerified(r: RunRow): void {
     if (!r.pgid) return;
@@ -1014,7 +1086,8 @@ export class RunManager {
 
 const GRACE_NOTE_TOLERANCE_MS = 120_000;
 
-function taskDeliveryJsonOf(db: DB, taskId: string): string {
+/** Exported for the Telegram inbound poller's per-task trust check (ADR-036). */
+export function taskDeliveryJsonOf(db: DB, taskId: string): string {
   const r = db.prepare('SELECT delivery_json FROM tasks WHERE id=?').get(taskId) as any;
   return r?.delivery_json ?? '{}';
 }

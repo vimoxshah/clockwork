@@ -177,6 +177,27 @@ never approve a real call — a sandboxed agent that reads the port from its own
 argv can still post fake approval prompts into the human's inbox, and that
 remains possible noise, not an escalation.
 
+## Remote approvals (Telegram)
+
+The daemon can resolve an approval from Telegram's inline keyboard as well as
+from the Inbox (ADR-036). This is **outbound-only**: the daemon long-polls
+`api.telegram.org`'s `getUpdates`; it never opens a port or accepts an inbound
+connection, so the "never exposed to your network" claim above still holds —
+the daemon still binds `127.0.0.1` only. Trust that a button press is
+legitimate rests on two facts, not a secret the daemon has to mint: the chat
+the press came from must match the task's configured `delivery.telegram.chatId`,
+and — because anyone present in a group or supergroup could tap someone else's
+button — a group chat additionally requires the pressing user's id to be on
+that task's `telegram.allowedUserIds`; no list configured for a group means no
+button in that group ever does anything. A rejected press changes nothing and
+answers "Not allowed". The decision itself is resolved through the exact same
+code path as the Inbox's respond button (`RunManager.respondToApproval`), so
+the CAS, the forward into a still-live run, and the audit trail cannot differ
+between the two. One consequence worth naming plainly: anyone who holds the
+bot token can act as the bot, including pressing Approve or Deny — the token
+is a credential, and losing it means losing this channel's integrity, the same
+as losing any other API key.
+
 ## Reporting a security issue
 
 See `CONTRIBUTING.md` for responsible disclosure. Confirmed containment escapes
