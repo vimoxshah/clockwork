@@ -194,7 +194,19 @@ export async function fetchIcs(
     if (!res.ok) return { ok: false, error: `feed returned ${res.status}`, fetchedAt: at };
     const text = await res.text();
     if (text.length > 5_000_000) return { ok: false, error: 'feed exceeds 5MB', fetchedAt: at };
-    if (!text.includes('BEGIN:VCALENDAR')) return { ok: false, error: 'not an ICS calendar', fetchedAt: at };
+    if (!text.includes('BEGIN:VCALENDAR')) {
+      // The commonest mistake is pasting the link that OPENS Google Calendar
+      // (calendar.google.com/calendar/u/0?cid=…) instead of the feed. Name the
+      // field to copy instead of only saying what failed.
+      const looksLikeGoogleUi = /calendar\.google\.com\/calendar\/(u\/\d+|r|embed|render)/i.test(url) || /[?&]cid=/i.test(url);
+      return {
+        ok: false,
+        error: looksLikeGoogleUi
+          ? 'that link opens Google Calendar in a browser, it is not a feed — copy "Secret address in iCal format" from Google Calendar → Settings → your calendar → Integrate calendar (it ends in .ics)'
+          : 'not an ICS calendar — the URL must serve an iCalendar feed (it usually ends in .ics)',
+        fetchedAt: at,
+      };
+    }
     return { ok: true, events: parseIcs(text), fetchedAt: at };
   } catch (e) {
     return { ok: false, error: String((e as Error).message ?? e).slice(0, 120), fetchedAt: at };
