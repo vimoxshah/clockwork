@@ -235,7 +235,13 @@ export const TOOL_CACHE_ROOT = `${dataDir}/cache`;
 export function toolCacheEnv(root: string = TOOL_CACHE_ROOT): Record<string, string> {
   return {
     npm_config_cache: path.join(root, 'npm'),
+    // pnpm ≤10 reads npm_config_* for its own settings; pnpm 11+ switched to
+    // pnpm_config_* only. Set both to the same path so the store redirect
+    // works either way — npm itself will warn "Unknown env config store-dir"
+    // on every invocation since store-dir isn't an npm key; that warning is
+    // cosmetic and known, not a sign the redirect failed.
     npm_config_store_dir: path.join(root, 'pnpm-store'),
+    pnpm_config_store_dir: path.join(root, 'pnpm-store'),
     YARN_CACHE_FOLDER: path.join(root, 'yarn'),
     PIP_CACHE_DIR: path.join(root, 'pip'),
     XDG_CACHE_HOME: path.join(root, 'xdg'),

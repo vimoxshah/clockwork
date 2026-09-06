@@ -83,8 +83,8 @@ occurs in the current version.
 Questions about this policy, a data request, or anything else:
 **vmoksh.shah179@gmail.com**
 
-You can also open an issue on the public Homebrew tap:
-https://github.com/vimoxshah/homebrew-clockwork/issues
+You can also open an issue directly on the main repository — it's public:
+https://github.com/vimoxshah/clockwork/issues
 
-(The main Clockwork repository is private, so issues there are not reachable —
-use email or the tap.)
+(The Homebrew tap has its own tracker too, for install-specific issues:
+https://github.com/vimoxshah/homebrew-clockwork/issues)

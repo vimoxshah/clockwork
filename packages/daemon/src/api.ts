@@ -95,6 +95,25 @@ export function rotateToken(dataDir: string): string {
 
 export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance; token: string; sseClients: Set<FastifyReply> }> {
   const app = Fastify({ logger: false });
+
+  // Raw-body capture for webhook signature verification (goal #27 fix): the
+  // stock JSON parser only exposes the re-serialized `req.body`, which can
+  // differ byte-for-byte from what a sender (e.g. GitHub) signed —
+  // pretty-printing, key order, float formatting and unicode escaping all
+  // round-trip differently through `JSON.stringify(JSON.parse(x))`. Override
+  // the instance-wide `application/json` parser to stash the exact wire
+  // string as `req.rawBody` before parsing, so `handleHook` below can HMAC
+  // the bytes actually sent. Parsing itself is delegated to Fastify's own
+  // default parser (secure-json-parse, same proto/constructor-poisoning
+  // guard as the options this app already runs with) so every OTHER route
+  // keeps byte-identical parsing/validation behaviour — only the raw string
+  // capture is new. Fastify built-ins only; no added dependency.
+  const parseDefaultJson = app.getDefaultJsonParser('error', 'error');
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
+    (req as any).rawBody = body;
+    parseDefaultJson(req, body as string, done);
+  });
+
   const tasks = new TaskRepo(deps.db);
   const profiles = new ProfileRepo(deps.db);
   const runs = new RunRepo(deps.db);
@@ -460,7 +479,13 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     // The public hook endpoint. Auth is enforced per-trigger when a secret is set.
     const handleHook = async (req: any, reply: any) => {
       const triggerId = req.params.id;
-      const raw = typeof req.body === 'string' ? req.body : JSON.stringify(req.body ?? {});
+      // Prefer the exact wire bytes captured by the content-type parser
+      // registered near the top of buildServer, so the HMAC covers what the
+      // sender actually signed. Falls back to the pre-fix re-serialization
+      // only when there is no rawBody — i.e. a non-JSON content type such as
+      // text/plain, which Fastify's other built-in parser already hands us
+      // as a string body directly (no re-serialization risk there).
+      const raw = typeof req.rawBody === 'string' ? req.rawBody : typeof req.body === 'string' ? req.body : JSON.stringify(req.body ?? {});
       let payload: unknown;
       try {
         payload = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
@@ -527,7 +552,11 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       return respond(202, { ok: true, fired: true, runId }, true, undefined, runId);
     };
 
-    app.post('/hooks/:id', { config: { rawBody: true } }, handleHook);
+    // Signature verification uses `req.rawBody` set by the content-type
+    // parser above; there is no route-level raw-body option in Fastify (the
+    // `{ config: { rawBody: true } }` this line used to carry was a no-op —
+    // see docs/triggers.md for the history).
+    app.post('/hooks/:id', handleHook);
   }
 
   // ---- templates (T-203) ----

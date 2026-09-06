@@ -37,6 +37,13 @@ import type { Clock } from './clock.js';
 import type { ChildToDaemon } from './runner-protocol.js';
 import { ByokStore, keychainGet } from './byok.js';
 import { buildJobSpec } from './scheduler.js';
+import {
+  channelFor,
+  withRetry,
+  loadDeliveryCreds,
+  formatApprovalText,
+  type ApprovalNotifyPayload,
+} from './delivery.js';
 
 export interface RunManagerDeps {
   db: DB;
@@ -82,6 +89,8 @@ export class RunManager {
   private readonly repoMutex = new Map<string, string>(); // repoPath -> runId
   private readonly liveChildren = new Map<string, ChildProcess>();
   private readonly pendingApprovals = new Map<string, Map<string, (d: any) => void>>();
+  /** Reachable approvals (outbound): dedupe key runId -> set of reqId (or approvalId when reqId is absent), so a duplicate child message never double-notifies. */
+  private readonly notifiedApprovalKeys = new Map<string, Set<string>>();
   private pumping = false;
   private readonly maxParallel: number;
 
@@ -399,6 +408,12 @@ export class RunManager {
           .run(approvalId, runId, JSON.stringify({ tool: msg.tool, reqId }), now, timeoutAt, 'deny-and-continue');
         this.recordEvent(now, runId, 'approval_requested', { tool: msg.tool, reqId });
         this.deps.broadcast({ type: 'approval.requested', approvalId, runId, at: now });
+        // Reachable approvals (outbound half, FR-18 sibling): fire-and-forget —
+        // never awaited here, so a slow/failing channel can never delay the
+        // permission hold or the child's decision path (S-43-style guarantee).
+        this.notifyApprovalRequest(runId, spec, approvalId, msg.tool, msg.input, timeoutAt, reqId).catch((e) => {
+          this.recordEvent(this.deps.clock.now(), runId, 'note', { approvalNotifyError: String(e) });
+        });
         break;
       }
       case 'outcome': {
@@ -407,6 +422,84 @@ export class RunManager {
       }
     }
     void spec;
+  }
+
+  /**
+   * Reachable approvals (outbound half, FR-18 sibling): push the permission
+   * request itself to every configured channel, reusing the DeliveryChannel
+   * adapters (delivery.ts) that already carry run-outcome reports. Never
+   * awaited from the permission hold's hot path (see call site); failures are
+   * logged, never surfaced to the run or the decision path (S-43 pattern).
+   */
+  private async notifyApprovalRequest(
+    runId: string,
+    spec: JobSpec,
+    approvalId: string,
+    tool: string,
+    input: unknown,
+    timeoutAt: number,
+    reqId: string | null,
+  ): Promise<void> {
+    const dedupeKey = reqId ?? approvalId;
+    let seen = this.notifiedApprovalKeys.get(runId);
+    if (!seen) {
+      seen = new Set<string>();
+      this.notifiedApprovalKeys.set(runId, seen);
+    }
+    if (seen.has(dedupeKey)) return; // duplicate child message for a request already notified
+    seen.add(dedupeKey);
+
+    const commandSummary = maskSecrets(extractCommandSummary(input)).slice(0, 200);
+    const payload: ApprovalNotifyPayload = {
+      approvalId,
+      runId,
+      taskName: spec.taskName,
+      engine: spec.engine,
+      tool,
+      commandSummary,
+      timeoutAt,
+    };
+    const text = formatApprovalText(payload);
+
+    // OS: same unconditional convention as run-outcome notifications below —
+    // deps.notify() rides the daemon's native Notifier (main.ts); no per-task
+    // config currently gates it (see note on DeliveryConfig.osNotify).
+    this.deps.notify('approval_requested', `Clockwork: ${spec.taskName} needs you`, text);
+
+    // Telegram/webhook: same per-task DeliveryConfig used for outcome reports.
+    let cfg: { telegram?: { chatId: string }; webhook?: { url: string } } = {};
+    try {
+      cfg = JSON.parse(taskDeliveryJsonOf(this.deps.db, spec.taskId) || '{}');
+    } catch {}
+    const creds = loadDeliveryCreds(this.deps.dataDir);
+    const jobs: Array<Promise<void>> = [];
+    const failed: Array<{ channel: string; error: string | null }> = [];
+    if (cfg.telegram?.chatId) {
+      const ch = channelFor('telegram');
+      if (ch) {
+        const chatId = cfg.telegram.chatId;
+        jobs.push(
+          withRetry(() => ch.sendApproval(payload, chatId, creds)).then((r) => {
+            if (!r.ok) failed.push({ channel: 'telegram', error: r.error });
+          }),
+        );
+      }
+    }
+    if (cfg.webhook?.url) {
+      const ch = channelFor('webhook');
+      if (ch) {
+        const url = cfg.webhook.url;
+        jobs.push(
+          withRetry(() => ch.sendApproval(payload, url, creds)).then((r) => {
+            if (!r.ok) failed.push({ channel: 'webhook', error: r.error });
+          }),
+        );
+      }
+    }
+    await Promise.all(jobs);
+    if (failed.length > 0) {
+      this.recordEvent(this.deps.clock.now(), runId, 'note', { approvalNotifyFailed: failed });
+    }
   }
 
   // ---------- finalization ----------
@@ -551,6 +644,7 @@ export class RunManager {
 
     this.releaseMutex(spec);
     this.pendingApprovals.delete(runId);
+    this.notifiedApprovalKeys.delete(runId);
     this.deps.keepAwake?.release(runId);
 
     // S-40/S-41: consecutive auth failures auto-pause the task after 2
@@ -923,6 +1017,20 @@ const GRACE_NOTE_TOLERANCE_MS = 120_000;
 function taskDeliveryJsonOf(db: DB, taskId: string): string {
   const r = db.prepare('SELECT delivery_json FROM tasks WHERE id=?').get(taskId) as any;
   return r?.delivery_json ?? '{}';
+}
+
+/** Best-effort human-readable form of a tool's input, before masking/truncation. */
+function extractCommandSummary(input: unknown): string {
+  if (input && typeof input === 'object') {
+    const i = input as Record<string, unknown>;
+    if (typeof i.command === 'string') return i.command;
+    try {
+      return JSON.stringify(input);
+    } catch {
+      return String(input);
+    }
+  }
+  return String(input ?? '');
 }
 
 function listDirs(p: string): string[] {

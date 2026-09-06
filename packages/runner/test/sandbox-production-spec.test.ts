@@ -42,6 +42,7 @@ describe('toolCacheEnv', () => {
     const expectedKeys = [
       'npm_config_cache',
       'npm_config_store_dir',
+      'pnpm_config_store_dir',
       'YARN_CACHE_FOLDER',
       'PIP_CACHE_DIR',
       'XDG_CACHE_HOME',

@@ -29,7 +29,7 @@ sticky notes. Clockwork gives that work a home on a **real calendar**:
 |---|---|
 | Cron + terminal tabs | Month calendar with every job visible |
 | Hope the script worked | Report with branch, diffstat, cost, transcript |
-| Unbounded token spend | Hard USD / turn / wall-clock caps |
+| Unbounded token spend | USD soft cap, plus hard turn / wall-clock caps |
 | Agent has your whole disk | Per-run OS-sandboxed git worktree |
 | Find last Tuesday's run: scrollback | Full-text search across retained history |
 
@@ -69,7 +69,8 @@ REPEAT  Make it weekly. Search your retained run history.
   Security Auditor, Code Reviewer and more, each with mission, constraints,
   safety rails, and an output contract
 - 🛡 **Human-in-the-loop approvals** — risky actions pause the run and ask you;
-  unanswered asks fail safe (never silently approved)
+  unanswered asks fail safe (never silently approved), and pings your configured
+  channels (macOS notification, Telegram, webhook) when a run is waiting
 - 🧱 **Policy floor in every mode** — force-pushes to protected branches and
   package publishing are refused before they run on the Claude engine, even when
   the CLI would not have asked (a `PreToolUse` hook, fail-closed, ~60 ms per call)
@@ -83,15 +84,15 @@ REPEAT  Make it weekly. Search your retained run history.
   OpenAI, Google, OpenRouter, xAI, Mistral, DeepSeek, Ollama, custom gateways)
   with keys sealed in the macOS Keychain, connection validation, and clear
   separation from CLI-subscription billing
-- 🐳 **Remote execution target** — run agents in ephemeral Docker containers
-  with filesystem isolation, no-network-by-default, CPU/memory/pids caps, and
-  runtime-only credential injection
 - 🏛 **Governance built-in** — policy engine (engine allow-lists, per-run cost
   ceilings, approval thresholds), append-only audit log, retention sweeps
 - 📊 **Cost & reliability analytics** — spend by task/provider/day with
   optimization suggestions that surface money-burning failures
 - 🏠 **Local-first** — SQLite in `~/.clockwork`, loopback-only API, no account,
   no cloud, no telemetry
+
+Event triggers — webhooks and GitHub events start tasks; see
+[docs/triggers.md](docs/triggers.md).
 
 ## Providers
 
@@ -308,7 +309,10 @@ themes, palette, providers, ICS overlay, 1000-task benchmarks).
 - [x] Human calendar overlay (ICS)
 - [x] 1000-task scale verification
 - [x] Agent chains (chain-after + trigger states + `{{previous.report}}` hand-off)
-- [x] Docker execution target (ephemeral, network-isolated, resource-capped)
+- [ ] Docker execution target — runner module (`runInDocker`) and an
+      availability probe (`GET /targets`) exist, but nothing wires a task run
+      to it yet: no task-level target field, no run-manager dispatch, no UI
+      selector
 - [x] Governance: policy engine, audit log, retention, capability matrix
 - [x] Event triggers: webhook + GitHub sources fire tasks (HMAC-verified)
 - [ ] Chaining v2 (fan-in/out DAGs)
