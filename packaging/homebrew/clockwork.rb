@@ -1,6 +1,6 @@
 cask "clockwork" do
-  version "0.6.0"
-  sha256 "c32c6d85de83fa658c93e07af9d711139e64b0159ca8eddba93463064e216261"
+  version "0.7.0"
+  sha256 "f517e8963216b15cfeed47847e84a39ebb685c4d6d8394e3f14db299ad5697c6"
 
   url "https://clockwork.vmoksh-shah179.workers.dev/downloads/Clockwork_#{version}_aarch64.dmg"
   name "Clockwork"
