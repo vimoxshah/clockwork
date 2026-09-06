@@ -204,3 +204,33 @@ ADR-style, append-only. Format: Decision → Context → Alternatives rejected �
 **Consequence:** docs/security.md "Known gap" closed with dated evidence; codex users lose codex's own shell-command network block (network is allowed under Clockwork's profile for every engine — documented). Open: the run inherits `HOME`, so a developer's `permissions.allow` rules and `SessionStart`/`SessionEnd` hooks apply unattended (`--setting-sources` pinning is a product decision); repo-declared MCP servers that run shell are not matched by the `Bash` matcher; the bridge has no per-run bearer token yet; LICENSE §12's audit set does not yet list `permission-server.ts` or `floor-hook.ts`.
 
 **Review findings folded in (2026-09-06, Opus read-only pass, both reproduced on this machine):** (1) the `--settings` payload must pin `disableAllHooks: false` — the CLI honours that switch from a repo's own `.claude/settings.json`, and without the pin one committed key disabled the hook while the report still said `sandboxed: true`; CLI-flag settings outrank project settings, so the pin wins (unit-tested in `floor-hook.test.ts`). (2) The BYOK provider key must not travel in the child's environment at all: macOS keeps a process's exec-time env readable via `sysctl KERN_PROCARGS2`, the profile must allow `sysctl-read` (Node needs it), and a sandboxed agent read the key out of a sibling `runner-child` after it had been deleted from `process.env`. The credential now arrives over the daemon⇄child stdin channel as a `credential` message; the env never contains it.
+
+**Open item closed (2026-09-06):** "the bridge has no per-run bearer token yet" (Consequence, above) is WON'T-DO, not deferred. Any secret the sandboxed CLI must present to reach the bridge is readable by the agent running inside that same CLI — a token cannot separate the CLI from its own agent, it would just be one more readable file, so it buys no real containment. The mitigation is the bounds hardened this round instead: the bridge counts bytes as they arrive (not just Content-Length, which a chunked request omits) and stops reading past 4 MiB, holds at most 16 concurrent `tools/call`s per run and denies the rest outright, and releases a held slot immediately if the client disconnects before a decision resolves. Documented in `docs/security.md`.
+
+## Referenced but unwritten ADRs
+
+ADR-034 already noted in passing that "ADR-026…033 are cited in code but never written here" (see above). This section makes that concrete: every citing comment found by `grep -rn "ADR-02[6-9]\|ADR-03[0-3]" packages/` (excluding `dist/`), grouped by number, with the one-line topic each citation implies. These are owed — nobody should treat the numbers as resolved just because code comments reference them.
+
+**ADR-026 — engine/provider selection (which CLI runs a task: claude/codex/opencode/hermes)**
+`packages/shared/src/schemas.ts:14,19,270`; `packages/runner/src/opencode-runner.ts:2`; `packages/runner/src/hermes-runner.ts:2`; `packages/runner/src/codex-runner.ts:2`; `packages/daemon/src/api.ts:1113` (provider detection); `packages/daemon/migrations/0002_task_engine.sql:1` (per-task engine override column). Also cited by `packages/ui/src/components/FolderBrowserDialog.tsx:2` ("daemon-backed Finder-style repo picker") — that comment's own topic doesn't obviously match the others; the mismatch itself is a reason this ADR is owed, not something to paper over here.
+
+**ADR-027 — BYOK provider configuration store (user-supplied API keys/endpoints, Keychain-backed)**
+`packages/shared/src/schemas.ts:27,271,325`; `packages/daemon/src/byok.ts:2`; `packages/daemon/src/api.ts:1282`; `packages/daemon/migrations/0003_byok.sql:1`; `packages/ui/src/components/ByokCard.tsx:2`; `packages/daemon/src/run-manager.ts:211,784` (co-cited with ADR-028).
+
+**ADR-028 — API-agent execution adapter (running a task through a BYOK OpenAI-compatible endpoint instead of a CLI)**
+`packages/runner/src/api-agent-runner.ts:2`; `packages/daemon/src/runner-child.ts:197` (co-cited with ADR-035); `packages/daemon/src/run-manager.ts:211,784` (co-cited with ADR-027).
+
+**ADR-029 — cost & reliability analytics (spend/success-rate aggregation surfaced to the user)**
+`packages/daemon/src/api.ts:1000`; `packages/ui/src/components/AnalyticsView.tsx:2`.
+
+**ADR-030 — quiet hours (defer a fire into a task's local-time no-run window)**
+`packages/shared/src/schemas.ts:216`; `packages/daemon/src/scheduler.ts:188,301`; `packages/daemon/test/quiet-hours.test.ts:2`.
+
+**ADR-031 — retention + audit log (goal #41 retention controls, goal #40 append-only audit log)**
+`packages/daemon/src/retention-audit.ts:2`.
+
+**ADR-032 — policy engine (goal #38 enterprise guardrails: engine allow-lists, cost ceilings, approval thresholds)**
+`packages/daemon/src/policy-engine.ts:2`.
+
+**ADR-033 — Docker as the first remote execution target (ephemeral container runner)**
+`packages/runner/src/docker-runner.ts:2`. Note: as of this audit the module this ADR would document (`runInDocker`) has no caller outside two standalone test scripts — the decision it would record was never wired to an actual task run (see README roadmap, corrected in this pass).
