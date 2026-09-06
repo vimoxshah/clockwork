@@ -53,6 +53,12 @@ export function wallTimeToUtcMs(wall: DateTime, tz: string): number {
 /**
  * Enumerate occurrences in (fromMsExclusive, toMsInclusive] in UTC epoch ms.
  * Bounded work per call — the tick loop must stay O(due), never O(history).
+ *
+ * `limit` caps the result at the EARLIEST `limit` occurrences in the window.
+ * All three branches agree on that: `once` yields at most one, `cron` walks
+ * forward from `fromMsExcl`, and the rrule branch stops as soon as it has
+ * `limit` of them. `nextOccurrenceAfter` depends on it — it asks for one
+ * occurrence and reads `found[0]`.
  */
 export function occurrencesBetween(s: ScheduleLike, fromMsExcl: number, toMsIncl: number, limit = 500): number[] {
   if (s.kind === 'once') {
@@ -76,10 +82,23 @@ export function occurrencesBetween(s: ScheduleLike, fromMsExcl: number, toMsIncl
       new Date(Date.UTC(toWall.year, toWall.month - 1, toWall.day, toWall.hour, toWall.minute)),
       true,
     );
+    // Map lazily and stop at `limit` KEPT occurrences. Mapping the whole array
+    // first would be ~1M luxon conversions for a MINUTELY rule over the 732-day
+    // horizon, and taking a suffix of it would answer the far end of the
+    // horizon instead of the next fire.
     const out: number[] = [];
-    for (const d of between.slice(-limit)) {
+    for (const d of between) {
       const wall = DateTime.fromJSDate(d, { zone: 'utc' });
-      out.push(wallTimeToUtcMs(wall, s.tz));
+      const at = wallTimeToUtcMs(wall, s.tz);
+      // rrule bounds the window by wall-clock MINUTE and with inc=true, so both
+      // endpoints come back fuzzy; the half-open window is decided here, on the
+      // real instant. Dropping `fromMsExcl` itself is load-bearing: the
+      // scheduler asks for the next fire after the occurrence it just claimed,
+      // and answering with that same instant would freeze next_fire forever
+      // behind its own ledger row.
+      if (at <= fromMsExcl || at > toMsIncl) continue;
+      out.push(at);
+      if (out.length >= limit) break;
     }
     return [...new Set(out)].sort((a, b) => a - b);
   }
@@ -106,6 +125,8 @@ export function occurrencesBetween(s: ScheduleLike, fromMsExcl: number, toMsIncl
 /** First occurrence strictly AFTER afterMs (for next_fire materialization). */
 export function nextOccurrenceAfter(s: ScheduleLike, afterMs: number, horizonDays = 366 * 2): number | null {
   const horizon = afterMs + horizonDays * 86_400_000;
+  // limit=1 == the EARLIEST occurrence in the window, so found[0] is the next
+  // fire. A suffix-limited expansion would hand back the far end of `horizon`.
   const found = occurrencesBetween(s, afterMs, horizon, 1);
   return found.length > 0 ? found[0]! : null; // COUNT-exhausted RRULE → null → auto-disable (S-24)
 }

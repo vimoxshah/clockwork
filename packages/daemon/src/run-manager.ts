@@ -8,6 +8,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import os from 'node:os';
@@ -125,9 +126,55 @@ export class RunManager {
   private readonly notifiedApprovalKeys = new Map<string, Set<string>>();
   private pumping = false;
   private readonly maxParallel: number;
+  /**
+   * Daemon-wide pause. The MANAGER owns this flag, not the API: the API used
+   * to keep a `let paused` local inside buildServer that only /health and the
+   * widget snapshot ever read, so a "paused" daemon happily dequeued, started
+   * and billed runs. Only the thing that starts work can honour a pause, so
+   * the flag lives here and the API asks.
+   *
+   * Presence of the marker file IS the state (the body is diagnostics only),
+   * so a pause survives a daemon restart and there is no JSON to misparse.
+   */
+  private readonly pauseMarker: string;
+  private paused: boolean;
 
   constructor(private readonly deps: RunManagerDeps) {
     this.maxParallel = deps.maxParallel ?? 2;
+    this.pauseMarker = path.join(deps.dataDir, 'paused');
+    this.paused = existsSync(this.pauseMarker);
+  }
+
+  // ---------- pause (single source of truth, read by the API) ----------
+  isPaused(): boolean {
+    return this.paused;
+  }
+
+  /**
+   * Flip the daemon-wide pause and persist it.
+   *
+   * The in-memory flag is set BEFORE the disk write: a full disk must not be
+   * able to leave a user who asked for a pause still spending money. Resuming
+   * pumps, because nothing else would — the held rows are already 'queued', so
+   * without this they wait for some unrelated finalize to kick the queue.
+   */
+  setPaused(paused: boolean): void {
+    this.paused = paused;
+    try {
+      if (paused) {
+        mkdirSync(this.deps.dataDir, { recursive: true });
+        writeFileSync(this.pauseMarker, JSON.stringify({ pausedAt: this.deps.clock.now() }), { mode: 0o600 });
+      } else {
+        rmSync(this.pauseMarker, { force: true });
+      }
+    } catch (e) {
+      // Durability is best-effort; refusing to start work is not.
+      this.deps.safetyJournal.record(
+        'preflight_failure',
+        `pause flag not persisted (paused=${paused}); it will not survive a restart: ${String(e).slice(0, 200)}`,
+      );
+    }
+    if (!paused) this.pump();
   }
 
   // ---------- queue ----------
@@ -141,6 +188,15 @@ export class RunManager {
         return;
       }
       try {
+        // Pause gate. `pump` is the ONLY caller of `startRun`, and every path
+        // that books work — scheduler tick, run-now, webhook fire, chain
+        // firing, sentinel booking, self-healing, plan-execute — inserts a
+        // 'queued' row and then calls `pump`. So this one line holds all of
+        // them, and it holds them the way the UI promises: "Queued and future
+        // runs hold until resumed. Active runs finish." Nothing in flight is
+        // touched; the rows simply stay queued (the /queue lane reports them
+        // as 'paused') until setPaused(false) pumps again.
+        if (this.paused) return;
         const active = this.countActive();
         let slots = Math.max(0, this.maxParallel - active);
         while (slots > 0) {

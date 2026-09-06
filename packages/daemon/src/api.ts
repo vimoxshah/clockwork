@@ -305,7 +305,13 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     await app.register(fastifyStatic, { root: uiDist, prefix: '/' });
   }
 
-  let paused = false;
+  // Daemon-wide pause. This used to be `let paused = false` right here — a
+  // local nothing but /health and the widget snapshot ever read, so the run
+  // manager dequeued and started runs while the UI said the daemon had
+  // stopped. The manager owns the flag now (run-manager.ts setPaused/isPaused),
+  // because the manager is the only thing that can honour it, and it is
+  // durable so a restart cannot silently un-pause.
+  const isPaused = (): boolean => deps.runManager.isPaused();
 
   // ---- auth hook: bearer token on data routes; static UI + health open ----
   app.addHook('onRequest', async (req, reply) => {
@@ -342,6 +348,21 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
   // Same escape hatch buildServer already uses for broadcast: the RunManager is
   // constructed in main.ts before buildServer, so F1 registers itself here.
   deps.runManager['deps'].planExecute = planExecute;
+
+  // A durable pause has to survive the boot that follows it, and main.ts calls
+  // `scheduler.start(30_000)` unconditionally after buildServer — so the flag
+  // alone would be undone at every restart. Same escape hatch this file
+  // already uses for `broadcast`, `planExecute` and `selfHealing`: wrap the
+  // method here rather than teach main.ts about pause. Holding the scheduler
+  // still (rather than letting it tick and pile up queued rows) makes a pause
+  // behave like a sleeping machine, so resuming replays through the existing
+  // missed-run coalescing (S-10/S-11) instead of a thundering herd.
+  // /resume clears the flag BEFORE calling start(), so that call gets through.
+  const startScheduler = deps.scheduler.start.bind(deps.scheduler);
+  deps.scheduler.start = (tickMs?: number): void => {
+    if (isPaused()) return;
+    startScheduler(tickMs);
+  };
 
   // F4 sentinel-worker: books the worker run through the same evaluatePolicy +
   // enqueueRunNow + pump() sequence the webhook handler uses.
@@ -415,7 +436,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       ok: true,
       apiVersion: API_VERSION,
       daemonVersion: deps.version,
-      paused,
+      paused: isPaused(),
       activeRuns: active,
       queuedRuns: queued,
       nextFire,
@@ -462,7 +483,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
         triggers: count('SELECT COUNT(*) c FROM triggers'),
         providersConfigured: providerRows.length,
       },
-      scheduling: { paused },
+      scheduling: { paused: isPaused() },
       providers: providerRows,
       engines,
       entitlement: entitlements.status(),
@@ -1444,20 +1465,29 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     const next = deps.db
       .prepare('SELECT next_fire, t.name FROM schedules s JOIN tasks t ON t.id=s.task_id WHERE s.enabled=1 AND s.next_fire IS NOT NULL ORDER BY next_fire LIMIT 1')
       .get() as any;
-    return { runsToday, needsYou, recentReports: unread, nextRun: next ?? null, paused };
+    return { runsToday, needsYou, recentReports: unread, nextRun: next ?? null, paused: isPaused() };
   });
 
   // ---- pause-all / resume ----
+  // Contract (SettingsView "Pause all scheduling"): "Queued and future runs
+  // hold until resumed. Active runs finish." Nothing in flight is killed —
+  // stopping a run mid-turn throws away work that is already paid for and can
+  // leave a half-written worktree behind — but nothing new starts, on any
+  // path, until /resume.
   app.post('/pause-all', async () => {
-    paused = true;
+    deps.runManager.setPaused(true); // the gate the run manager's pump reads
     deps.scheduler.stop();
-    broadcast({ type: 'daemon.health', data: { paused }, at: Date.now() });
+    audit('daemon.pause', undefined, undefined, { activeRuns: deps.runManager.countActive() });
+    broadcast({ type: 'daemon.health', data: { paused: true }, at: Date.now() });
     return { paused: true };
   });
 
   app.post('/resume', async () => {
-    paused = false;
+    // Clear the flag FIRST: the scheduler.start wrapper above no-ops while
+    // paused, and setPaused(false) is what pumps the runs that were held.
+    deps.runManager.setPaused(false);
     deps.scheduler.start();
+    audit('daemon.resume', undefined, undefined);
     broadcast({ type: 'daemon.health', data: { paused: false }, at: Date.now() });
     return { paused: false };
   });
@@ -1480,10 +1510,13 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
         (deps.db
           .prepare(`SELECT COUNT(*) c FROM runs WHERE id != ? AND jobspec_json LIKE ? AND state IN ('preparing','running','waiting_approval','finalizing')`)
           .get(r.id, `%${spec.repoPath}%`) as any).c > 0;
+      // 'paused' leads: while the daemon is paused nothing starts at all, so
+      // "waiting for slot" — which used to win for anything past position 2 —
+      // was telling the user their run was about to go.
       const reason =
-        repoBusy ? 'waiting for repo'
+        isPaused() ? 'paused'
+        : repoBusy ? 'waiting for repo'
         : active + position > maxParallel ? 'waiting for slot'
-        : paused ? 'paused'
         : 'starting soon';
       return {
         runId: r.id,
