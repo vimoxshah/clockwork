@@ -218,7 +218,7 @@ export default function InboxView({ version }: { version: number }): JSX.Element
                         {r.outcome_reason.replace('_', ' ')}
                       </span>
                     )}
-                    <span className="mono">${Number(r.cost_usd ?? 0).toFixed(2)}</span>
+                    <span className="mono">{fmtCost(r.cost_usd, spec.engine, 2, '—')}</span>
                     <span>{fmtTs(r.scheduled_for ?? r.started_at)}</span>
                     {ftsOrder?.get(r.id) && <span title={ftsOrder.get(r.id)}>🔎 match</span>}
                   </div>
@@ -317,7 +317,7 @@ function ReportDetail({ runId, version }: { runId: string; version: number }): J
       <div className="statrow mono">
         <span className={`chip ${chipFor(run.state)}`}>{run.state.replace('_', ' ')}</span>
         {run.outcome_reason && <span>reason: {run.outcome_reason}</span>}
-        <span>${Number(run.cost_usd ?? 0).toFixed(4)}</span>
+        <span>{fmtCost(run.cost_usd, spec.engine, 4, 'not reported')}</span>
         <span>{run.turns} turns</span>
         {run.started_at && run.ended_at && (
           <span>{Math.round((run.ended_at - run.started_at) / 1000)}s</span>
@@ -432,6 +432,18 @@ function LiveTail({ runId }: { runId: string }): JSX.Element {
 function fmtTs(ts: number | null): string {
   if (!ts) return '';
   return new Date(ts).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+/**
+ * OpenCode exposes no usage telemetry, so its runs always record cost_usd as
+ * a literal 0 (packages/runner/src/opencode-runner.ts:1-6) — not "no data",
+ * but "no data, reported as zero". Showing "$0.00" reads as a real, cheap
+ * run rather than an unmeasured one, so opencode (and any genuinely absent
+ * cost) renders as unreported instead of a dollar amount.
+ */
+function fmtCost(costUsd: number | null | undefined, engine: string | undefined, digits: number, placeholder: string): string {
+  if (engine === 'opencode' || costUsd === null || costUsd === undefined) return placeholder;
+  return `$${Number(costUsd).toFixed(digits)}`;
 }
 
 function safeJson(s: string): any {
