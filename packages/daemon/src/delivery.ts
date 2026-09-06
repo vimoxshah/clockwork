@@ -120,13 +120,34 @@ export class OsChannel implements DeliveryChannel {
   }
 }
 
+/** Fixed message for the "does this bot reach that chat?" self-test. */
+export const TELEGRAM_TEST_MESSAGE = 'Clockwork test message — your bot can reach this chat.';
+
+/**
+ * Thrown by `TelegramChannel.post` on a non-2xx response. `description`, when
+ * present, is the Telegram API's own `description` field (e.g. "Bad Request:
+ * chat not found") — callers that surface an error to a human (test-telegram)
+ * should prefer it over `message`, which stays richer for receipts/logs.
+ */
+export class TelegramApiError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly description: string | null,
+  ) {
+    super(`telegram ${status}: ${description ?? '(no description)'}`);
+    this.name = 'TelegramApiError';
+  }
+}
+
 // ---------- Telegram Bot API (T-211) — plain fetch, no lib ----------
 export class TelegramChannel implements DeliveryChannel {
   readonly name = 'telegram';
 
+  constructor(private readonly apiBase: string = 'https://api.telegram.org') {}
+
   private async post(text: string, chatId: string, cred: DeliveryConfigCred, extra?: Record<string, unknown>): Promise<void> {
     if (!cred.telegramBotToken) throw new Error('missing telegram bot token');
-    const res = await fetch(`https://api.telegram.org/bot${cred.telegramBotToken}/sendMessage`, {
+    const res = await fetch(`${this.apiBase}/bot${cred.telegramBotToken}/sendMessage`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -138,7 +159,12 @@ export class TelegramChannel implements DeliveryChannel {
     });
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      throw new Error(`telegram ${res.status}: ${body.slice(0, 200)}`);
+      let description: string | null = null;
+      try {
+        const parsed = JSON.parse(body);
+        if (parsed && typeof parsed.description === 'string') description = parsed.description.slice(0, 200);
+      } catch {}
+      throw new TelegramApiError(res.status, description ?? (body.slice(0, 200) || null));
     }
   }
 
@@ -164,6 +190,11 @@ export class TelegramChannel implements DeliveryChannel {
         ],
       },
     });
+  }
+
+  /** POST /delivery-config/test-telegram: a short fixed message, no retry. */
+  async sendTest(chatId: string, cred: DeliveryConfigCred): Promise<void> {
+    await this.post(TELEGRAM_TEST_MESSAGE, chatId, cred);
   }
 }
 
@@ -198,24 +229,89 @@ export class WebhookChannel implements DeliveryChannel {
 
 /**
  * Same credential sources as the report-delivery path (env + file bridge; OS
- * keychain lands with the Tauri step). Duplicated here rather than imported
- * from delivery-dispatch.ts (out of scope for this change) — both read the
- * identical `CLOCKWORK_DELIVER_*` env prefix and `delivery-creds.json` file.
+ * keychain lands with the Tauri step): `CLOCKWORK_DELIVER_*` env vars and the
+ * `delivery-creds.json` file, file wins on overlap. Single source of truth —
+ * delivery-dispatch.ts imports this rather than keeping its own copy.
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, chmodSync, existsSync } from 'node:fs';
+
+/**
+ * `CLOCKWORK_DELIVER_TELEGRAM_BOT_TOKEN` -> `telegramBotToken`. The
+ * `DeliveryConfigCred` interface is camelCase; env vars are
+ * SCREAMING_SNAKE_CASE, so the suffix must be converted, not just
+ * lowercased (lowercasing alone produced `telegram_bot_token`, which never
+ * matched any field and silently disabled env-var credentials).
+ */
+function envSuffixToCamelCase(suffix: string): string {
+  return suffix.toLowerCase().replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());
+}
 
 export function loadDeliveryCreds(dataDir: string): DeliveryConfigCred {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (k.startsWith('CLOCKWORK_DELIVER_') && v) {
-      out[k.replace('CLOCKWORK_DELIVER_', '').toLowerCase()] = v;
+      out[envSuffixToCamelCase(k.replace('CLOCKWORK_DELIVER_', ''))] = v;
     }
   }
   try {
+    // the file is already camelCase (written by writeDeliveryCreds / hand-edited)
     const f = JSON.parse(readFileSync(`${dataDir}/delivery-creds.json`, 'utf8'));
     if (f && typeof f === 'object') Object.assign(out, f);
   } catch {}
   return out as DeliveryConfigCred;
+}
+
+/**
+ * Read-modify-write onto `delivery-creds.json` (0600). A string sets/replaces
+ * a credential, `null` clears it, an absent key leaves it unchanged. Keys not
+ * named in `patch` (including ones this daemon doesn't know about yet) are
+ * preserved verbatim.
+ */
+export function writeDeliveryCreds(dataDir: string, patch: Record<string, string | null | undefined>): void {
+  const path = `${dataDir}/delivery-creds.json`;
+  let current: Record<string, unknown> = {};
+  try {
+    if (existsSync(path)) {
+      const parsed = JSON.parse(readFileSync(path, 'utf8'));
+      if (parsed && typeof parsed === 'object') current = parsed;
+    }
+  } catch {}
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === undefined) continue; // absent key: leave unchanged
+    if (v === null) delete current[k];
+    else current[k] = v;
+  }
+  writeFileSync(path, JSON.stringify(current, null, 2), { mode: 0o600 });
+  chmodSync(path, 0o600); // writeFileSync's mode is ignored when the file already exists
+}
+
+/**
+ * Reveal a prefix/suffix peek of `token` only when the hidden middle is at
+ * least as long as what's shown on each side — a short/odd secret falls back
+ * to a smaller peek, then to nothing, rather than ever showing more than it
+ * hides.
+ */
+function peek(token: string, prefixLen: number, suffixLen: number): string {
+  const shown = prefixLen + suffixLen;
+  if (token.length - shown >= shown) return `${token.slice(0, prefixLen)}…${token.slice(-suffixLen)}`;
+  if (token.length - prefixLen >= prefixLen) return `${token.slice(0, prefixLen)}…`;
+  return '…';
+}
+
+/**
+ * Mask a bot token for display, e.g. "12345678:AAE…xQ7" — the numeric id
+ * (not secret; it's the public half of a Telegram bot token) shown in full up
+ * to 8 chars, then a peek of the actual secret half. Never throws on a
+ * short/odd/colon-less token.
+ */
+export function maskBotToken(token: string): string {
+  const colon = token.indexOf(':');
+  if (colon > 0) {
+    const idPart = token.slice(0, colon);
+    const secretPart = token.slice(colon + 1);
+    return `${idPart.slice(0, 8)}:${peek(secretPart, 3, 3)}`;
+  }
+  return peek(token, 4, 3);
 }
 
 export function channelFor(name: string): DeliveryChannel | null {

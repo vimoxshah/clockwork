@@ -11,8 +11,15 @@
  * Parser scope: VEVENT with DTSTART/DTEND (date or date-time), RRULE via
  * the same recurrence engine used for schedules where feasible; otherwise
  * non-recurring expansion only (documented limitation). VALARM ignored.
+ *
+ * File import (this change): a calendar source is either a live subscription
+ * (url, re-fetched on every /calendar read) or an imported FILE — a frozen
+ * snapshot read once and stored verbatim under `<dataDir>/ics-imports/<id>.ics`
+ * so it can be re-parsed without the original file ever being touched again.
+ * That distinction is load-bearing: a file source must never trigger a
+ * network fetch (see api.ts `/calendar`).
  */
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
 
 export interface IcsEvent {
   uid: string;
@@ -155,6 +162,62 @@ export function parseIcs(icsText: string, limit = 2000): IcsEvent[] {
   return events.slice(0, limit);
 }
 
+export interface ParsedIcs {
+  events: IcsEvent[];
+  /** VCALENDAR-level X-WR-CALNAME, if the feed/file declares one. */
+  calName: string | null;
+}
+
+/**
+ * Same parse as `parseIcs`, plus the calendar's declared display name
+ * (X-WR-CALNAME), used to default an imported file's label. Google folds long
+ * lines per RFC 5545 §3.1 (continuation lines start with a space/tab), so
+ * this reuses the same `unfold` pass `parseIcs` uses rather than scanning the
+ * raw text directly.
+ */
+export function parseIcsWithMeta(icsText: string, limit = 2000): ParsedIcs {
+  const events = parseIcs(icsText, limit);
+  let calName: string | null = null;
+  for (const line of unfold(icsText)) {
+    const prop = parseProp(line);
+    if (prop && prop.name === 'X-WR-CALNAME') {
+      calName = prop.value.trim() || null;
+      break;
+    }
+  }
+  return { events, calName };
+}
+
+/** Content-size ceiling shared by fetched feeds and imported files (5 MiB). */
+export const MAX_ICS_BYTES = 5 * 1024 * 1024;
+
+export interface IcsValidation {
+  ok: boolean;
+  error?: string;
+  events?: IcsEvent[];
+  calName?: string | null;
+}
+
+/**
+ * Validate + parse ICS text destined for import (upload or import-path).
+ * Every failure message is specific enough to act on — never a bare code.
+ */
+export function validateAndParseIcs(text: string): IcsValidation {
+  // Byte length, not string length: `text.length` counts UTF-16 units, so a
+  // calendar full of non-ASCII titles would slip past a byte ceiling.
+  if (Buffer.byteLength(text, 'utf8') > MAX_ICS_BYTES) {
+    return { ok: false, error: 'that file is larger than 5 MiB — export a smaller date range and try again' };
+  }
+  if (!text.includes('BEGIN:VCALENDAR')) {
+    return { ok: false, error: 'that file has no calendar data — it does not look like an ICS/iCalendar export (expected BEGIN:VCALENDAR)' };
+  }
+  const { events, calName } = parseIcsWithMeta(text);
+  if (events.length === 0) {
+    return { ok: false, error: 'no events could be read from that calendar file' };
+  }
+  return { ok: true, events, calName };
+}
+
 export interface IcsSourceResult {
   ok: boolean;
   error?: string;
@@ -193,23 +256,117 @@ export async function fetchIcs(
     }
     if (!res.ok) return { ok: false, error: `feed returned ${res.status}`, fetchedAt: at };
     const text = await res.text();
-    if (text.length > 5_000_000) return { ok: false, error: 'feed exceeds 5MB', fetchedAt: at };
-    if (!text.includes('BEGIN:VCALENDAR')) return { ok: false, error: 'not an ICS calendar', fetchedAt: at };
+    if (Buffer.byteLength(text, 'utf8') > MAX_ICS_BYTES) return { ok: false, error: 'feed exceeds 5 MiB', fetchedAt: at };
+    if (!text.includes('BEGIN:VCALENDAR')) {
+      // The commonest mistake is pasting the link that OPENS Google Calendar
+      // (calendar.google.com/calendar/u/0?cid=…) instead of the feed. Name the
+      // field to copy instead of only saying what failed.
+      const looksLikeGoogleUi = /calendar\.google\.com\/calendar\/(u\/\d+|r|embed|render)/i.test(url) || /[?&]cid=/i.test(url);
+      return {
+        ok: false,
+        error: looksLikeGoogleUi
+          ? 'that link opens Google Calendar in a browser, it is not a feed — copy "Secret address in iCal format" from Google Calendar → Settings → your calendar → Integrate calendar (it ends in .ics)'
+          : 'not an ICS calendar — the URL must serve an iCalendar feed (it usually ends in .ics)',
+        fetchedAt: at,
+      };
+    }
     return { ok: true, events: parseIcs(text), fetchedAt: at };
   } catch (e) {
     return { ok: false, error: String((e as Error).message ?? e).slice(0, 120), fetchedAt: at };
   }
 }
 
-export function loadIcsSources(dataDir: string): Array<{ id: string; url: string; label: string }> {
+/**
+ * A calendar source is either a live subscription (`kind: 'url'`, re-fetched
+ * on every /calendar read) or an imported FILE (`kind: 'file'`), a frozen
+ * snapshot re-parsed from the stored copy in ics-imports/. Never present one
+ * as the other.
+ */
+export interface IcsSourceRecord {
+  id: string;
+  kind: 'url' | 'file';
+  url: string | null;
+  label: string;
+  /** ms epoch of the last successful import/re-import; null for a url source. */
+  importedAt: number | null;
+  /** Event count as of the last import/re-import; null for a url source. */
+  eventCount: number | null;
+  /** Original filesystem path, if imported via import-path (enables re-import). */
+  sourcePath: string | null;
+  /** Original filename, for display, when known. */
+  sourceName: string | null;
+}
+
+/** Upgrade a possibly-legacy on-disk record (`{id,url,label}`) in place. */
+function migrateSource(r: Record<string, unknown>): IcsSourceRecord {
+  return {
+    id: String(r.id ?? ''),
+    kind: r.kind === 'file' ? 'file' : 'url',
+    url: typeof r.url === 'string' ? r.url : null,
+    label: String(r.label ?? ''),
+    importedAt: typeof r.importedAt === 'number' ? r.importedAt : null,
+    eventCount: typeof r.eventCount === 'number' ? r.eventCount : null,
+    sourcePath: typeof r.sourcePath === 'string' ? r.sourcePath : null,
+    sourceName: typeof r.sourceName === 'string' ? r.sourceName : null,
+  };
+}
+
+/**
+ * Read the source list, upgrading any legacy `{id,url,label}` entries on the
+ * way out. This is a migration-on-read: the file on disk is left untouched
+ * until the next `saveIcsSources` call, so an old daemon reading the same
+ * file back (e.g. during a rollback) still works.
+ */
+export function loadIcsSources(dataDir: string): IcsSourceRecord[] {
+  let raw: unknown;
   try {
-    return JSON.parse(readFileSync(`${dataDir}/ics-sources.json`, 'utf8'));
+    raw = JSON.parse(readFileSync(`${dataDir}/ics-sources.json`, 'utf8'));
   } catch {
     return [];
   }
+  if (!Array.isArray(raw)) return [];
+  return raw.map((r) => migrateSource(r as Record<string, unknown>));
 }
 
-export function saveIcsSources(dataDir: string, sources: Array<{ id: string; url: string; label: string }>): void {
+export function saveIcsSources(dataDir: string, sources: IcsSourceRecord[]): void {
   mkdirSync(dataDir, { recursive: true });
   writeFileSync(`${dataDir}/ics-sources.json`, JSON.stringify(sources, null, 2), { mode: 0o600 });
+}
+
+/** Only ids this module minted itself look like this; guards the imports dir against path traversal via a stored/URL id. */
+const SAFE_ID = /^[A-Za-z0-9_-]+$/;
+
+function importPath(dataDir: string, id: string): string | null {
+  if (!SAFE_ID.test(id)) return null;
+  return `${dataDir}/ics-imports/${id}.ics`;
+}
+
+/** Persist the raw text of an imported file (0600), creating the store dir on demand. */
+export function writeIcsImport(dataDir: string, id: string, text: string): void {
+  const p = importPath(dataDir, id);
+  if (!p) throw new Error('invalid import id');
+  mkdirSync(`${dataDir}/ics-imports`, { recursive: true });
+  writeFileSync(p, text, { mode: 0o600 });
+}
+
+/** Read back a stored import's raw text, or null if it isn't there (or the id is malformed). */
+export function readIcsImport(dataDir: string, id: string): string | null {
+  const p = importPath(dataDir, id);
+  if (!p) return null;
+  try {
+    return readFileSync(p, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+/** Delete a stored import's raw text. Safe to call for an id with no stored copy. */
+export function deleteIcsImport(dataDir: string, id: string): void {
+  const p = importPath(dataDir, id);
+  if (!p) return;
+  try {
+    unlinkSync(p);
+  } catch {
+    /* already gone */
+  }
 }

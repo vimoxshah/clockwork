@@ -69,12 +69,18 @@ async function send(method: string, path: string, body?: unknown): Promise<Respo
 
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await send(method, path, body);
-  // 204 No Content has no body, and `Response.json()` REJECTS on an empty one
-  // — so without this guard a SUCCESSFUL delete throws a SyntaxError and the
-  // caller's `.then(reload)` never runs. Every 204 route in the daemon lands
-  // here: DELETE /triggers/:id, /byok/:id, /workforce/sentinels/:id and
-  // /workforce/office-hours/:id.
-  if (res.status === 204) return undefined as T;
+  // A 204 has no body, so res.json() throws SyntaxError and the caller's
+  // .then() never runs — DELETE /triggers/:id and DELETE /byok/:id both answer
+  // 204, and so do the workforce deletes (DELETE /workforce/sentinels/:id and
+  // DELETE /workforce/office-hours/:id), which made "Delete" look broken while
+  // the row was actually gone.
+  // Only definitive no-body signals skip the parse: HTTP forbids a body on
+  // 204/205, and content-length: 0 says so outright. A missing content-type is
+  // NOT such a signal — treating it as one would silently return undefined for
+  // a real payload.
+  if (res.status === 204 || res.status === 205 || res.headers?.get('content-length') === '0') {
+    return undefined as T;
+  }
   return res.json() as Promise<T>;
 }
 
@@ -448,6 +454,44 @@ function proofOfWorkPath(runId: string, opts?: ProofOfWorkOptionsT): string {
   })}`;
 }
 
+export interface DeliveryConfigT {
+  telegram: { configured: boolean; botTokenMasked: string | null };
+  webhook: { configured: boolean };
+}
+
+/**
+ * A calendar source is either a live subscription (kind: 'url', re-fetched on
+ * every calendar load) or an imported file (kind: 'file', a frozen snapshot
+ * re-parsed from the daemon's stored copy). Existing on-disk entries only had
+ * { id, url, label } — the daemon migrates those on read to kind: 'url' with
+ * the new fields null, so this type always has the full shape.
+ */
+export interface IcsSourceT {
+  id: string;
+  kind: 'url' | 'file';
+  url: string | null;
+  label: string;
+  importedAt: number | null;
+  eventCount: number | null;
+  sourcePath: string | null;
+  sourceName: string | null;
+}
+
+/**
+ * Mirrors the LAST step of the daemon's ICS-import label fallback: strip a
+ * single trailing extension from a filename, else 'Imported calendar'. The
+ * daemon's real priority order is X-WR-CALNAME first, then this filename
+ * fallback — so this helper is NOT a reliable preview of what a given import
+ * will be called (the calendar's own name always wins when present). It is
+ * exposed purely as a small, independently-testable piece of that logic; the
+ * daemon's response (`label`) is always the source of truth once an import
+ * completes.
+ */
+export function fallbackIcsLabel(filename: string): string {
+  const base = filename.replace(/\.[^./\\]+$/, '').trim();
+  return base || 'Imported calendar';
+}
+
 export const api = {
   health: () => req<Health>('GET', '/health'),
   byok: () => req<{ configs: unknown[]; meta: unknown }>('GET', '/byok'),
@@ -478,10 +522,24 @@ export const api = {
       'GET',
       `/calendar?from=${from}&to=${to}`,
     ),
-  icsSources: () => req<Array<{ id: string; url: string; label: string }>>('GET', '/calendars/ics'),
+  icsSources: () => req<IcsSourceT[]>('GET', '/calendars/ics'),
   addIcsSource: (url: string, label: string) =>
     req<{ id: string; label: string; events: number }>('POST', '/calendars/ics', { url, label }),
   removeIcsSource: (id: string) => req<{ removed: string }>('DELETE', `/calendars/ics/${id}`),
+  importIcsContent: (body: { content: string; label?: string; filename?: string }) =>
+    req<{ id: string; kind: 'file'; label: string; eventCount: number; importedAt: number }>(
+      'POST',
+      '/calendars/ics/import',
+      body,
+    ),
+  importIcsPath: (body: { path: string; label?: string }) =>
+    req<{ id: string; kind: 'file'; label: string; eventCount: number; importedAt: number }>(
+      'POST',
+      '/calendars/ics/import-path',
+      body,
+    ),
+  reimportIcs: (id: string) =>
+    req<{ id: string; eventCount: number; importedAt: number }>('POST', `/calendars/ics/${id}/reimport`),
   queue: () =>
     req<Array<{ runId: string; taskId: string; name: string; position: number; reason: string }>>(
       'GET',
@@ -536,10 +594,10 @@ export const api = {
       'GET',
       '/providers',
     ),
-  browseFs: (path: string) =>
+  browseFs: (path: string, files?: string) =>
     req<{ path: string; parent: string | null; entries: Array<{ name: string; type: 'dir' | 'file'; isGit: boolean }> }>(
       'GET',
-      `/fs/browse?path=${encodeURIComponent(path)}`,
+      `/fs/browse?path=${encodeURIComponent(path)}${files ? `&files=${encodeURIComponent(files)}` : ''}`,
     ),
   cloneRepo: (url: string) =>
     req<{ ok: true; alreadyCloned?: boolean; path: string; slug: string }>(
@@ -690,6 +748,13 @@ export const api = {
    */
   proofOfWork: async (runId: string, opts?: ProofOfWorkOptionsT): Promise<Blob> =>
     (await send('GET', proofOfWorkPath(runId, opts))).blob(),
+
+  // ---- delivery: Telegram + webhook credentials ----
+  deliveryConfig: () => req<DeliveryConfigT>('GET', '/delivery-config'),
+  saveDeliveryConfig: (body: { telegramBotToken?: string | null; webhookSecret?: string | null }) =>
+    req<DeliveryConfigT>('PUT', '/delivery-config', body),
+  testTelegram: (chatId: string) =>
+    req<{ ok: boolean; error?: string }>('POST', '/delivery-config/test-telegram', { chatId }),
 };
 
 export interface EventStream {

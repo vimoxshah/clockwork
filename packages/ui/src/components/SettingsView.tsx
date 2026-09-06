@@ -3,6 +3,7 @@
  * loaded from the server (not guessed), snapshot stats, engine statement.
  */
 import { useState } from 'react';
+import type { CSSProperties } from 'react';
 import { useTheme } from '../theme';
 import { SHORTCUTS } from './CommandPalette';
 import { Switch } from './ui/switch';
@@ -15,6 +16,7 @@ import { AutonomyCard } from './AutonomyCard';
 import { Select, SelectValue, SelectTrigger, SelectContent, SelectItem } from './ui/select';
 import { api } from '../api';
 import { useAsync } from '../useAsync';
+import { FolderBrowserDialog } from './FolderBrowserDialog';
 import { registerFeatureSurface } from './featureSurfaces';
 
 /**
@@ -79,6 +81,9 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
           ))}
         </div>
       </div>
+
+      <h3 className="section-title" style={{ marginTop: 20 }}>Notifications &amp; delivery</h3>
+      <DeliveryCard version={version} />
 
       <h3 className="section-title" style={{ marginTop: 20 }}>Scheduling</h3>
       {health.error && <div className="error-banner">Couldn’t load daemon state: {health.error}</div>}
@@ -272,9 +277,46 @@ function UsageCard({ version }: { version: number }): JSX.Element {
   );
 }
 
-/** ICS calendar subscriptions: human events overlay the agent calendar (read-only). */
+// Visually hides the real <input type="file"> while keeping it in the DOM
+// (not display:none) so it stays in the tab order and keeps its accessible
+// name from the wrapping <label> — a bare icon button would announce nothing.
+const hiddenFileInputStyle: CSSProperties = {
+  position: 'absolute',
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: 'hidden',
+  clip: 'rect(0,0,0,0)',
+  whiteSpace: 'nowrap',
+  border: 0,
+};
+
+function fmtImportedAt(ts: number | null): string {
+  if (!ts) return 'unknown time';
+  return new Date(ts).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+/** Read a File's text via FileReader (spec: "read it with FileReader and POST the text") — not Blob.text(), so this also works in the older WebViews some builds still target. */
+function readFileAsText(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+    reader.onerror = () => reject(new Error('could not read the selected file'));
+    reader.readAsText(file);
+  });
+}
+
+/**
+ * ICS calendar sources: human events overlay the agent calendar (read-only).
+ * A source is either a live subscription (url — re-fetched every load) or an
+ * imported file (a frozen snapshot, re-parsed only on demand). The two must
+ * never look the same in this list (contract, INTENT §4).
+ */
 function IcsCard({ version }: { version: number }): JSX.Element {
   const sources = useAsync(() => api.icsSources(), [version]);
+
+  // --- subscribe by URL (unchanged) ---
   const [url, setUrl] = useState('');
   const [label, setLabel] = useState('');
   const [busy, setBusy] = useState(false);
@@ -297,6 +339,66 @@ function IcsCard({ version }: { version: number }): JSX.Element {
     sources.reload();
   };
 
+  // --- import a file (upload or browse) ---
+  const [importLabel, setImportLabel] = useState('');
+  const [pendingFilename, setPendingFilename] = useState<string | null>(null);
+  const [fileBusy, setFileBusy] = useState(false);
+  const [fileMsg, setFileMsg] = useState<string | null>(null);
+  const [fileErr, setFileErr] = useState<string | null>(null);
+  const [browsing, setBrowsing] = useState(false);
+  const [fileInputFocused, setFileInputFocused] = useState(false);
+
+  const importFile = async (file: File): Promise<void> => {
+    setPendingFilename(file.name);
+    setFileBusy(true); setFileErr(null); setFileMsg(null);
+    try {
+      const content = await readFileAsText(file);
+      const r = await api.importIcsContent({
+        content,
+        filename: file.name,
+        ...(importLabel.trim() ? { label: importLabel.trim() } : {}),
+      });
+      setFileMsg(`Imported “${r.label}” — ${r.eventCount} events, snapshot at ${fmtImportedAt(r.importedAt)}.`);
+      setImportLabel(''); setPendingFilename(null);
+      sources.reload();
+    } catch (e) {
+      setFileErr(String((e as Error).message ?? e));
+    } finally { setFileBusy(false); }
+  };
+
+  const importPath = async (path: string): Promise<void> => {
+    setPendingFilename(path.split('/').pop() ?? path);
+    setFileBusy(true); setFileErr(null); setFileMsg(null);
+    try {
+      const r = await api.importIcsPath({
+        path,
+        ...(importLabel.trim() ? { label: importLabel.trim() } : {}),
+      });
+      setFileMsg(`Imported “${r.label}” — ${r.eventCount} events, snapshot at ${fmtImportedAt(r.importedAt)}.`);
+      setImportLabel(''); setPendingFilename(null);
+      sources.reload();
+    } catch (e) {
+      setFileErr(String((e as Error).message ?? e));
+    } finally { setFileBusy(false); }
+  };
+
+  // --- re-import (file sources only): per-row busy/error, keyed by source id ---
+  const [reimportBusy, setReimportBusy] = useState<Record<string, boolean>>({});
+  const [reimportErr, setReimportErr] = useState<Record<string, string | null>>({});
+
+  const reimport = async (id: string): Promise<void> => {
+    setReimportBusy((b) => ({ ...b, [id]: true }));
+    setReimportErr((m) => ({ ...m, [id]: null }));
+    try {
+      await api.reimportIcs(id);
+      sources.reload();
+    } catch (e) {
+      setReimportErr((m) => ({ ...m, [id]: String((e as Error).message ?? e) }));
+    } finally {
+      setReimportBusy((b) => ({ ...b, [id]: false }));
+    }
+  };
+
   return (
     <div>
       <p className="hint" style={{ marginTop: 0 }}>
@@ -304,18 +406,47 @@ function IcsCard({ version }: { version: number }): JSX.Element {
         Calendar published calendar, Fastmail, Nextcloud…). Your meetings appear on the Clockwork
         calendar next to agent work. Clockwork never writes to your personal calendar.
       </p>
+      <p className="hint">
+        A subscribed feed stays up to date on its own; an imported file is a snapshot of the moment
+        you imported it, and only changes when you re-import it.
+      </p>
+
       {(sources.data ?? []).map((s) => (
-        <div key={s.id} className="tasklist-row">
+        <div key={s.id} className="tasklist-row" style={{ flexWrap: 'wrap' }}>
           <div className="grow">
-            <strong>{s.label}</strong>
-            <div className="hint mono" style={{ margin: 0, fontSize: 11 }}>{s.url}</div>
+            <strong>{s.label}</strong>{' '}
+            <Badge variant={s.kind === 'file' ? 'warning' : 'success'}>
+              {s.kind === 'file' ? 'Imported snapshot' : 'Subscribed'}
+            </Badge>
+            {s.kind === 'file' ? (
+              <div className="hint" style={{ margin: 0, fontSize: 11 }}>
+                Imported {fmtImportedAt(s.importedAt)} · {s.eventCount ?? 0} events
+              </div>
+            ) : (
+              <div className="hint mono" style={{ margin: 0, fontSize: 11 }}>{s.url}</div>
+            )}
+            {reimportErr[s.id] && (
+              <div className="error-banner" role="alert">{reimportErr[s.id]}</div>
+            )}
           </div>
-          <button className="btn danger small" onClick={() => void remove(s.id)}>Disconnect</button>
+          {s.kind === 'file' && (
+            <button
+              className="btn small"
+              disabled={!!reimportBusy[s.id]}
+              onClick={() => void reimport(s.id)}
+            >
+              {reimportBusy[s.id] ? 'Re-importing…' : 'Re-import'}
+            </button>
+          )}
+          <button className="btn danger small" onClick={() => void remove(s.id)}>
+            {s.kind === 'file' ? 'Remove' : 'Disconnect'}
+          </button>
         </div>
       ))}
       {(sources.data ?? []).length === 0 && !sources.loading && (
         <p className="hint" style={{ color: 'var(--dim)' }}>No calendars connected.</p>
       )}
+
       <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
         <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…/basic.ics" aria-label="ICS URL" style={{ flex: 2, minWidth: 220 }} data-testid="ics-url" />
         <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Label (Work)" aria-label="Calendar label" style={{ flex: 1, minWidth: 120 }} />
@@ -325,6 +456,272 @@ function IcsCard({ version }: { version: number }): JSX.Element {
       </div>
       {msg && <div className="ok-banner">{msg}</div>}
       {err && <div className="error-banner" role="alert">{err}</div>}
+
+      <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+        <strong style={{ fontSize: 13 }}>Or import a file</strong>
+        <p className="hint" style={{ marginTop: 4 }}>
+          Export a calendar as .ics (or .ical) and bring in a one-time snapshot — nothing is
+          fetched from the network, and nothing changes until you re-import.
+        </p>
+        <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <label
+            htmlFor="ics-file-input"
+            className="btn small"
+            style={{
+              cursor: fileBusy ? 'default' : 'pointer',
+              outline: fileInputFocused ? '2px solid var(--accent)' : 'none',
+              outlineOffset: 2,
+            }}
+          >
+            {fileBusy ? 'Importing…' : 'Choose file…'}
+            <input
+              id="ics-file-input"
+              type="file"
+              accept=".ics,.ical"
+              disabled={fileBusy}
+              style={hiddenFileInputStyle}
+              onFocus={() => setFileInputFocused(true)}
+              onBlur={() => setFileInputFocused(false)}
+              onChange={(e) => {
+                const file = e.target.files?.[0] ?? null;
+                e.target.value = '';
+                if (file) void importFile(file);
+              }}
+            />
+          </label>
+          <button className="btn small" disabled={fileBusy} onClick={() => setBrowsing(true)}>
+            Browse…
+          </button>
+          <input
+            value={importLabel}
+            onChange={(e) => setImportLabel(e.target.value)}
+            placeholder="Label (optional — defaults to the calendar's own name)"
+            aria-label="Imported calendar label"
+            style={{ flex: 1, minWidth: 160 }}
+          />
+        </div>
+        {fileBusy && pendingFilename && (
+          <p className="hint" style={{ margin: '4px 0 0' }}>Reading “{pendingFilename}”…</p>
+        )}
+        {fileMsg && <div className="ok-banner">{fileMsg}</div>}
+        {fileErr && <div className="error-banner" role="alert">{fileErr}</div>}
+      </div>
+
+      {browsing && (
+        <FolderBrowserDialog
+          open={browsing}
+          files={['ics', 'ical']}
+          onClose={() => setBrowsing(false)}
+          onPick={(p) => {
+            setBrowsing(false);
+            void importPath(p);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Telegram (and optional webhook) delivery credentials (goal: chat-based
+ * approvals). The bot token is a bearer credential for the whole bot — never
+ * rendered in full once saved, only as the masked hint the daemon returns.
+ */
+function DeliveryCard({ version }: { version: number }): JSX.Element {
+  const cfg = useAsync(() => api.deliveryConfig(), [version]);
+  const [token, setTokenInput] = useState('');
+  const [tokenBusy, setTokenBusy] = useState(false);
+  const [tokenMsg, setTokenMsg] = useState<string | null>(null);
+  const [tokenErr, setTokenErr] = useState<string | null>(null);
+
+  const [webhookSecret, setWebhookSecret] = useState('');
+  const [whBusy, setWhBusy] = useState(false);
+  const [whMsg, setWhMsg] = useState<string | null>(null);
+  const [whErr, setWhErr] = useState<string | null>(null);
+
+  const [chatId, setChatId] = useState('');
+  const [testBusy, setTestBusy] = useState(false);
+  const [testMsg, setTestMsg] = useState<string | null>(null);
+  const [testOk, setTestOk] = useState<boolean | null>(null);
+
+  const configured = cfg.data?.telegram.configured ?? false;
+
+  const saveToken = async (): Promise<void> => {
+    setTokenBusy(true); setTokenErr(null); setTokenMsg(null);
+    try {
+      await api.saveDeliveryConfig({ telegramBotToken: token.trim() });
+      setTokenInput('');
+      setTokenMsg('Bot token saved.');
+      cfg.reload();
+    } catch (e) {
+      setTokenErr(String((e as Error).message ?? e));
+    } finally {
+      setTokenBusy(false);
+    }
+  };
+
+  const clearToken = async (): Promise<void> => {
+    if (!confirm('Clear the Telegram bot token? Chat approvals stop reaching Telegram until a new token is set.')) return;
+    setTokenBusy(true); setTokenErr(null); setTokenMsg(null);
+    try {
+      await api.saveDeliveryConfig({ telegramBotToken: null });
+      setTokenMsg('Bot token cleared.');
+      cfg.reload();
+    } catch (e) {
+      setTokenErr(String((e as Error).message ?? e));
+    } finally {
+      setTokenBusy(false);
+    }
+  };
+
+  const saveWebhookSecret = async (): Promise<void> => {
+    setWhBusy(true); setWhErr(null); setWhMsg(null);
+    try {
+      await api.saveDeliveryConfig({ webhookSecret: webhookSecret.trim() });
+      setWebhookSecret('');
+      setWhMsg('Webhook secret saved.');
+      cfg.reload();
+    } catch (e) {
+      setWhErr(String((e as Error).message ?? e));
+    } finally {
+      setWhBusy(false);
+    }
+  };
+
+  const clearWebhookSecret = async (): Promise<void> => {
+    if (!confirm('Clear the webhook secret? Outgoing webhook deliveries stop being signed until a new one is set.')) return;
+    setWhBusy(true); setWhErr(null); setWhMsg(null);
+    try {
+      await api.saveDeliveryConfig({ webhookSecret: null });
+      setWhMsg('Webhook secret cleared.');
+      cfg.reload();
+    } catch (e) {
+      setWhErr(String((e as Error).message ?? e));
+    } finally {
+      setWhBusy(false);
+    }
+  };
+
+  const sendTest = async (): Promise<void> => {
+    setTestBusy(true); setTestMsg(null); setTestOk(null);
+    try {
+      const r = await api.testTelegram(chatId.trim());
+      setTestOk(r.ok);
+      setTestMsg(r.ok ? 'Delivered — check the chat.' : (r.error ?? 'Telegram did not accept the message.'));
+    } catch (e) {
+      setTestOk(false);
+      setTestMsg(String((e as Error).message ?? e));
+    } finally {
+      setTestBusy(false);
+    }
+  };
+
+  if (cfg.loading) return <p className="hint">Loading delivery settings…</p>;
+  if (cfg.error) return <div className="error-banner">{cfg.error}</div>;
+
+  return (
+    <div>
+      <p className="hint" style={{ marginTop: 0 }}>
+        When a run waits for your OK, Clockwork can message you on Telegram instead of waiting for you
+        to open the app — you approve or deny right from the chat. The bot token is a credential:
+        anyone who holds it can act as your bot, so treat it like a password.
+      </p>
+
+      <div className="tasklist-row">
+        <div className="grow">
+          <label className="f" htmlFor="tg-token">Telegram bot token</label>
+          <input
+            id="tg-token"
+            type="password"
+            autoComplete="off"
+            value={token}
+            onChange={(e) => setTokenInput(e.target.value)}
+            placeholder={configured ? (cfg.data?.telegram.botTokenMasked ?? 'configured') : 'Paste the token from @BotFather'}
+            style={{ width: '100%' }}
+            data-testid="telegram-token-input"
+          />
+          <div className="hint" style={{ margin: '4px 0 0' }}>
+            {configured
+              ? `Configured — ${cfg.data?.telegram.botTokenMasked}`
+              : 'Not configured — chat approvals are unavailable until a bot token is set.'}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            className="btn small primary"
+            disabled={tokenBusy || !token.trim()}
+            onClick={() => void saveToken()}
+            data-testid="telegram-token-save"
+          >
+            {tokenBusy ? 'Saving…' : 'Save'}
+          </button>
+          <button
+            className="btn small danger"
+            disabled={tokenBusy || !configured}
+            onClick={() => void clearToken()}
+          >
+            Clear
+          </button>
+        </div>
+      </div>
+      {tokenMsg && <div className="ok-banner">{tokenMsg}</div>}
+      {tokenErr && <div className="error-banner" role="alert">{tokenErr}</div>}
+
+      <div className="tasklist-row" style={{ marginTop: 8 }}>
+        <div className="grow">
+          <label className="f" htmlFor="tg-test-chat">Send test message</label>
+          <input
+            id="tg-test-chat"
+            type="text"
+            value={chatId}
+            onChange={(e) => setChatId(e.target.value)}
+            placeholder="Chat id"
+            disabled={!configured}
+            data-testid="telegram-test-chatid"
+          />
+        </div>
+        <button
+          className="btn small"
+          disabled={!configured || testBusy || !chatId.trim()}
+          onClick={() => void sendTest()}
+          data-testid="telegram-test-send"
+        >
+          {testBusy ? 'Sending…' : 'Send test message'}
+        </button>
+      </div>
+      {testMsg && (
+        <div className={testOk ? 'ok-banner' : 'error-banner'} role={testOk ? undefined : 'alert'}>
+          {testMsg}
+        </div>
+      )}
+
+      <div className="tasklist-row" style={{ marginTop: 14 }}>
+        <div className="grow">
+          <label className="f" htmlFor="wh-secret">Webhook secret (optional)</label>
+          <input
+            id="wh-secret"
+            type="password"
+            autoComplete="off"
+            value={webhookSecret}
+            onChange={(e) => setWebhookSecret(e.target.value)}
+            placeholder={cfg.data?.webhook.configured ? 'configured' : 'Shared secret used to sign outgoing webhook calls'}
+            style={{ width: '100%' }}
+          />
+          <div className="hint" style={{ margin: '4px 0 0' }}>
+            {cfg.data?.webhook.configured ? 'Configured.' : 'Not set — outgoing webhooks are sent unsigned.'}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn small primary" disabled={whBusy || !webhookSecret.trim()} onClick={() => void saveWebhookSecret()}>
+            {whBusy ? 'Saving…' : 'Save'}
+          </button>
+          <button className="btn small danger" disabled={whBusy || !cfg.data?.webhook.configured} onClick={() => void clearWebhookSecret()}>
+            Clear
+          </button>
+        </div>
+      </div>
+      {whMsg && <div className="ok-banner">{whMsg}</div>}
+      {whErr && <div className="error-banner" role="alert">{whErr}</div>}
     </div>
   );
 }
@@ -526,7 +923,7 @@ function TriggersCard({ version }: { version: number }): JSX.Element {
             </button>
             <button
               className="btn danger"
-              onClick={() => void api.deleteTrigger(t.id).then(triggers.reload)}
+              onClick={() => void api.deleteTrigger(t.id).catch(() => {}).then(triggers.reload)}
             >
               Delete
             </button>

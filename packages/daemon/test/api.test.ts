@@ -471,6 +471,18 @@ describe('requiresAuth — decides on the same path the router matches', () => {
     expect(requiresAuth('*')).toBe(true); // not origin-form, not a URL: fail closed
   });
 
+  // Merge (origin/main -> feat/agent-workforce): main protected these two
+  // prefixes in the inline hook it wrote, and this branch had meanwhile moved
+  // the decision into requiresAuth. Folding main's prefixes in is what keeps
+  // both sides' protection; pinning them here is what stops the fold being
+  // undone by a later edit that only reads this function.
+  it('protects the prefixes main added while the hook was being extracted', () => {
+    expect(requiresAuth('/delivery-config')).toBe(true); // bot token + webhook secret
+    expect(requiresAuth('/delivery-config/test-telegram')).toBe(true);
+    expect(requiresAuth('/fs/browse')).toBe(true); // discloses file names under $HOME
+    expect(requiresAuth('/%66s/browse')).toBe(true); // and by the encoded spelling too
+  });
+
   it('fails CLOSED on a malformed percent-escape instead of letting it through', () => {
     expect(requiresAuth('/%ZZtasks')).toBe(true);
     expect(requiresAuth('/%E0%A4%A')).toBe(true);

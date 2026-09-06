@@ -11,10 +11,11 @@ import { Input, Textarea, Label } from './ui/input';
 import { Card, CardContent } from './ui/card';
 import { Segmented } from './ui/segmented';
 import { Select, SelectValue, SelectTrigger, SelectContent, SelectItem } from './ui/select';
+import { Switch } from './ui/switch';
 import { AgentPicker } from './AgentPicker';
 import { DateTimePicker } from './ui/datetime-picker';
 import { Badge } from './ui/card';
-import { Zap, FolderGit2, Bot, Wallet, CalendarClock, AlertCircle, GitBranch } from 'lucide-react';
+import { Zap, FolderGit2, Bot, Wallet, CalendarClock, AlertCircle, GitBranch, Bell } from 'lucide-react';
 import { cn } from '../lib/cn';
 import { FolderBrowserDialog } from './FolderBrowserDialog';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from './ui/dialog';
@@ -50,6 +51,43 @@ function defaultSlot(): Date {
   const d = new Date(Date.now() + 60 * 60_000);
   d.setMinutes(0, 0, 0);
   return d;
+}
+
+/**
+ * Assemble the task's `delivery` object (DeliveryConfig, packages/shared/src/schemas.ts)
+ * from the composer's Telegram fields. Exported (pure, no component state) so
+ * the "unchanged when blank" and group allow-list rules are unit-testable
+ * without mounting the composer.
+ *
+ * - No chat id: sends exactly `{ osNotify: true }` — the object shipped before
+ *   per-task Telegram existed, so existing behaviour is unchanged.
+ * - A chat id in a non-group chat: no allow-list needed — there's only one
+ *   person on the other end.
+ * - A chat id marked as a group: always attaches `allowedUserIds`, even when
+ *   the list is empty. An empty list in a group is the honest "refuse every
+ *   press" state (ADR-036), not an unset one, so it must be sent, not omitted.
+ */
+export function buildTaskDelivery(
+  chatIdRaw: string,
+  isGroup: boolean,
+  allowedUserIdsRaw: string,
+): Record<string, unknown> {
+  const chatId = chatIdRaw.trim();
+  if (!chatId) return { osNotify: true };
+  return {
+    osNotify: true,
+    telegram: {
+      chatId,
+      ...(isGroup
+        ? {
+            allowedUserIds: allowedUserIdsRaw
+              .split(',')
+              .map((s) => s.trim())
+              .filter(Boolean),
+          }
+        : {}),
+    },
+  };
 }
 
 interface ProfileRow {
@@ -127,6 +165,9 @@ export default function ComposerView({
     rruleTime: '09:00',
     monthlyDay: String(new Date().getDate()),
     tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    telegramChatId: '',
+    telegramIsGroup: false,
+    telegramAllowedUserIds: '',
   }));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -194,6 +235,8 @@ export default function ComposerView({
       schedule = { kind: 'rrule', rrule, tz: form.tz };
     }
 
+    const delivery = buildTaskDelivery(form.telegramChatId, form.telegramIsGroup, form.telegramAllowedUserIds);
+
     setBusy(true);
     try {
       const engine = form.providerId === 'claude' ? 'cli' : form.providerId;
@@ -209,7 +252,7 @@ export default function ComposerView({
         overlapPolicy: 'skip',
         retryOnTransient: false,
         context: { files: [] },
-        delivery: { osNotify: true },
+        delivery,
         schedule,
         engine: engine as 'cli',
         byokId: form.byokId || undefined,
@@ -592,6 +635,57 @@ export default function ComposerView({
                   </div>
                 )}
               </div>
+            </section>
+
+            <section>
+              <div className="mb-3 flex items-center gap-2">
+                <span className="flex h-6 w-6 items-center justify-center rounded-md bg-surface-active text-dim [&_svg]:h-3.5 [&_svg]:w-3.5">
+                  <Bell />
+                </span>
+                <h3 className="text-compact font-semibold">Telegram approvals (optional)</h3>
+              </div>
+              <p className="mb-2 text-xs text-dim">
+                When this run waits for your OK, Clockwork messages this chat so you can approve or
+                deny right from Telegram — no need to open the app. Set your bot token once in
+                Settings → Notifications &amp; delivery.
+              </p>
+              <Label htmlFor="c-telegram-chat">Telegram chat id</Label>
+              <Input
+                id="c-telegram-chat"
+                placeholder="e.g. 123456789"
+                value={form.telegramChatId}
+                onChange={(e) => setForm({ ...form, telegramChatId: e.target.value })}
+              />
+              {form.telegramChatId.trim() && (
+                <div className="mt-2">
+                  <div className="flex items-center gap-2">
+                    <Switch
+                      id="c-telegram-group"
+                      checked={form.telegramIsGroup}
+                      onCheckedChange={(v) => setForm({ ...form, telegramIsGroup: v })}
+                    />
+                    <Label htmlFor="c-telegram-group" className="mb-0">
+                      This is a group chat
+                    </Label>
+                  </div>
+                  {form.telegramIsGroup && (
+                    <div className="mt-2">
+                      <Label htmlFor="c-telegram-allowed">Allowed Telegram user ids (comma-separated)</Label>
+                      <Input
+                        id="c-telegram-allowed"
+                        placeholder="111111111, 222222222"
+                        value={form.telegramAllowedUserIds}
+                        onChange={(e) => setForm({ ...form, telegramAllowedUserIds: e.target.value })}
+                      />
+                      <p className="mt-1 text-xxs text-dim">
+                        In a group chat, only these Telegram user ids may approve or deny — anyone
+                        else's press is refused. Leave this empty and every press is refused, for
+                        everyone in the group.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
             </section>
           </div>
         </CardContent>
