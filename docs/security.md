@@ -164,10 +164,18 @@ regardless (deny beats allow in the CLI's hook precedence); pinning
 `Bash` tool only: an MCP server the repo declares in `.mcp.json` (kept on
 purpose — `--strict-mcp-config` would drop it) that runs shell on the agent's
 behalf is not matched, so the floor does not see those calls; the sandbox still
-bounds them. The permission bridge listens on loopback without a bearer token, so
-a sandboxed agent that reads the port from its own argv could post fake approval
-prompts into the inbox (noise, not an escalation — decisions route back by
-request id); a per-run header is the planned fix.
+bounds them. The permission bridge listens on loopback with no request
+authentication, and that is not a gap we plan to close with a bearer token. Any
+secret the CLI must present — in `permissions.json`, the hook file, `--settings`
+argv, or the environment — is readable by the agent running inside that same
+CLI. A token cannot separate the CLI from its own agent; it would just be
+another readable file. Instead the bridge bounds the noise: it binds to
+loopback only, stops reading a request past 4 MiB, holds at most 16 prompts
+per run and denies the rest. Every decision
+still routes back to the real caller by request id, so a forged prompt can
+never approve a real call — a sandboxed agent that reads the port from its own
+argv can still post fake approval prompts into the human's inbox, and that
+remains possible noise, not an escalation.
 
 ## Reporting a security issue
 

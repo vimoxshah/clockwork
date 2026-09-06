@@ -50,6 +50,8 @@ With both fixed, inside the sandbox on 2.1.261: `touch` in worktree ✅ created 
 | allow | same → held 8s → allow → `npm view` executed inside the production-built profile (cache root + engine paths merged) and returned stdout. |
 | **floor bypass** | in the allow run, step 2 `git push --force origin main` **executed without any permission request** (`permission_denials: []`; git failed only because the probe repo had no commits). `evaluateCommand` returns `floor:true` for it — the floor was never consulted. Developer settings had no matching allow rule. `acceptEdits` on 2.1.261 does not prompt for this command. |
 | **floor closed** (2026-09-06) | same prompt through the production `runner-child` with the PreToolUse hook wired: `npm view` prompted at 29.7s (held 8s, allowed, ran); `git push --force origin main` → `floor` message at 95.8s with "force-push to protected branch 'main' is blocked by global deny-list", never executed; `echo done` ran; `completed`, exit 0. Hook cost: 60 ms median per Bash call (10 allow calls: 55–72 ms; deny 59 ms, full reason on stderr). |
+| **bridge error → fail-closed** (2026-09-06) | Stub prompt tool answering `tools/call` with JSON-RPC `-32600, id:null` (the shape the bridge uses for oversize requests): CLI reports `Error calling tool (Bash): MCP server "stub" returned a malformed result that failed schema validation`; the Bash command never ran (marker file absent). |
+| **bridge unreachable → fail-closed** (2026-09-06) | Stub prompt tool exits on the first `tools/call`: CLI reports `Error calling tool (Bash): The socket connection was closed unexpectedly`; the Bash command never ran. So a crashed or wedged bridge denies, it does not silently allow. |
 
 ## Not decided here (surfaced for the maker)
 
