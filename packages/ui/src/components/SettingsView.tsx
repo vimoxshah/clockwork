@@ -62,6 +62,9 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
         </div>
       </div>
 
+      <h3 className="section-title" style={{ marginTop: 20 }}>Notifications &amp; delivery</h3>
+      <DeliveryCard version={version} />
+
       <h3 className="section-title" style={{ marginTop: 20 }}>Scheduling</h3>
       {health.error && <div className="error-banner">Couldn’t load daemon state: {health.error}</div>}
       <div className="tasklist-row">
@@ -303,6 +306,210 @@ function IcsCard({ version }: { version: number }): JSX.Element {
   );
 }
 
+/**
+ * Telegram (and optional webhook) delivery credentials (goal: chat-based
+ * approvals). The bot token is a bearer credential for the whole bot — never
+ * rendered in full once saved, only as the masked hint the daemon returns.
+ */
+function DeliveryCard({ version }: { version: number }): JSX.Element {
+  const cfg = useAsync(() => api.deliveryConfig(), [version]);
+  const [token, setTokenInput] = useState('');
+  const [tokenBusy, setTokenBusy] = useState(false);
+  const [tokenMsg, setTokenMsg] = useState<string | null>(null);
+  const [tokenErr, setTokenErr] = useState<string | null>(null);
+
+  const [webhookSecret, setWebhookSecret] = useState('');
+  const [whBusy, setWhBusy] = useState(false);
+  const [whMsg, setWhMsg] = useState<string | null>(null);
+  const [whErr, setWhErr] = useState<string | null>(null);
+
+  const [chatId, setChatId] = useState('');
+  const [testBusy, setTestBusy] = useState(false);
+  const [testMsg, setTestMsg] = useState<string | null>(null);
+  const [testOk, setTestOk] = useState<boolean | null>(null);
+
+  const configured = cfg.data?.telegram.configured ?? false;
+
+  const saveToken = async (): Promise<void> => {
+    setTokenBusy(true); setTokenErr(null); setTokenMsg(null);
+    try {
+      await api.saveDeliveryConfig({ telegramBotToken: token.trim() });
+      setTokenInput('');
+      setTokenMsg('Bot token saved.');
+      cfg.reload();
+    } catch (e) {
+      setTokenErr(String((e as Error).message ?? e));
+    } finally {
+      setTokenBusy(false);
+    }
+  };
+
+  const clearToken = async (): Promise<void> => {
+    if (!confirm('Clear the Telegram bot token? Chat approvals stop reaching Telegram until a new token is set.')) return;
+    setTokenBusy(true); setTokenErr(null); setTokenMsg(null);
+    try {
+      await api.saveDeliveryConfig({ telegramBotToken: null });
+      setTokenMsg('Bot token cleared.');
+      cfg.reload();
+    } catch (e) {
+      setTokenErr(String((e as Error).message ?? e));
+    } finally {
+      setTokenBusy(false);
+    }
+  };
+
+  const saveWebhookSecret = async (): Promise<void> => {
+    setWhBusy(true); setWhErr(null); setWhMsg(null);
+    try {
+      await api.saveDeliveryConfig({ webhookSecret: webhookSecret.trim() });
+      setWebhookSecret('');
+      setWhMsg('Webhook secret saved.');
+      cfg.reload();
+    } catch (e) {
+      setWhErr(String((e as Error).message ?? e));
+    } finally {
+      setWhBusy(false);
+    }
+  };
+
+  const clearWebhookSecret = async (): Promise<void> => {
+    if (!confirm('Clear the webhook secret? Outgoing webhook deliveries stop being signed until a new one is set.')) return;
+    setWhBusy(true); setWhErr(null); setWhMsg(null);
+    try {
+      await api.saveDeliveryConfig({ webhookSecret: null });
+      setWhMsg('Webhook secret cleared.');
+      cfg.reload();
+    } catch (e) {
+      setWhErr(String((e as Error).message ?? e));
+    } finally {
+      setWhBusy(false);
+    }
+  };
+
+  const sendTest = async (): Promise<void> => {
+    setTestBusy(true); setTestMsg(null); setTestOk(null);
+    try {
+      const r = await api.testTelegram(chatId.trim());
+      setTestOk(r.ok);
+      setTestMsg(r.ok ? 'Delivered — check the chat.' : (r.error ?? 'Telegram did not accept the message.'));
+    } catch (e) {
+      setTestOk(false);
+      setTestMsg(String((e as Error).message ?? e));
+    } finally {
+      setTestBusy(false);
+    }
+  };
+
+  if (cfg.loading) return <p className="hint">Loading delivery settings…</p>;
+  if (cfg.error) return <div className="error-banner">{cfg.error}</div>;
+
+  return (
+    <div>
+      <p className="hint" style={{ marginTop: 0 }}>
+        When a run waits for your OK, Clockwork can message you on Telegram instead of waiting for you
+        to open the app — you approve or deny right from the chat. The bot token is a credential:
+        anyone who holds it can act as your bot, so treat it like a password.
+      </p>
+
+      <div className="tasklist-row">
+        <div className="grow">
+          <label className="f" htmlFor="tg-token">Telegram bot token</label>
+          <input
+            id="tg-token"
+            type="password"
+            autoComplete="off"
+            value={token}
+            onChange={(e) => setTokenInput(e.target.value)}
+            placeholder={configured ? (cfg.data?.telegram.botTokenMasked ?? 'configured') : 'Paste the token from @BotFather'}
+            style={{ width: '100%' }}
+            data-testid="telegram-token-input"
+          />
+          <div className="hint" style={{ margin: '4px 0 0' }}>
+            {configured
+              ? `Configured — ${cfg.data?.telegram.botTokenMasked}`
+              : 'Not configured — chat approvals are unavailable until a bot token is set.'}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            className="btn small primary"
+            disabled={tokenBusy || !token.trim()}
+            onClick={() => void saveToken()}
+            data-testid="telegram-token-save"
+          >
+            {tokenBusy ? 'Saving…' : 'Save'}
+          </button>
+          <button
+            className="btn small danger"
+            disabled={tokenBusy || !configured}
+            onClick={() => void clearToken()}
+          >
+            Clear
+          </button>
+        </div>
+      </div>
+      {tokenMsg && <div className="ok-banner">{tokenMsg}</div>}
+      {tokenErr && <div className="error-banner" role="alert">{tokenErr}</div>}
+
+      <div className="tasklist-row" style={{ marginTop: 8 }}>
+        <div className="grow">
+          <label className="f" htmlFor="tg-test-chat">Send test message</label>
+          <input
+            id="tg-test-chat"
+            type="text"
+            value={chatId}
+            onChange={(e) => setChatId(e.target.value)}
+            placeholder="Chat id"
+            disabled={!configured}
+            data-testid="telegram-test-chatid"
+          />
+        </div>
+        <button
+          className="btn small"
+          disabled={!configured || testBusy || !chatId.trim()}
+          onClick={() => void sendTest()}
+          data-testid="telegram-test-send"
+        >
+          {testBusy ? 'Sending…' : 'Send test message'}
+        </button>
+      </div>
+      {testMsg && (
+        <div className={testOk ? 'ok-banner' : 'error-banner'} role={testOk ? undefined : 'alert'}>
+          {testMsg}
+        </div>
+      )}
+
+      <div className="tasklist-row" style={{ marginTop: 14 }}>
+        <div className="grow">
+          <label className="f" htmlFor="wh-secret">Webhook secret (optional)</label>
+          <input
+            id="wh-secret"
+            type="password"
+            autoComplete="off"
+            value={webhookSecret}
+            onChange={(e) => setWebhookSecret(e.target.value)}
+            placeholder={cfg.data?.webhook.configured ? 'configured' : 'Shared secret used to sign outgoing webhook calls'}
+            style={{ width: '100%' }}
+          />
+          <div className="hint" style={{ margin: '4px 0 0' }}>
+            {cfg.data?.webhook.configured ? 'Configured.' : 'Not set — outgoing webhooks are sent unsigned.'}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn small primary" disabled={whBusy || !webhookSecret.trim()} onClick={() => void saveWebhookSecret()}>
+            {whBusy ? 'Saving…' : 'Save'}
+          </button>
+          <button className="btn small danger" disabled={whBusy || !cfg.data?.webhook.configured} onClick={() => void clearWebhookSecret()}>
+            Clear
+          </button>
+        </div>
+      </div>
+      {whMsg && <div className="ok-banner">{whMsg}</div>}
+      {whErr && <div className="error-banner" role="alert">{whErr}</div>}
+    </div>
+  );
+}
+
 /** Provider cards: installed/version/health per execution engine, with a live test-connection probe. */
 const PROVIDER_NOTES: Record<string, string> = {
   cli: 'Default engine. Uses your Claude Code subscription login — no API key.',
@@ -500,7 +707,7 @@ function TriggersCard({ version }: { version: number }): JSX.Element {
             </button>
             <button
               className="btn danger"
-              onClick={() => void api.deleteTrigger(t.id).then(triggers.reload)}
+              onClick={() => void api.deleteTrigger(t.id).catch(() => {}).then(triggers.reload)}
             >
               Delete
             </button>
