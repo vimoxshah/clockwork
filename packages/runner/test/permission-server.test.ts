@@ -301,7 +301,7 @@ describe('permission bridge — oversize body bound (memory-DoS)', () => {
   const OVERSIZE_LENGTH = 4 * 1024 * 1024 + 1;
 
   function postDeclaringLength(target: string, length: number): Promise<{ status: number; body: string }> {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       const u = new URL(target);
       const req = http.request(
         {
