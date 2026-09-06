@@ -71,6 +71,26 @@ export interface RunManagerDeps {
   keepAwake?: { arm(key: string, durationSec: number): boolean; release(key: string): void };
   /** bundled skill pack resolver (T-112) */
   resolveSkill?: (ref: { name: string; version: string }) => string | null;
+  /** F4 sentinel-worker (plan/AGENT-WORKFORCE-SPEC.md): called after every run
+   * finalize with the run's own id/taskId/report; optional so main.ts's
+   * existing `new RunManager({...})` call needs no edit — api.ts wires this
+   * in after construction, the same way it wires the SSE broadcast. */
+  onSentinelFinalize?: (runId: string, taskId: string, reportJson: string | null, now: number) => void;
+  /**
+   * F1 plan-then-execute (plan/AGENT-WORKFORCE-SPEC.md §F1). Registered by
+   * buildServer after construction, exactly like broadcast.
+   * Optional so a bare RunManager (api.test.ts, recovery.test.ts) still builds.
+   */
+  planExecute?: {
+    onPlanRunFinalized(runId: string, taskId: string, state: string, now?: number): { pairId: string; approvalId: string } | null;
+  };
+  /**
+   * F8 self-healing (spec §4 F8). Assigned by buildServer, absent in every
+   * existing test, so the finalize hook is a no-op unless the API wired it.
+   * Inline import type: erased at compile time, so no runtime import cycle and
+   * no edit to this file's import block.
+   */
+  selfHealing?: import('./self-healing.js').SelfHealing;
 }
 
 interface RunRow {
@@ -179,6 +199,14 @@ export class RunManager {
       if (ev && spec.prompt.includes('{{event')) {
         const { renderEventPrompt } = await import('./templates.js');
         spec.prompt = renderEventPrompt(spec.prompt, ev);
+      }
+
+      // F2 shift-handoff: materialize {{handoff.previous}} from the prior
+      // occurrence's memory, before preflight, same as {{event.*}} above.
+      if (spec.prompt.includes('{{handoff')) {
+        const { HandoffMemory, renderHandoffPrompt } = await import('./handoff.js');
+        const block = new HandoffMemory(this.deps.db).renderBlock(spec.taskId);
+        spec.prompt = renderHandoffPrompt(spec.prompt, block);
       }
 
       // preflight (S-36/S-69/S-87)
@@ -658,6 +686,58 @@ export class RunManager {
     this.pendingApprovals.delete(runId);
     this.notifiedApprovalKeys.delete(runId);
     this.deps.keepAwake?.release(runId);
+
+    // ---- workforce finalize hooks (plan/AGENT-WORKFORCE-SPEC.md §3) ----
+    // ORDER: F2 -> F1 -> F4 -> F8 (memory first, so the others can read it).
+    //
+    // All four sit AFTER tx() rather than at the spec's literal anchor inside
+    // it. Two reasons, both load-bearing:
+    //   1. The finalize transaction ends by auto-denying every still-open
+    //      approvals row for this run, so an approvals row inserted inside tx
+    //      (F1's pair gate, F8's proposal) would be denied the instant it was
+    //      written and no human would ever see it.
+    //   2. `await import(...)` cannot run inside a synchronous better-sqlite3
+    //      transaction at all.
+    // They also sit after `releaseMutex`, because F4 and F8 book runs through
+    // callbacks that call pump(); a same-repo run booked while the mutex still
+    // named this run would be skipped by that pump.
+
+    // F2 shift-handoff: append this occurrence's outcome to the task's
+    // memory, so the next occurrence's {{handoff.previous}} can read it.
+    // Best-effort — a memory-write failure must never fail an
+    // already-finalized run.
+    try {
+      const { HandoffMemory, handoffFromReport } = await import('./handoff.js');
+      const parsed = handoffFromReport(JSON.stringify(report));
+      if (parsed) new HandoffMemory(this.deps.db).append({ ...parsed, taskId: spec.taskId, runId }, now);
+    } catch (e) {
+      this.recordEvent(now, runId, 'note', { handoffError: String(e) });
+    }
+
+    // F1 plan-then-execute (spec §F1). See hazard (1) above: this MUST stay
+    // outside the transaction or the pair's approval is auto-denied at birth.
+    try {
+      const opened = this.deps.planExecute?.onPlanRunFinalized(runId, spec.taskId, String(outcome.state), now);
+      if (opened) this.deps.broadcast({ type: 'approval.requested', approvalId: opened.approvalId, runId, at: now });
+    } catch (e) {
+      this.recordEvent(now, runId, 'note', { planExecuteError: String(e) }); // never fail a finalized run
+    }
+
+    // F4 sentinel-worker: every finalize is an evaluation, tripped or not.
+    this.deps.onSentinelFinalize?.(runId, spec.taskId, JSON.stringify(report), now);
+
+    // F8 self-healing (spec §4 F8). Same hazard (1) as F1 — the proposal's
+    // inbox item would be killed before a human ever saw it. Also before
+    // clearFailureStreak below, so the streak row is still intact.
+    // proposeFrom runs first and self-guards on "was this a diagnostic run",
+    // so a diagnostic that timed out mid-write still yields its proposal;
+    // onRunFailed refuses to count a diagnostic against its own streak.
+    try {
+      this.deps.selfHealing?.proposeFrom(runId, spec.taskId, JSON.stringify(report), now);
+      if (outcome.state !== 'completed') this.deps.selfHealing?.onRunFailed(spec.taskId, runId, now);
+    } catch (e) {
+      this.recordEvent(now, runId, 'note', { selfHealingError: String(e) }); // advisory; never fails the run
+    }
 
     // S-40/S-41: consecutive auth failures auto-pause the task after 2
     const failureReason = ('failureReason' in outcome ? outcome.failureReason : undefined) ?? null;

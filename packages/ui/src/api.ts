@@ -184,6 +184,11 @@ export const api = {
     return req<RunRowT[]>('GET', `/runs?${qs}`);
   },
   report: (runId: string) => req<{ run: RunRowT; report: any }>('GET', `/runs/${runId}/report`),
+  proposedEvents: (runId: string) =>
+    req<{ events: Array<{ key: string; title: string; notes: string | null; durationMin: number; suggestedAt: number | null }> }>(
+      'GET',
+      `/workforce/runs/${runId}/proposed-events`,
+    ),
   transcript: (runId: string) =>
     req<{ available: boolean; totalLines?: number; lines: string[] }>(
       'GET',
@@ -225,6 +230,12 @@ export const api = {
     ),
   getPrefs: () => req<{ soundMode: 'chime' | 'system' | 'none'; volumePct: number }>('GET', '/prefs'),
   putPrefs: (p: { soundMode: string; volumePct: number }) => req<unknown>('PUT', '/prefs', p),
+  recordOutcome: (runId: string, body: { decision: 'accepted' | 'accepted_with_note' | 'rejected'; note?: string }) =>
+    req<{ runId: string; taskId: string; profileId: string | null; decision: string; note: string | null; memoryId: string | null; actor: string; decidedAt: number }>(
+      'POST',
+      `/workforce/runs/${runId}/outcome`,
+      body,
+    ),
 };
 
 export interface EventStream {

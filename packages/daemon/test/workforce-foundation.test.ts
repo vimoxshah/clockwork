@@ -7,7 +7,9 @@
  * in twelve half-finished features.
  *
  * What each test defends is named in its title. Nothing here asserts that a
- * feature WORKS — none of them are implemented yet, and the registry says so.
+ * feature WORKS — each feature's own suite does that. What the registry block
+ * at the bottom defends is that the registry never claims MORE than the code
+ * delivers.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import Database from 'better-sqlite3';
@@ -240,12 +242,83 @@ describe('agent workforce foundation — capability registry honesty', () => {
     expect(missing, `unregistered workforce features: ${missing.join(', ')}`).toEqual([]);
   });
 
-  it('calls every one of them planned, because none of them run yet', () => {
-    // The moment a feature actually ships, its status moves to
-    // 'available'/'enforced' and this list shrinks — deliberately a chore, so
-    // the registry cannot quietly claim more than the code does.
-    const lying = FEATURES.filter((f) => (WORKFORCE_KEYS as readonly string[]).includes(f.key) && f.status !== 'planned');
-    expect(lying.map((f) => f.key), 'workforce features claiming to exist before they are wired').toEqual([]);
+  // This block used to be one assertion: every workforce key is still
+  // 'planned', because none of them ran. The twelve modules and their wiring
+  // have now landed, and spec §0 rule 2 / §6 item 7 make the flip the
+  // integrator's job — so that assertion is replaced, not relaxed, by three
+  // guards that are each harder to satisfy dishonestly than the original.
+
+  /**
+   * The status each workforce key is allowed to claim, and nothing else.
+   * Editing a value here is deliberately a chore: it forces whoever raises a
+   * claim to raise it in a diff a reviewer reads.
+   */
+  const CLAIMED: Record<(typeof WORKFORCE_KEYS)[number], 'planned' | 'available' | 'enforced'> = {
+    plan_then_execute: 'enforced',
+    shift_handoff: 'available',
+    office_hours: 'enforced',
+    sentinel_worker: 'available',
+    repo_shipped_jobs: 'available',
+    accept_with_note: 'available',
+    earned_autonomy: 'enforced',
+    self_healing: 'available',
+    proposed_events: 'available',
+    agent_timesheets: 'available',
+    performance_reviews: 'available',
+    proof_of_work_export: 'available',
+  };
+
+  /** The route that makes each feature reachable, verbatim as api.ts registers it. */
+  const ROUTE: Record<(typeof WORKFORCE_KEYS)[number], string> = {
+    plan_then_execute: "app.post('/workforce/plan-execute'",
+    shift_handoff: "app.post('/workforce/handoff/:taskId'",
+    office_hours: "app.post('/workforce/office-hours'",
+    sentinel_worker: "app.post('/workforce/sentinels'",
+    repo_shipped_jobs: "app.post('/workforce/repo-jobs/discover'",
+    accept_with_note: "app.post('/workforce/runs/:runId/outcome'",
+    earned_autonomy: "app.get('/workforce/autonomy/offers'",
+    self_healing: "app.get('/workforce/remediations'",
+    proposed_events: "app.get('/workforce/runs/:runId/proposed-events'",
+    agent_timesheets: "app.get('/workforce/timesheets'",
+    performance_reviews: "app.get('/workforce/performance'",
+    proof_of_work_export: "app.get('/workforce/runs/:runId/proof-of-work'",
+  };
+
+  it('claims exactly the status the integration pass verified — no key drifts upward on its own', () => {
+    const drift = WORKFORCE_KEYS.map((k) => ({ k, actual: FEATURES.find((f) => f.key === k)?.status }))
+      .filter(({ k, actual }) => actual !== CLAIMED[k])
+      .map(({ k, actual }) => `${k}: registry says '${actual}', this contract says '${CLAIMED[k]}'`);
+    expect(drift, 'workforce feature status drifted from the reviewed claim').toEqual([]);
+  });
+
+  it('never says available/enforced for a feature api.ts serves no route for', () => {
+    // 'available' means a user can reach it through the API right now. The
+    // registry may not say that for a feature whose routes were never wired.
+    const api = readFileSync(resolve(HERE, '../src/api.ts'), 'utf8');
+    const unreachable = WORKFORCE_KEYS.filter(
+      (k) => FEATURES.find((f) => f.key === k)?.status !== 'planned' && !api.includes(ROUTE[k]),
+    );
+    expect(unreachable, 'registry claims a workforce feature exists but api.ts registers no route for it').toEqual([]);
+  });
+
+  it("backs every 'enforced' claim with a gate outside the /workforce/ routes", () => {
+    // 'enforced' is the strong claim: the daemon refuses or defers a user
+    // action because of the feature, whether or not the user ever touches a
+    // /workforce/ route. Anything weaker must say 'available'.
+    const api = readFileSync(resolve(HERE, '../src/api.ts'), 'utf8');
+    const runManager = readFileSync(resolve(HERE, '../src/run-manager.ts'), 'utf8');
+    const scheduler = readFileSync(resolve(HERE, '../src/scheduler.ts'), 'utf8');
+    const GATES: Partial<Record<(typeof WORKFORCE_KEYS)[number], boolean>> = {
+      // F1: run finalize withholds the execute run and opens an approval instead.
+      plan_then_execute: runManager.includes('this.deps.planExecute?.onPlanRunFinalized('),
+      // F3: the scheduler tick defers a fire into the next answerable window.
+      office_hours: scheduler.includes('shiftForApproval(this.deps.db, task.id, fireAt)'),
+      // F7: three 403 gates — task create, task patch, webhook fire.
+      earned_autonomy:
+        (api.match(/autonomy\.evaluate\(/g) ?? []).length >= 3 && api.includes('return reply.code(403).send(avio);'),
+    };
+    const unbacked = WORKFORCE_KEYS.filter((k) => FEATURES.find((f) => f.key === k)?.status === 'enforced' && GATES[k] !== true);
+    expect(unbacked, "'enforced' claimed with no gate outside the /workforce/ routes").toEqual([]);
   });
 
   it('never sells one of them in the upgrade modal', () => {

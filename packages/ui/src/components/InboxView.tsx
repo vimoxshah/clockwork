@@ -6,6 +6,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, type RunRowT } from '../api';
 import { useAsync } from '../useAsync';
+import { ProposedEvents } from './ProposedEvents';
+import { OutcomeControls } from './OutcomeControls';
 
 type OutcomeFilter = 'all' | 'completed' | 'failed' | 'active' | 'needsyou';
 
@@ -332,6 +334,7 @@ function ReportDetail({ runId, version }: { runId: string; version: number }): J
         <div className="empty">Report not finalized yet — check back once the run completes.</div>
       )}
       <FailureBanner reason={run.outcome_reason} />
+      {!active && <OutcomeControls runId={runId} />}
       {report?.sandboxed === false && (
         <div className="error-banner" role="alert">
           <strong>Sandbox was off for this run</strong> (CW_SANDBOX=off). Writes and credential reads were not contained.
@@ -373,6 +376,7 @@ function ReportDetail({ runId, version }: { runId: string; version: number }): J
           {report.deliveries.map((d: any) => `${d.channel}${d.ok ? ' ✓' : ` ✗ (${d.error ?? '?'})`}`).join(', ')}
         </p>
       )}
+      <ProposedEvents runId={runId} events={report?.proposedEvents ?? []} />
       {run.branch && run.state === 'completed' && (
         <p className="ok-banner mono">Branch ready for review: {run.branch}</p>
       )}
