@@ -58,6 +58,16 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
     const details = (err as any).details;
     throw new ApiError(res.status, typeof msg === 'string' ? msg : JSON.stringify(msg), details);
   }
+  // A 204 has no body, so res.json() throws SyntaxError and the caller's
+  // .then() never runs — DELETE /triggers/:id and DELETE /byok/:id both answer
+  // 204, which made "Delete" look broken while the row was actually gone.
+  // Only definitive no-body signals skip the parse: HTTP forbids a body on
+  // 204/205, and content-length: 0 says so outright. A missing content-type is
+  // NOT such a signal — treating it as one would silently return undefined for
+  // a real payload.
+  if (res.status === 204 || res.status === 205 || res.headers?.get('content-length') === '0') {
+    return undefined as T;
+  }
   return res.json() as Promise<T>;
 }
 
@@ -124,6 +134,11 @@ export interface AnalyticsT {
   byTask: Array<{ taskId: string; name: string; runs: number; completed: number; failed: number; costUsd: number; successRate: number; avgDurationMs: number }>;
   byProvider: Array<{ engine: string; runs: number; completed: number; failed: number; costUsd: number; successRate: number }>;
   daily: Array<{ day: string; runs: number; costUsd: number }>;
+}
+
+export interface DeliveryConfigT {
+  telegram: { configured: boolean; botTokenMasked: string | null };
+  webhook: { configured: boolean };
 }
 
 export const api = {
@@ -225,6 +240,11 @@ export const api = {
     ),
   getPrefs: () => req<{ soundMode: 'chime' | 'system' | 'none'; volumePct: number }>('GET', '/prefs'),
   putPrefs: (p: { soundMode: string; volumePct: number }) => req<unknown>('PUT', '/prefs', p),
+  deliveryConfig: () => req<DeliveryConfigT>('GET', '/delivery-config'),
+  saveDeliveryConfig: (body: { telegramBotToken?: string | null; webhookSecret?: string | null }) =>
+    req<DeliveryConfigT>('PUT', '/delivery-config', body),
+  testTelegram: (chatId: string) =>
+    req<{ ok: boolean; error?: string }>('POST', '/delivery-config/test-telegram', { chatId }),
 };
 
 export interface EventStream {

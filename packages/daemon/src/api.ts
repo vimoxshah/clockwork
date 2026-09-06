@@ -31,6 +31,7 @@ import type { RunManager } from './run-manager.js';
 import type { Scheduler } from './scheduler.js';
 import { nextOccurrenceAfter } from './recurrence.js';
 import { isGitRepo } from '@clockwork/runner';
+import { loadDeliveryCreds, writeDeliveryCreds, maskBotToken, TelegramChannel, TelegramApiError } from './delivery.js';
 
 export interface ApiDeps {
   db: DB;
@@ -38,6 +39,8 @@ export interface ApiDeps {
   runManager: RunManager;
   scheduler: Scheduler;
   version: string;
+  /** Test-only override for the Telegram Bot API base URL (defaults to api.telegram.org). */
+  telegramApiBase?: string;
 }
 
 export function loadOrCreateToken(dataDir: string): string {
@@ -147,7 +150,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     const url = (req.raw.url ?? '').split('?')[0]!;
     const needsAuth =
       /^\/(tasks|runs|approvals|profiles|search|widget|queue|onboarding|pause-all|resume|capacity)/.test(url) ||
-      /^\/(analytics|retention|audit|policies|capabilities|targets|byok|triggers|trigger-events|ics|usage)/.test(url) ||
+      /^\/(analytics|retention|audit|policies|capabilities|targets|byok|delivery-config|triggers|trigger-events|ics|usage)/.test(url) ||
       /^\/(license|support|auth)\//.test(url) || // S-review: control plane + diagnostics must not be anonymous
       /^\/(calendars|templates)\//.test(url) || // S-audit: ICS export leaks task data; template preview is control plane
       url.startsWith('/events');
@@ -1019,6 +1022,44 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     return readPrefs(deps.dataDir);
   });
 
+  // ---- delivery credentials (Telegram bot token / webhook HMAC secret) ----
+  app.get('/delivery-config', async () => readDeliveryConfigStatus(deps.dataDir));
+
+  app.put('/delivery-config', async (req, reply) => {
+    const DeliveryCredsSchema = z.object({
+      telegramBotToken: z.union([z.string(), z.null()]).optional(),
+      webhookSecret: z.union([z.string(), z.null()]).optional(),
+    });
+    const parsed = DeliveryCredsSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(422).send({ error: 'validation' });
+    writeDeliveryCreds(deps.dataDir, parsed.data);
+    audit('delivery-config.update', 'delivery-config', undefined, {
+      telegramBotToken: 'telegramBotToken' in parsed.data ? (parsed.data.telegramBotToken === null ? 'cleared' : 'set') : 'unchanged',
+      webhookSecret: 'webhookSecret' in parsed.data ? (parsed.data.webhookSecret === null ? 'cleared' : 'set') : 'unchanged',
+    });
+    return readDeliveryConfigStatus(deps.dataDir);
+  });
+
+  app.post('/delivery-config/test-telegram', async (req, reply) => {
+    const TestSchema = z.object({ chatId: z.string().min(1) });
+    const parsed = TestSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(422).send({ error: 'validation' });
+    const creds = loadDeliveryCreds(deps.dataDir);
+    if (!creds.telegramBotToken) return reply.send({ ok: false, error: 'no bot token configured' });
+    const ch = new TelegramChannel(deps.telegramApiBase);
+    try {
+      await ch.sendTest(parsed.data.chatId, creds);
+      return reply.send({ ok: true });
+    } catch (e) {
+      let msg = e instanceof TelegramApiError ? (e.description ?? e.message) : e instanceof Error ? e.message : String(e);
+      // Belt-and-braces: the request URL embeds the token, so scrub it from
+      // the error even though it shouldn't be able to reach here (network
+      // errors / a misbehaving stub could still echo the URL back).
+      if (creds.telegramBotToken) msg = msg.split(creds.telegramBotToken).join('[redacted]');
+      return reply.send({ ok: false, error: msg.slice(0, 200) });
+    }
+  });
+
   // ---- cost & reliability analytics (ADR-029) ----
   app.get('/analytics', async (req, reply) => {
     const q = req.query as Record<string, string>;
@@ -1593,4 +1634,22 @@ export function readPrefs(dataDir: string): { soundMode: 'chime' | 'system' | 'n
   } catch {
     return { soundMode: 'chime', volumePct: 60 };
   }
+}
+
+/**
+ * GET /delivery-config shape: effective (env-merged, file-wins) credential
+ * status. Never returns a raw token/secret — `botTokenMasked` only.
+ */
+export function readDeliveryConfigStatus(dataDir: string): {
+  telegram: { configured: boolean; botTokenMasked: string | null };
+  webhook: { configured: boolean };
+} {
+  const creds = loadDeliveryCreds(dataDir);
+  return {
+    telegram: {
+      configured: Boolean(creds.telegramBotToken),
+      botTokenMasked: creds.telegramBotToken ? maskBotToken(creds.telegramBotToken) : null,
+    },
+    webhook: { configured: Boolean(creds.webhookSecret) },
+  };
 }
