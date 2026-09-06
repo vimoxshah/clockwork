@@ -112,6 +112,10 @@ export function AutonomyCard({ version }: { version: number }): JSX.Element {
 
   const byId = new Map((profiles.data ?? []).map((p) => [p.id, p]));
   const unenrolled = (profiles.data ?? []).filter((p) => p.autonomy_rung == null);
+  // `profiles.data` is null until GET /profiles answers — seconds, on a
+  // Settings load that queues behind provider detection. An empty `unenrolled`
+  // means "nobody left to enrol" only once that answer is in.
+  const profilesKnown = profiles.data != null;
   const officeHours = featureSurface('office_hours');
 
   const reloadAll = (): void => {
@@ -244,10 +248,13 @@ export function AutonomyCard({ version }: { version: number }): JSX.Element {
         <button
           className="btn small"
           data-testid="autonomy-enrol-open"
-          disabled={profiles.loading || unenrolled.length === 0}
+          // `profiles.loading` stays in the condition: useAsync keeps the OLD
+          // data during a reload, so after an enrolment this list is stale for
+          // a moment and must not be clickable.
+          disabled={profiles.loading || !profilesKnown || unenrolled.length === 0}
           onClick={() => setPicking(true)}
         >
-          {unenrolled.length === 0 ? 'Every profile is already enrolled' : 'Choose a profile to enrol'}
+          {enrolLabel(profilesKnown, profiles.error, unenrolled.length)}
         </button>
       )}
       {picking && (
@@ -304,6 +311,21 @@ export function AutonomyCard({ version }: { version: number }): JSX.Element {
       )}
     </div>
   );
+}
+
+/**
+ * The enrol button's label — three states, because "we have not been told yet"
+ * is not the same fact as "there is nobody left to enrol".
+ *
+ * It used to be a two-way branch on `unenrolled.length`, and an unanswered
+ * GET /profiles makes that list empty, so for the first several seconds of
+ * every Settings load the button asserted `Every profile is already enrolled`
+ * with nothing enrolled at all. A loading state may not wear a definite
+ * statement.
+ */
+function enrolLabel(known: boolean, error: string | null, unenrolledCount: number): string {
+  if (!known) return error ? 'Profiles couldn’t be read' : 'Reading profiles…';
+  return unenrolledCount === 0 ? 'Every profile is already enrolled' : 'Choose a profile to enrol';
 }
 
 /**

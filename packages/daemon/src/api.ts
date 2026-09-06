@@ -25,6 +25,8 @@ import {
   slugify,
   branchFor,
   PROVIDER_KIND_META,
+  isTerminal,
+  type RunState,
   // ---- Agent Workforce (plan/AGENT-WORKFORCE-SPEC.md) ----
   AgentMemoryWrite, // F2
   PlanExecuteCreate, // F1
@@ -1661,6 +1663,26 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
   });
 
   // ---- cost & reliability analytics (ADR-029) ----
+  //
+  // An UNFINISHED run (queued / preparing / running / waiting_approval /
+  // finalizing / awaiting_user) is the normal state of this product, so the
+  // window predicate below deliberately admits one: `COALESCE(ended_at,
+  // scheduled_for)` places it on the day it was scheduled for, matching
+  // timesheets.ts:95 and performance.ts:67. How it is then COUNTED is the
+  // careful part, and the rule is one line: a run with no end time is a real
+  // run whose spend so far is real, but it is never counted as a FINISHED one.
+  //   - counted in `runs`; reported separately as `inFlight`
+  //   - its cost/turns so far count — that money is already gone
+  //   - never `completed`, never `failed`
+  //   - excluded from every rate's denominator (`successRate` divides by
+  //     finished runs) and from `avgDurationMs` (no end time, no duration)
+  // With no unfinished run in the window every number here is identical to
+  // what it was before, so this changes only the case that used to 500.
+  //
+  // That 500 was this: the SELECT list omitted `scheduled_for` while the day
+  // bucketing read it, so `Number(undefined)` -> NaN -> `new Date(NaN)
+  // .toISOString()` threw RangeError('Invalid time value') and took the whole
+  // Analytics tab down for as long as any run was in flight.
   app.get('/analytics', async (req, reply) => {
     const q = req.query as Record<string, string>;
     const to = q.to ? parseInt(String(q.to), 10) : Date.now();
@@ -1669,16 +1691,18 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
 
     const rows = deps.db
       .prepare(
-        `SELECT task_id, state, outcome_reason, started_at, ended_at, cost_usd, turns, jobspec_json
+        `SELECT task_id, state, outcome_reason, started_at, ended_at, scheduled_for, cost_usd, turns, jobspec_json
          FROM runs
          WHERE COALESCE(ended_at, scheduled_for) BETWEEN ? AND ?`,
       )
       .all(from, to) as unknown as Array<Record<string, unknown>>;
 
-    type TaskAgg = { taskId: string; name: string; runs: number; completed: number; failed: number; costUsd: number; turns: number; durationMs: number };
+    /** `finished` = terminal runs, the denominator of every rate. `timedRuns` = runs that have both a start and an end. */
+    type TaskAgg = { taskId: string; name: string; runs: number; finished: number; completed: number; failed: number; costUsd: number; turns: number; durationMs: number; timedRuns: number };
     const byTask = new Map<string, TaskAgg>();
-    const byEngine = new Map<string, { engine: string; runs: number; completed: number; failed: number; costUsd: number }>();
+    const byEngine = new Map<string, { engine: string; runs: number; finished: number; completed: number; failed: number; costUsd: number }>();
     let totalRuns = 0;
+    let totalFinished = 0;
     let totalCompleted = 0;
     let totalFailed = 0;
     let totalCostUsd = 0;
@@ -1688,40 +1712,72 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     for (const r of rows) {
       totalRuns += 1;
       const state = String(r.state);
+      // An unknown state is treated as unfinished — better to under-claim a
+      // finished run than to average an unfinished one in as though it ended.
+      const finished = isTerminal(state as RunState);
       const isDone = state === 'completed';
       const isFail = state === 'failed' || state === 'timed_out';
+      if (finished) totalFinished += 1;
       if (isDone) totalCompleted += 1;
       if (isFail) totalFailed += 1;
       const cost = Number(r.cost_usd ?? 0);
       totalCostUsd += cost;
       const turns = Number(r.turns ?? 0);
       totalTurns += turns;
-      const dur = Number(r.ended_at && r.started_at ? (r.ended_at as number) - (r.started_at as number) : 0);
+      // A duration needs BOTH ends. An unfinished run has no end; a `missed`
+      // or `cancelled` one never started. Neither is a 0 ms sample.
+      const timed = r.started_at != null && r.ended_at != null;
+      const dur = timed ? Number(r.ended_at) - Number(r.started_at) : 0;
 
       const spec = safeParseSpec(r.jobspec_json);
       const name = String(spec.taskName ?? 'unknown');
       const engFromSpec = String(spec.engine ?? 'cli');
-      const day = new Date(Number(r.ended_at ?? r.scheduled_for)).toISOString().slice(0, 10);
+      // Same COALESCE the WHERE clause uses, so every returned row has a day.
+      // Still guarded: one unreadable timestamp loses its bar, not the tab.
+      const bucketAt = Number(r.ended_at ?? r.scheduled_for ?? Number.NaN);
+      const day = Number.isFinite(bucketAt) ? new Date(bucketAt).toISOString().slice(0, 10) : null;
 
-      const t = byTask.get(String(r.task_id)) ?? { taskId: String(r.task_id), name, runs: 0, completed: 0, failed: 0, costUsd: 0, turns: 0, durationMs: 0 };
-      t.runs += 1; if (isDone) t.completed += 1; if (isFail) t.failed += 1;
-      t.costUsd += cost; t.turns += turns; t.durationMs += dur;
+      const t = byTask.get(String(r.task_id)) ?? { taskId: String(r.task_id), name, runs: 0, finished: 0, completed: 0, failed: 0, costUsd: 0, turns: 0, durationMs: 0, timedRuns: 0 };
+      t.runs += 1; if (finished) t.finished += 1; if (isDone) t.completed += 1; if (isFail) t.failed += 1;
+      t.costUsd += cost; t.turns += turns; t.durationMs += dur; if (timed) t.timedRuns += 1;
       byTask.set(String(r.task_id), t);
 
       const engKey = engFromSpec + (spec.byokId ? ':byok' : '');
-      const e = byEngine.get(engKey) ?? { engine: engKey, runs: 0, completed: 0, failed: 0, costUsd: 0 };
-      e.runs += 1; if (isDone) e.completed += 1; if (isFail) e.failed += 1; e.costUsd += cost;
+      const e = byEngine.get(engKey) ?? { engine: engKey, runs: 0, finished: 0, completed: 0, failed: 0, costUsd: 0 };
+      e.runs += 1; if (finished) e.finished += 1; if (isDone) e.completed += 1; if (isFail) e.failed += 1; e.costUsd += cost;
       byEngine.set(engKey, e);
 
-      const d = daily.get(day) ?? { day, runs: 0, costUsd: 0 };
-      d.runs += 1; d.costUsd += cost;
-      daily.set(day, d);
+      if (day !== null) {
+        const d = daily.get(day) ?? { day, runs: 0, costUsd: 0 };
+        d.runs += 1; d.costUsd += cost;
+        daily.set(day, d);
+      }
     }
 
     const tasksOut = [...byTask.values()]
       .sort((a, b) => b.costUsd - a.costUsd)
-      .map((t) => ({ ...t, costUsd: round4(t.costUsd), successRate: t.runs ? Math.round((t.completed / t.runs) * 100) : 0, avgDurationMs: t.runs ? Math.round(t.durationMs / t.runs) : 0 }));
-    const enginesOut = [...byEngine.values()].map((e) => ({ ...e, costUsd: round4(e.costUsd), successRate: e.runs ? Math.round((e.completed / e.runs) * 100) : 0 }));
+      .map((t) => ({
+        taskId: t.taskId,
+        name: t.name,
+        runs: t.runs,
+        completed: t.completed,
+        failed: t.failed,
+        inFlight: t.runs - t.finished,
+        costUsd: round4(t.costUsd),
+        turns: t.turns,
+        durationMs: t.durationMs,
+        successRate: t.finished ? Math.round((t.completed / t.finished) * 100) : 0,
+        avgDurationMs: t.timedRuns ? Math.round(t.durationMs / t.timedRuns) : 0,
+      }));
+    const enginesOut = [...byEngine.values()].map((e) => ({
+      engine: e.engine,
+      runs: e.runs,
+      completed: e.completed,
+      failed: e.failed,
+      inFlight: e.runs - e.finished,
+      costUsd: round4(e.costUsd),
+      successRate: e.finished ? Math.round((e.completed / e.finished) * 100) : 0,
+    }));
 
     // ---- cost optimization suggestions (goal #35) ----
     const suggestions: Array<{ taskName: string; kind: string; message: string }> = [];
@@ -1745,7 +1801,11 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
         });
       }
       // Turn-hungry tasks: prompt scoping suggestion.
-      if (t.turns / Math.max(1, t.runs) > 40 && t.completed < t.runs) {
+      // `completed < finished` is "some finished run did not complete" — the
+      // "and has failures" this line always meant. It is the same test as the
+      // older `completed < runs` whenever nothing is in flight; a run that is
+      // merely still going is not evidence of anything to fix.
+      if (t.turns / Math.max(1, t.runs) > 40 && t.completed < t.finished) {
         suggestions.push({
           taskName: t.name,
           kind: 'prompt_scoping',
@@ -1761,7 +1821,9 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
         runs: totalRuns,
         completed: totalCompleted,
         failed: totalFailed,
-        successRate: totalRuns ? Math.round((totalCompleted / totalRuns) * 100) : 0,
+        /** Runs in this window that have not finished yet — counted in `runs`, in no rate. */
+        inFlight: totalRuns - totalFinished,
+        successRate: totalFinished ? Math.round((totalCompleted / totalFinished) * 100) : 0,
         costUsd: round4(totalCostUsd),
         turns: totalTurns,
         avgCostPerRun: totalRuns ? round4(totalCostUsd / totalRuns) : 0,
@@ -2234,10 +2296,25 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     return result;
   });
 
+  // "Nobody has decided yet" is the normal state of a fresh run, not an error.
+  // Answering it with 404 put a red line in the browser console every time the
+  // inbox opened an undecided run — console noise that trains people to ignore
+  // the console. So the absence of a decision is an ordinary 200 carrying JSON
+  // `null`, and 404 is kept for the one case that really is a caller mistake:
+  // a runId that names no run. The two stay distinguishable.
+  //
+  // The body is a bare `null`, deliberately NOT an envelope like
+  // `{ outcome: null }`: OutcomeControls.tsx:50 stores whatever this returns
+  // and line 123 renders `outcome.decision` behind a bare truthiness check, so
+  // a truthy envelope would crash the panel this change exists to keep quiet.
   app.get('/workforce/runs/:runId/outcome', async (req, reply) => {
-    const rec = acceptance.get((req.params as any).runId);
-    if (!rec) return reply.code(404).send({ error: 'not_found' });
-    return rec;
+    const runId = (req.params as any).runId;
+    const rec = acceptance.get(runId); // a run_outcomes row implies the run exists (FK)
+    if (rec) return rec;
+    if (!deps.db.prepare('SELECT 1 FROM runs WHERE id=?').get(runId)) {
+      return reply.code(404).send({ error: 'not_found' });
+    }
+    return reply.send(null);
   });
 
   app.get('/workforce/tasks/:taskId/outcomes', async (req) => {

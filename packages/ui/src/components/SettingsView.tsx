@@ -103,12 +103,14 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
       {err && <div className="error-banner">{err}</div>}
 
       {snap.data && (
-        <div className="statrow mono" style={{ marginTop: 14 }}>
-          <span>runs today: {snap.data.runsToday}</span>
-          <span>needs you: {snap.data.needsYou}</span>
-          {snap.data.nextRun?.name && (
-            <span>next: {snap.data.nextRun.name}</span>
-          )}
+        <div className="tasklist-row" data-testid="scheduling-snapshot">
+          <div className="grow statrow mono" style={{ margin: 0 }}>
+            <span>runs today: {snap.data.runsToday}</span>
+            <span>needs you: {snap.data.needsYou}</span>
+            {snap.data.nextRun?.name && (
+              <span>next: {snap.data.nextRun.name}</span>
+            )}
+          </div>
         </div>
       )}
 

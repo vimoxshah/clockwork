@@ -36,6 +36,36 @@ function tabFromHash(): Tab {
   return TABS.includes(h) ? h : 'calendar';
 }
 
+/**
+ * The topbar's "next …" stamp. A bare clock time is a lie by omission: with one
+ * task booked for 20 Dec the header read `next 2:00:00 PM`, which is exactly
+ * what a run fourteen minutes away would look like. Enough date to place the
+ * time, and not a character more — this shares one 48px line with the daemon
+ * version, two counters and the paused chip:
+ *
+ *   today                  `2:00 PM`
+ *   the next six days      `Sun 2:00 PM`
+ *   further out, this year `Dec 20, 2:00 PM`
+ *   another year           `Dec 20, 2027, 2:00 PM`
+ *
+ * The comparison is between LOCAL CALENDAR DAYS, not over a rolling 24 hours,
+ * so a run at 1am tomorrow never renders as if it were today. Seconds are gone
+ * with the same reasoning: nothing here is decided on a second. The exact
+ * instant stays available in the span's tooltip.
+ */
+export function formatNextFire(ts: number, now: Date = new Date()): string {
+  const at = new Date(ts);
+  const midnight = (d: Date): number => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  // Rounded, because a DST boundary makes a calendar day 23 or 25 hours long.
+  const daysAway = Math.round((midnight(at) - midnight(now)) / 86_400_000);
+  const clock = { hour: 'numeric', minute: '2-digit' } as const;
+  if (daysAway === 0) return at.toLocaleTimeString(undefined, clock);
+  if (daysAway > 0 && daysAway < 7) return at.toLocaleString(undefined, { weekday: 'short', ...clock });
+  return at.getFullYear() === now.getFullYear()
+    ? at.toLocaleString(undefined, { month: 'short', day: 'numeric', ...clock })
+    : at.toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', ...clock });
+}
+
 export default function App(): JSX.Element {
   const [tab, setTab] = useState<Tab>(tabFromHash);
   const [health, setHealth] = useState<Health | null>(null);
@@ -187,7 +217,12 @@ export default function App(): JSX.Element {
                     <span>{health.queuedRuns} queued</span>
                     {health.paused && <span className="chip needs-you">PAUSED</span>}
                     {health.nextFire && (
-                      <span>next {new Date(health.nextFire).toLocaleTimeString()}</span>
+                      <span
+                        data-testid="next-fire"
+                        title={`Next scheduled run: ${new Date(health.nextFire).toLocaleString()}`}
+                      >
+                        next {formatNextFire(health.nextFire)}
+                      </span>
                     )}
                   </>
                 )}

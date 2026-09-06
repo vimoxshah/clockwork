@@ -144,6 +144,18 @@ describe('Settings mounts the two workforce cards it owns (F3, F7)', () => {
     const missing = settingsSurfaces.filter((s) => !SETTINGS.includes(`id="${s.anchorId}"`));
     expect(missing.map((s) => s.key), 'registered for Settings but nothing renders its anchor').toEqual([]);
   });
+
+  // Regression: the "runs today / needs you / next" scheduling snapshot used
+  // to be bare monospace text with no container ('.statrow mono'), floating
+  // directly under the Scheduling card with nothing to visually anchor it to
+  // the rest of the section — a user reads that as unfinished. The fix wraps
+  // it in the same '.tasklist-row' card treatment every other row in this
+  // section already uses (Theme, Pause all scheduling).
+  it('wraps the scheduling snapshot in the same card treatment as the rest of the section', () => {
+    expect(SETTINGS).toContain('<div className="tasklist-row" data-testid="scheduling-snapshot">');
+    // the old bare, containerless rendering must be gone, not merely duplicated
+    expect(SETTINGS).not.toContain('<div className="statrow mono" style={{ marginTop: 14 }}>');
+  });
 });
 
 // ---------------------------------------------------------------------------

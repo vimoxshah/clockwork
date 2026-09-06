@@ -18,6 +18,7 @@ import { useMemo, useState } from 'react';
 import { api, type PlanExecutePairT, type PlanExecuteStatusT, type TaskViewT } from '../api';
 import type { AsyncState } from '../useAsync';
 import { Select, SelectValue, SelectTrigger, SelectContent, SelectItem } from './ui/select';
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from './ui/dialog';
 import { fmtWhen, openInbox, openRunInInbox } from './workforce-common';
 import { registerFeatureSurface } from './featureSurfaces';
 
@@ -347,14 +348,24 @@ function CreatePairDialog({
     }
   };
 
+  // A hand-rolled modal-dialog div (role dialog, aria-modal true) hid this
+  // dialog's own Select from assistive tech: the Select's listbox portals to
+  // <body>, and a bare aria-modal attribute has no way to know that a
+  // later-opened, body-level sibling is actually part of the dialog. The
+  // app's own Radix-based Dialog (already the pattern for every other modal
+  // that hosts a form — see ComposerView's clone dialog) does not have this
+  // problem: it marks background siblings aria-hidden ONCE, when it opens,
+  // and the Select's portal node does not exist yet at that point — it is
+  // only created when the dropdown itself is opened, so it never gets
+  // caught by the one-time hiding pass.
   return (
-    <div className="dialog-backdrop" onClick={onClose} role="dialog" aria-modal="true">
-      <div className="dialog" onClick={(e) => e.stopPropagation()}>
-        <h3>New plan-then-execute pair</h3>
-        <p className="hint" style={{ marginTop: 0 }}>
+    <Dialog open onOpenChange={(v) => { if (!v) onClose(); }}>
+      <DialogContent>
+        <DialogTitle>New plan-then-execute pair</DialogTitle>
+        <DialogDescription>
           Clockwork copies an existing task into two: a plan half that runs once and changes nothing, and an
           execute half that stays paused until you approve the plan it wrote. The original task is left alone.
-        </p>
+        </DialogDescription>
 
         {tasks.length === 0 ? (
           <div className="empty" data-testid="pe-no-source">
@@ -428,7 +439,7 @@ function CreatePairDialog({
             Create pair
           </button>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

@@ -137,7 +137,7 @@ export default function PerformanceReviewsPanel({ version, days }: { version: nu
           <div key={key} className="tasklist-row" style={{ flexDirection: 'column', alignItems: 'stretch' }} data-testid={`scorecard-${key}`}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
               <strong>{card.profileName}</strong>
-              <span className="hint" style={{ margin: 0 }}>{card.runs} runs</span>
+              <span className="hint" style={{ margin: 0 }}>{card.runs} run{card.runs === 1 ? '' : 's'}</span>
               <span className="grow" />
               <span style={{ fontSize: 12.5 }} title="accepted / decided">
                 Acceptance: {pctText(card.acceptanceRate, card.decided)}

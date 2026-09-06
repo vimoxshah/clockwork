@@ -47,6 +47,18 @@ type Filter = 'offered' | 'imported' | 'dismissed' | 'all';
 
 const FILTERS: Filter[] = ['offered', 'imported', 'dismissed', 'all'];
 
+/**
+ * "No offered offers." stutters — 'offered' already means "is an offer".
+ * Word each empty state to describe the bucket instead of echoing "offers"
+ * back at the filter name.
+ */
+const EMPTY_FILTER_LABEL: Record<Filter, string> = {
+  offered: 'Nothing is waiting on your decision.',
+  imported: 'No imported offers.',
+  dismissed: 'No dismissed offers.',
+  all: 'No offers yet.',
+};
+
 const PROMPT_BLOCK: React.CSSProperties = {
   whiteSpace: 'pre-wrap',
   wordBreak: 'break-word',
@@ -97,7 +109,7 @@ export default function RepoJobsSection({
       setScanMsg(
         res.offers.length === 0
           ? `No .clockwork/jobs.json, jobs.yaml or jobs.yml in ${path}, so that repository recommends nothing.`
-          : `${path} recommends ${res.offers.length} job${res.offers.length === 1 ? '' : 's'}. Nothing was imported — review each one below.`,
+          : `${path} recommends ${res.offers.length} job${res.offers.length === 1 ? '' : 's'}. Review each one below.`,
       );
       setFilter('offered');
       offers.reload();
@@ -176,7 +188,7 @@ export default function RepoJobsSection({
       )}
       {!offers.loading && !offers.error && rows.length > 0 && visible.length === 0 && (
         <div className="empty">
-          No {filter} offers.
+          {EMPTY_FILTER_LABEL[filter]}
           <div><button className="btn small" style={{ marginTop: 8 }} onClick={() => setFilter('all')}>Show all</button></div>
         </div>
       )}

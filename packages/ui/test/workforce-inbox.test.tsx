@@ -96,6 +96,21 @@ describe('ProposedEvents (F9)', () => {
     const container = await render(<ProposedEvents runId="run_1" events={[]} />);
     expect(container.textContent).toBe('');
   });
+
+  it('formats a suggested time without seconds — meaningless precision for a calendar suggestion', async () => {
+    const { ProposedEvents } = await import('../src/components/ProposedEvents');
+    // A time chosen to land on :26 seconds, matching the bug report's capture
+    // ('9/8/2026, 2:13:26 PM') — if seconds ever crept back in, this ':26' would show.
+    const suggestedAt = new Date(2026, 8, 8, 14, 13, 26).getTime();
+    const container = await render(
+      <ProposedEvents
+        runId="run_1"
+        events={[{ key: 'a', title: 'Add a linter to the fixture repo', notes: null, durationMin: 60, suggestedAt }]}
+      />,
+    );
+    expect(container.textContent).not.toMatch(/:\d{2}:\d{2}\s*(AM|PM)?/i); // no hh:mm:ss anywhere
+    expect(container.textContent).toContain('2:13');
+  });
 });
 
 describe('OutcomeControls (F6)', () => {

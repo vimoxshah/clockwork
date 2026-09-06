@@ -60,6 +60,17 @@ async function downloadIcs(runId: string): Promise<void> {
   }
 }
 
+/** Seconds are meaningless for a calendar suggestion — drop them, keep date + minute precision. */
+function formatSuggestedAt(ms: number): string {
+  return new Date(ms).toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
 export function ProposedEvents({ runId, events }: { runId: string; events: ProposedEventT[] }): JSX.Element | null {
   if (!events.length) return null;
 
@@ -72,7 +83,7 @@ export function ProposedEvents({ runId, events }: { runId: string; events: Propo
             <strong>{ev.title}</strong>
             <span className="hint"> · {ev.durationMin}m</span>
             {ev.suggestedAt != null && (
-              <span className="hint"> · {new Date(ev.suggestedAt).toLocaleString()}</span>
+              <span className="hint"> · {formatSuggestedAt(ev.suggestedAt)}</span>
             )}
             {ev.notes && <div className="hint">{ev.notes}</div>}
           </li>

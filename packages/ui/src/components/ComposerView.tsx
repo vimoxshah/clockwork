@@ -518,7 +518,7 @@ export default function ComposerView({
                     <p className="mt-2 text-xs text-dim">
                       {form.runAt.getTime() < Date.now()
                         ? '⚠ This time is in the past — pick a future slot.'
-                        : `Fires ${form.runAt.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' })} (${form.tz}).`}
+                        : `Fires ${form.runAt.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} (${form.tz}).`}
                     </p>
                   </>
                 )}

@@ -201,6 +201,26 @@ describe('TimesheetsPanel (F10)', () => {
     expect(alert).not.toBeNull();
     expect(alert!.textContent).toContain('daemon exploded');
   });
+
+  it('does not double-encode the sign in the vs-you comparison ("−$118.97/hr cheaper than you")', async () => {
+    // effectiveHourlyRateUsd 0.336 vs a human rate of 120 — the agent is
+    // cheaper, so the old copy prefixed a MINUS sign in front of "cheaper",
+    // saying the same thing twice and inviting the opposite reading.
+    const fn = vi.fn(async (url: unknown) => {
+      const u = String(url);
+      if (/^\/workforce\/timesheets\?/.test(u)) {
+        return new Response(JSON.stringify({ ...TIMESHEET_MOCK, humanHourlyRateUsd: 120 }), { status: 200 });
+      }
+      if (/^\/runs\?/.test(u)) return new Response(JSON.stringify([]), { status: 200 });
+      throw new Error(`unexpected request: ${u}`);
+    });
+    vi.stubGlobal('fetch', fn);
+    const { default: TimesheetsPanel } = await import('../src/components/TimesheetsPanel');
+    const container = await render(<TimesheetsPanel version={8} days={30} />);
+    expect(container.textContent).toContain('cheaper than you');
+    // neither ASCII hyphen-minus nor U+2212 MINUS SIGN in front of the dollar amount
+    expect(container.textContent).not.toMatch(/[-−]\$\d/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -304,5 +324,27 @@ describe('PerformanceReviewsPanel (F11)', () => {
     const alert = container.querySelector('[role="alert"]');
     expect(alert).not.toBeNull();
     expect(alert!.textContent).toContain('not_found');
+  });
+
+  it('pluralizes the run count — a scorecard with exactly one run must read "1 run", not "1 runs"', async () => {
+    const fn = vi.fn(async (url: unknown) => {
+      const u = String(url);
+      if (/^\/workforce\/performance\?/.test(u)) {
+        return new Response(JSON.stringify({ cards: [{ ...CARDS_MOCK.cards[0], runs: 1 }] }), { status: 200 });
+      }
+      throw new Error(`unexpected request: ${u}`);
+    });
+    vi.stubGlobal('fetch', fn);
+    const { default: PerformanceReviewsPanel } = await import('../src/components/PerformanceReviewsPanel');
+    const container = await render(<PerformanceReviewsPanel version={5} days={30} />);
+    expect(container.textContent).toContain('1 run');
+    expect(container.textContent).not.toContain('1 runs');
+  });
+
+  it('keeps the plural for a scorecard with more than one run', async () => {
+    stubPerformanceFetch(); // CARDS_MOCK.cards[0].runs === 4
+    const { default: PerformanceReviewsPanel } = await import('../src/components/PerformanceReviewsPanel');
+    const container = await render(<PerformanceReviewsPanel version={6} days={30} />);
+    expect(container.textContent).toContain('4 runs');
   });
 });

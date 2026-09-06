@@ -14,7 +14,7 @@
  * is not maintained here.
  */
 import { useEffect, useState } from 'react';
-import { CheckCircle2, Circle, ShieldCheck, TriangleAlert } from 'lucide-react';
+import { CheckCircle2, ChevronDown, ChevronRight, Circle, ShieldCheck, TriangleAlert } from 'lucide-react';
 import { api } from '../api';
 import { featureSurface, revealFeatureSurface } from './featureSurfaces';
 
@@ -121,16 +121,29 @@ export function LicenseCard({ version }: { version: number }): JSX.Element {
         </div>
       )}
 
+      {/* A disclosure needs to LOOK like one. This was grey caption text with a
+          hover-only underline: nothing on screen said it could be clicked, and
+          it is the sole way to reach the matrix. The chevron states which way
+          it goes, and the underline is now unconditional. */}
       <button
-        className="text-left text-caption text-dim underline-offset-2 hover:text-fg hover:underline"
+        className="flex w-fit items-center gap-1 text-left text-caption text-muted underline underline-offset-2 hover:text-fg"
         aria-expanded={showMatrix}
         onClick={() => setShowMatrix((v) => !v)}
         data-testid="capability-matrix-toggle"
       >
-        {showMatrix ? '− Hide what each plan includes' : 'What does each plan include?'}
+        {showMatrix ? (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        ) : (
+          <ChevronRight className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        )}
+        {showMatrix ? 'Hide what each plan includes' : 'What does each plan include?'}
       </button>
+      {/* No height cap. 300px showed two of six categories and sliced the third
+          heading in half, inside a Settings page already thousands of pixels
+          tall — it read as a rendering failure, not as a scroll region. The
+          list is short enough to simply be read. */}
       {showMatrix && (
-        <div className="rounded-lg border border-border p-2" style={{ maxHeight: 300, overflow: 'auto' }}>
+        <div className="rounded-lg border border-border p-2" data-testid="capability-matrix">
           {groupByCategory(caps.features).map(([cat, feats]) => (
             <div key={cat}>
               <p className="mb-1 mt-2 text-xxs font-semibold uppercase tracking-wide text-dim">{cat}</p>

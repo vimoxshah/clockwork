@@ -125,6 +125,14 @@ async function click(el: Element | null | undefined): Promise<void> {
   await new Promise((r) => setTimeout(r, 20));
 }
 
+/** React tracks the value node-side, so the native setter is the only way in. */
+function type(el: Element | null | undefined, value: string): void {
+  if (!el) throw new Error('nothing to type into');
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!;
+  setter.call(el as HTMLInputElement, value);
+  (el as HTMLInputElement).dispatchEvent(new Event('input', { bubbles: true }));
+}
+
 const tabNamed = (root: Element, label: string): Element | undefined =>
   [...root.querySelectorAll('[role="tab"]')].find((b) => (b.textContent ?? '').trim().startsWith(label));
 
@@ -394,6 +402,43 @@ describe('PlanExecuteSection (F1)', () => {
     expect(textOf(c.querySelector('[role="alert"]'))).toContain('daemon unreachable');
     expect(c.querySelector('[data-testid="pe-empty"]')).toBeNull();
   });
+
+  // Regression: the "New pair" dialog used to be a hand-rolled
+  // `role="dialog" aria-modal="true"` div. Its source-task Select portals its
+  // listbox to <body>, and a hand-rolled aria-modal has no way to know that a
+  // later-opened, body-level sibling is actually part of the dialog — a
+  // screen reader could reach the dialog but not the picker inside it. The
+  // fix is the app's own Radix-based Dialog (./ui/dialog), the pattern every
+  // other modal form already uses (e.g. ComposerView's clone-URL dialog).
+  it('does not hand-roll the dialog wrapper — it uses the app\'s real (Radix) Dialog', () => {
+    const PLAN_EXECUTE_SRC = readFileSync(resolve(SRC, 'components/PlanExecuteSection.tsx'), 'utf8');
+    expect(PLAN_EXECUTE_SRC).toContain("import { Dialog, DialogContent, DialogTitle, DialogDescription } from './ui/dialog'");
+    expect(PLAN_EXECUTE_SRC).not.toContain('role="dialog" aria-modal="true"');
+    expect(PLAN_EXECUTE_SRC).not.toContain('className="dialog-backdrop"');
+  });
+
+  it('opens "New pair" as a real dialog with the source-task Select reachable inside it', async () => {
+    const { default: PlanExecuteSection } = await import('../src/components/PlanExecuteSection');
+    const c = await render(
+      <PlanExecuteSection
+        pairs={asyncState({ pairs: [] })}
+        tasks={[task({ id: 't1', name: 'Nightly lint sweep' })]}
+        onChanged={() => {}}
+        onFindInTasks={() => {}}
+      />,
+    );
+    await click(c.querySelector('[data-testid="pe-new"]'));
+
+    // Radix portals dialog content to <body>, as a sibling of the render container.
+    const dialog = document.body.querySelector('[role="dialog"]');
+    expect(dialog, 'the dialog must actually open').not.toBeNull();
+    expect(document.body.querySelector('.dialog-backdrop'), 'the old hand-rolled wrapper must be gone').toBeNull();
+
+    // The source-task picker must live INSIDE that same dialog node — that is
+    // what keeps it inside the subtree Radix's one-time aria-hidden pass exempts.
+    const select = dialog!.querySelector('[data-testid="pe-task-select"]');
+    expect(select, 'the source-task picker must live inside the real dialog').not.toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -553,5 +598,26 @@ describe('RepoJobsSection (F5) — import is a decision, not a click', () => {
     const c = await render(<RepoJobsSection version={1} onFindInTasks={() => {}} onTasksChanged={() => {}} />);
     expect(textOf(c.querySelector('[role="alert"]'))).toContain('no such table');
     expect(c.querySelector('[data-testid="rj-empty"]')).toBeNull();
+  });
+
+  it('the scan banner never claims "Nothing was imported" — that goes stale the moment you import one', async () => {
+    stubRoutes({
+      '/workforce/repo-jobs': () => ({ offers: [] }),
+      '/workforce/repo-jobs/discover': () => ({ offers: [offer(), offer({ id: 'off_2', jobKey: 'ci-check', name: 'CI investigator' })] }),
+    });
+    const { default: RepoJobsSection } = await import('../src/components/RepoJobsSection');
+    const c = await render(<RepoJobsSection version={1} onFindInTasks={() => {}} onTasksChanged={() => {}} />);
+    type(c.querySelector('#rj-path'), '/Users/me/dev/widget');
+    await click(c.querySelector('[data-testid="rj-scan"]'));
+    const banner = c.querySelector('[data-testid="rj-scan-result"]');
+    expect(textOf(banner)).toContain('recommends 2 jobs');
+    expect(textOf(banner)).not.toContain('Nothing was imported');
+  });
+
+  it('does not stutter the empty state ("No offered offers.") when a filter has zero rows', async () => {
+    const c = await renderOffers([offer({ status: 'imported', taskId: 'task_new', decidedAt: 1_700_000_100_000 })]);
+    // default filter is 'offered'; the only offer is already imported, so the offered view is empty
+    expect(textOf(c)).not.toContain('No offered offers.');
+    expect(textOf(c)).toContain('Nothing is waiting on your decision.');
   });
 });

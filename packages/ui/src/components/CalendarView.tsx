@@ -36,6 +36,11 @@ function timeLabel(ts: number): string {
   return new Date(ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 }
 
+/** "Aug 31" — the week title's two ends, in the reader's locale. */
+function dayLabel(ts: number): string {
+  return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
 export default function CalendarView({
   version,
   onBookOnDate,
@@ -54,6 +59,23 @@ export default function CalendarView({
   const [selectedTs, setSelectedTs] = useState<number | null>(() => todayMidnight());
   const [detailEvent, setDetailEvent] = useState<CalendarEvent | null>(null);
 
+  /**
+   * The seven days Week mode draws. The title, the fetch window and the columns
+   * are ALL derived from this one array, so the header can no longer name a
+   * different week from the one underneath it.
+   *
+   * `weekAnchorTs` is any day inside the week, not its start: `buildWeekDays`
+   * snaps it back to the containing Monday (calendar.ts — weeks start Monday
+   * here, as they do in the month grid and the `DOW` row). Treating the anchor
+   * as the start agreed with the grid only when it happened to BE a Monday, one
+   * day in seven; on every other day the header was a whole week ahead of its
+   * own columns, and the fetch window skipped the days before the anchor, so
+   * those columns were guaranteed empty whatever the data said.
+   */
+  const weekDays = buildWeekDays(new Date(weekAnchorTs), now);
+  const weekStartTs = weekDays[0].ts;
+  const weekEndTs = weekDays[6].ts;
+
   // visible window: generous padding around the current view
   const range = useMemo(() => {
     if (mode === 'month') {
@@ -62,8 +84,8 @@ export default function CalendarView({
       start.setDate(1 - ((first.getDay() + 6) % 7));
       return { from: start.getTime(), to: start.getTime() + 42 * 86_400_000 };
     }
-    return { from: weekAnchorTs - 86_400_000, to: weekAnchorTs + 8 * 86_400_000 };
-  }, [mode, view, weekAnchorTs]);
+    return { from: weekStartTs - 86_400_000, to: weekStartTs + 8 * 86_400_000 };
+  }, [mode, view, weekStartTs]);
 
   const cal = useAsync(
     () => api.calendar(range.from, range.to),
@@ -126,10 +148,10 @@ export default function CalendarView({
   const title =
     mode === 'month'
       ? buildMonthGrid(now, view.year, view.month).title
-      : `${new Date(weekAnchorTs).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – ${new Date(weekAnchorTs + 6 * 86_400_000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+      : `${dayLabel(weekStartTs)} – ${dayLabel(weekEndTs)}`;
 
   const cells: GridCell[] =
-    mode === 'month' ? buildMonthGrid(new Date(), view.year, view.month).cells : buildWeekDays(new Date(weekAnchorTs), new Date());
+    mode === 'month' ? buildMonthGrid(new Date(), view.year, view.month).cells : weekDays;
 
   const selectedEvents = selectedTs != null ? eventsByDay.get(selectedTs) ?? [] : [];
 

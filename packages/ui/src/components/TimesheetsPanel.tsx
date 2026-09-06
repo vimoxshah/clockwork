@@ -80,7 +80,7 @@ function RateComparison({ effective, human }: { effective: number | null; human:
   const cheaper = delta < 0;
   return (
     <span style={{ color: cheaper ? 'var(--success)' : 'var(--danger)', fontSize: 12.5 }}>
-      {cheaper ? '−' : '+'}${Math.abs(delta).toFixed(2)}/hr {cheaper ? 'cheaper than you' : 'pricier than you'}
+      ${Math.abs(delta).toFixed(2)}/hr {cheaper ? 'cheaper than you' : 'pricier than you'}
     </span>
   );
 }

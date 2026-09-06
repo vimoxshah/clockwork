@@ -635,8 +635,15 @@ describe('F6 /workforce/runs/:runId/outcome', () => {
     taskId = await makeTask('F6 reviewed task');
     runId = makeRun(taskId);
 
+    // "Nobody has decided yet" is the normal state of a fresh run, not an
+    // error: the run exists, so the answer is an ordinary 200 carrying JSON
+    // `null`. (It used to 404, which put a red line in the browser console
+    // every time the inbox opened an undecided run and taught people to
+    // ignore the console.)
     const before = await app.inject(auth({ method: 'GET', url: `/workforce/runs/${runId}/outcome` }));
-    expect(before.statusCode).toBe(404);
+    expect(before.statusCode, before.body).toBe(200);
+    expect(before.headers['content-type']).toMatch(/application\/json/);
+    expect(before.json()).toBeNull();
 
     const res = await app.inject(
       auth({ method: 'POST', url: `/workforce/runs/${runId}/outcome`, payload: { decision: 'accepted_with_note', note: 'ship it, but rename the flag' } }),
@@ -663,6 +670,19 @@ describe('F6 /workforce/runs/:runId/outcome', () => {
     const res = await app.inject(auth({ method: 'POST', url: '/workforce/runs/nope/outcome', payload: { decision: 'accepted' } }));
     expect(res.statusCode).toBe(404);
     expect(res.json()).toEqual({ error: 'not_found' });
+  });
+
+  it('keeps "no such run" distinguishable from "no decision yet": 404 vs 200 null', async () => {
+    const unknown = await app.inject(auth({ method: 'GET', url: '/workforce/runs/nope/outcome' }));
+    expect(unknown.statusCode).toBe(404);
+    expect(unknown.json()).toEqual({ error: 'not_found' });
+
+    const undecided = await app.inject(auth({ method: 'GET', url: `/workforce/runs/${makeRun(await makeTask('F6 undecided run'))}/outcome` }));
+    expect(undecided.statusCode, undecided.body).toBe(200);
+    // A real JSON `null` body, not an empty one: the client parses this, it
+    // does not fall into a "response had no body" catch path.
+    expect(undecided.body).toBe('null');
+    expect(undecided.json()).toBeNull();
   });
 });
 
