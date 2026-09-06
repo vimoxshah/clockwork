@@ -141,6 +141,39 @@ export interface DeliveryConfigT {
   webhook: { configured: boolean };
 }
 
+/**
+ * A calendar source is either a live subscription (kind: 'url', re-fetched on
+ * every calendar load) or an imported file (kind: 'file', a frozen snapshot
+ * re-parsed from the daemon's stored copy). Existing on-disk entries only had
+ * { id, url, label } — the daemon migrates those on read to kind: 'url' with
+ * the new fields null, so this type always has the full shape.
+ */
+export interface IcsSourceT {
+  id: string;
+  kind: 'url' | 'file';
+  url: string | null;
+  label: string;
+  importedAt: number | null;
+  eventCount: number | null;
+  sourcePath: string | null;
+  sourceName: string | null;
+}
+
+/**
+ * Mirrors the LAST step of the daemon's ICS-import label fallback: strip a
+ * single trailing extension from a filename, else 'Imported calendar'. The
+ * daemon's real priority order is X-WR-CALNAME first, then this filename
+ * fallback — so this helper is NOT a reliable preview of what a given import
+ * will be called (the calendar's own name always wins when present). It is
+ * exposed purely as a small, independently-testable piece of that logic; the
+ * daemon's response (`label`) is always the source of truth once an import
+ * completes.
+ */
+export function fallbackIcsLabel(filename: string): string {
+  const base = filename.replace(/\.[^./\\]+$/, '').trim();
+  return base || 'Imported calendar';
+}
+
 export const api = {
   health: () => req<Health>('GET', '/health'),
   byok: () => req<{ configs: unknown[]; meta: unknown }>('GET', '/byok'),
@@ -171,10 +204,24 @@ export const api = {
       'GET',
       `/calendar?from=${from}&to=${to}`,
     ),
-  icsSources: () => req<Array<{ id: string; url: string; label: string }>>('GET', '/calendars/ics'),
+  icsSources: () => req<IcsSourceT[]>('GET', '/calendars/ics'),
   addIcsSource: (url: string, label: string) =>
     req<{ id: string; label: string; events: number }>('POST', '/calendars/ics', { url, label }),
   removeIcsSource: (id: string) => req<{ removed: string }>('DELETE', `/calendars/ics/${id}`),
+  importIcsContent: (body: { content: string; label?: string; filename?: string }) =>
+    req<{ id: string; kind: 'file'; label: string; eventCount: number; importedAt: number }>(
+      'POST',
+      '/calendars/ics/import',
+      body,
+    ),
+  importIcsPath: (body: { path: string; label?: string }) =>
+    req<{ id: string; kind: 'file'; label: string; eventCount: number; importedAt: number }>(
+      'POST',
+      '/calendars/ics/import-path',
+      body,
+    ),
+  reimportIcs: (id: string) =>
+    req<{ id: string; eventCount: number; importedAt: number }>('POST', `/calendars/ics/${id}/reimport`),
   queue: () =>
     req<Array<{ runId: string; taskId: string; name: string; position: number; reason: string }>>(
       'GET',
@@ -222,10 +269,10 @@ export const api = {
       'GET',
       '/providers',
     ),
-  browseFs: (path: string) =>
+  browseFs: (path: string, files?: string) =>
     req<{ path: string; parent: string | null; entries: Array<{ name: string; type: 'dir' | 'file'; isGit: boolean }> }>(
       'GET',
-      `/fs/browse?path=${encodeURIComponent(path)}`,
+      `/fs/browse?path=${encodeURIComponent(path)}${files ? `&files=${encodeURIComponent(files)}` : ''}`,
     ),
   cloneRepo: (url: string) =>
     req<{ ok: true; alreadyCloned?: boolean; path: string; slug: string }>(
