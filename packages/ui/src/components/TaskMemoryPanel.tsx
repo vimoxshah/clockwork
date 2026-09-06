@@ -25,6 +25,20 @@
 import { useState } from 'react';
 import { api, type AgentMemoryT } from '../api';
 import { useAsync } from '../useAsync';
+import { registerFeatureSurface } from './featureSurfaces';
+
+/**
+ * Mounted inside InboxView's report detail for every run (unconditional
+ * inside ReportDetail, once a run is selected — see InboxView.tsx
+ * `<TaskMemoryPanel .../>`). Anchor is best-effort: no run is selected by
+ * default when Inbox first mounts.
+ */
+export const SHIFT_HANDOFF_SURFACE = registerFeatureSurface({
+  key: 'shift_handoff',
+  tab: 'inbox',
+  where: 'Inbox › a run’s report',
+  anchorId: 'shift-handoff',
+});
 
 const LIMIT = 10;
 
@@ -86,7 +100,7 @@ export function TaskMemoryPanel({
 
   return (
     <div className="task-memory mt-4 border-t border-border pt-3">
-      <h3 className="section-title">Shift handoff — this task’s memory</h3>
+      <h3 className="section-title" id={SHIFT_HANDOFF_SURFACE.anchorId}>Shift handoff — this task’s memory</h3>
       <p className="hint" style={{ margin: '0 0 8px' }}>
         Carries across every occurrence of this task: what it tried, what blocked it, what to check next.
         Reaches the agent only if this task’s prompt includes the <code className="mono">{'{{handoff.previous}}'}</code>{' '}

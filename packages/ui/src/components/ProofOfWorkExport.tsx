@@ -20,6 +20,20 @@
  */
 import { useState } from 'react';
 import { api, type ProofOfWorkOptionsT } from '../api';
+import { registerFeatureSurface } from './featureSurfaces';
+
+/**
+ * Mounted inside InboxView's report detail once a run is inactive
+ * (`{!active && <ProofOfWorkExport .../>}`). No always-rendered host exists
+ * for a per-run control; the anchor is best-effort, same reasoning as
+ * OutcomeControls.
+ */
+export const PROOF_OF_WORK_EXPORT_SURFACE = registerFeatureSurface({
+  key: 'proof_of_work_export',
+  tab: 'inbox',
+  where: 'Inbox › a run’s report',
+  anchorId: 'proof-of-work-export',
+});
 
 function filenameFor(runId: string): string {
   return `clockwork-proof-${runId}.html`;
@@ -58,7 +72,7 @@ export function ProofOfWorkExport({ runId }: { runId: string }): JSX.Element {
 
   return (
     <div className="proof-of-work mt-4 border-t border-border pt-3">
-      <h3 className="section-title">Proof-of-work export</h3>
+      <h3 className="section-title" id={PROOF_OF_WORK_EXPORT_SURFACE.anchorId}>Proof-of-work export</h3>
       <p className="hint" style={{ margin: '0 0 8px' }}>
         A single self-contained HTML file — no scripts, no remote assets, secrets always masked. Nothing is
         uploaded to Clockwork or anywhere else; download it and host it yourself, or send it to whoever asked

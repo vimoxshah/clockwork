@@ -28,13 +28,37 @@ import { useAsync } from '../useAsync';
 import { Select, SelectValue, SelectTrigger, SelectContent, SelectItem } from './ui/select';
 import { ConfirmDialog } from './ConfirmDialog';
 import PlanExecuteSection from './PlanExecuteSection';
+import { PLAN_EXECUTE_SURFACE } from './PlanExecuteSection';
 import SentinelsSection from './SentinelsSection';
+import { SENTINEL_SURFACE } from './SentinelsSection';
 import RepoJobsSection from './RepoJobsSection';
+import { REPO_JOBS_SURFACE } from './RepoJobsSection';
 import { openInbox, openRunInInbox } from './workforce-common';
+import { registerFeatureSurface } from './featureSurfaces';
+
+/**
+ * Chaining is created and edited here (EditDialog's "Chain after" picker,
+ * which sends `chainAfter`/`chainOn` via `api.patchTask`) — the Composer's
+ * own "Chain after" select (ComposerView.tsx) never sends the field it
+ * collects, so it is not a real mount site for this capability.
+ */
+export const AGENT_CHAINS_SURFACE = registerFeatureSurface({
+  key: 'agent_chains',
+  tab: 'tasks',
+  where: 'Tasks › Edit task › Chain after',
+  anchorId: 'agent-chains',
+});
 
 type StatusFilter = 'all' | 'active' | 'paused';
 type SortKey = 'name' | 'recent';
 type Section = 'tasks' | 'pairs' | 'sentinels' | 'repo';
+
+/** Section key → the anchor its feature surface registered, for the always-rendered switch buttons. */
+const SECTION_ANCHOR: Partial<Record<Section, string>> = {
+  pairs: PLAN_EXECUTE_SURFACE.anchorId,
+  sentinels: SENTINEL_SURFACE.anchorId,
+  repo: REPO_JOBS_SURFACE.anchorId,
+};
 
 /** Windowed rendering: only a slice of rows mounts at once (5k+ tasks stay smooth). */
 const PAGE_SIZE = 100;
@@ -202,6 +226,7 @@ export default function TasksView({ version }: { version: number }): JSX.Element
         {SECTIONS.map((s) => (
           <button
             key={s.key}
+            id={SECTION_ANCHOR[s.key]}
             role="tab"
             aria-selected={section === s.key}
             className={section === s.key ? 'on' : ''}
@@ -564,7 +589,7 @@ function EditDialog({
           </SelectContent>
         </Select>
 
-        <label className="f">Chain after (run when that task finishes)</label>
+        <label className="f" id={AGENT_CHAINS_SURFACE.anchorId}>Chain after (run when that task finishes)</label>
         <Select
           value={chainAfter ?? '__none__'}
           onValueChange={(v) => setChainAfter(v === '__none__' ? null : v)}

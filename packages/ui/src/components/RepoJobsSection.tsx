@@ -29,6 +29,19 @@ import { useState } from 'react';
 import { api, type RepoJobOfferT, type RepoJobStatusT } from '../api';
 import { useAsync } from '../useAsync';
 import { FolderBrowserDialog } from './FolderBrowserDialog';
+import { registerFeatureSurface } from './featureSurfaces';
+
+/**
+ * Mounted as a Tasks section (see TasksView's segmented switch). The anchor
+ * lives on that switch's button, not inside this section, which only mounts
+ * when 'repo' is the active section.
+ */
+export const REPO_JOBS_SURFACE = registerFeatureSurface({
+  key: 'repo_shipped_jobs',
+  tab: 'tasks',
+  where: 'Tasks › Repo jobs',
+  anchorId: 'repo-jobs',
+});
 
 type Filter = 'offered' | 'imported' | 'dismissed' | 'all';
 

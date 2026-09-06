@@ -14,7 +14,22 @@ import { api } from '../api';
 import { Select, SelectValue, SelectTrigger, SelectContent, SelectItem } from './ui/select';
 import { Segmented } from './ui/segmented';
 import TimesheetsPanel from './TimesheetsPanel';
+import { TIMESHEETS_SURFACE } from './TimesheetsPanel';
 import PerformanceReviewsPanel from './PerformanceReviewsPanel';
+import { PERFORMANCE_REVIEWS_SURFACE } from './PerformanceReviewsPanel';
+import { registerFeatureSurface } from './featureSurfaces';
+
+/**
+ * The overview itself — cost & reliability totals, daily spend, by-task and
+ * by-provider breakdowns. Always the default sub-view, so its anchor (the
+ * page title) is unconditionally rendered.
+ */
+export const ANALYTICS_BASIC_SURFACE = registerFeatureSurface({
+  key: 'analytics_basic',
+  tab: 'analytics',
+  where: 'Analytics › Overview',
+  anchorId: 'analytics-basic',
+});
 
 type SubView = 'overview' | 'timesheets' | 'performance';
 
@@ -48,15 +63,15 @@ export default function AnalyticsView({ version }: { version: number }): JSX.Ele
   return (
     <div style={{ width: '100%', maxWidth: 'none' }}>
       <div className="tasks-toolbar">
-        <h3 className="section-title" style={{ margin: 0 }}>Analytics</h3>
+        <h3 className="section-title" style={{ margin: 0 }} id={ANALYTICS_BASIC_SURFACE.anchorId}>Analytics</h3>
         <Segmented
           aria-label="Analytics section"
           value={view}
           onChange={setView}
           options={[
             { value: 'overview', label: 'Overview' },
-            { value: 'timesheets', label: 'Timesheets' },
-            { value: 'performance', label: 'Performance reviews' },
+            { value: 'timesheets', label: 'Timesheets', id: TIMESHEETS_SURFACE.anchorId },
+            { value: 'performance', label: 'Performance reviews', id: PERFORMANCE_REVIEWS_SURFACE.anchorId },
           ]}
         />
         <span className="grow" />

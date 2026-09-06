@@ -24,6 +24,19 @@ import { useAsync } from '../useAsync';
 import { Select, SelectValue, SelectTrigger, SelectContent, SelectItem } from './ui/select';
 import { ConfirmDialog } from './ConfirmDialog';
 import { fmtDuration, fmtWhen, openRunInInbox, openSettings } from './workforce-common';
+import { registerFeatureSurface } from './featureSurfaces';
+
+/**
+ * Mounted as a Tasks section (see TasksView's segmented switch). The anchor
+ * lives on that switch's button, not inside this section, which only mounts
+ * when 'sentinels' is the active section.
+ */
+export const SENTINEL_SURFACE = registerFeatureSurface({
+  key: 'sentinel_worker',
+  tab: 'tasks',
+  where: 'Tasks › Sentinels',
+  anchorId: 'sentinels',
+});
 
 interface TriggerT {
   id: string;

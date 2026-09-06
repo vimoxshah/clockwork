@@ -13,6 +13,7 @@ import { useAsync } from '../useAsync';
 import { ProposedEvents } from './ProposedEvents';
 import { OutcomeControls } from './OutcomeControls';
 import { ApprovalCard } from './ApprovalCard';
+import { APPROVALS_SURFACE } from './ApprovalCard';
 import { ProofOfWorkExport } from './ProofOfWorkExport';
 import { TaskMemoryPanel } from './TaskMemoryPanel';
 
@@ -203,7 +204,12 @@ export default function InboxView({ version }: { version: number }): JSX.Element
         )}
         <div className="filter-chips" role="tablist" aria-label="Filter by outcome">
           {(['all', 'completed', 'failed', 'active', 'needsyou'] as OutcomeFilter[]).map((f) => (
-            <button key={f} className={filter === f ? 'on' : ''} onClick={() => setFilter(f)}>
+            <button
+              key={f}
+              id={f === 'needsyou' ? APPROVALS_SURFACE.anchorId : undefined}
+              className={filter === f ? 'on' : ''}
+              onClick={() => setFilter(f)}
+            >
               {f === 'needsyou' ? 'needs you' : f}
             </button>
           ))}

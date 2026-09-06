@@ -28,6 +28,15 @@ import { api } from '../api';
 import type { TimesheetT, TimesheetRowT } from '../api';
 import { Input } from './ui/input';
 import { Button } from './ui/button';
+import { registerFeatureSurface } from './featureSurfaces';
+
+/** Mounted as the Analytics "Timesheets" sub-tab — see AnalyticsView's Segmented switcher. */
+export const TIMESHEETS_SURFACE = registerFeatureSurface({
+  key: 'agent_timesheets',
+  tab: 'analytics',
+  where: 'Analytics › Timesheets',
+  anchorId: 'agent-timesheets',
+});
 
 /**
  * Best-effort profile id out of a run's frozen jobspec snapshot — the same

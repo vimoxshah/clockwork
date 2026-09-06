@@ -10,7 +10,7 @@ export function Segmented<T extends string>({
   size = 'default',
   'aria-label': ariaLabel,
 }: {
-  options: Array<{ value: T; label: React.ReactNode; title?: string }>;
+  options: Array<{ value: T; label: React.ReactNode; title?: string; id?: string }>;
   value: T;
   onChange: (v: T) => void;
   className?: string;
@@ -26,6 +26,7 @@ export function Segmented<T extends string>({
       {options.map((o) => (
         <button
           key={o.value}
+          id={o.id}
           role="tab"
           aria-selected={value === o.value}
           title={o.title}

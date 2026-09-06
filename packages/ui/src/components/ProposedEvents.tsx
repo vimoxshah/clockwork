@@ -15,6 +15,22 @@
  * `text/calendar` body.
  */
 import { getToken } from '../api';
+import { registerFeatureSurface } from './featureSurfaces';
+
+/**
+ * Mounted inside InboxView's report detail, but only renders once a run's
+ * report actually carries proposed events (`if (!events.length) return
+ * null;`) — so the anchor exists only on a run that proposed something. That
+ * is a real, data-dependent gap in this screen (flagged, not fixed here: out
+ * of scope for feature-surface registration), not an absent screen — the
+ * component and its daemon route both exist and are mounted.
+ */
+export const PROPOSED_EVENTS_SURFACE = registerFeatureSurface({
+  key: 'proposed_events',
+  tab: 'inbox',
+  where: 'Inbox › a run’s report (when it proposes events)',
+  anchorId: 'proposed-events',
+});
 
 export interface ProposedEventT {
   key: string;
@@ -49,7 +65,7 @@ export function ProposedEvents({ runId, events }: { runId: string; events: Propo
 
   return (
     <div className="proposed-events">
-      <h3>Suggested calendar events</h3>
+      <h3 id={PROPOSED_EVENTS_SURFACE.anchorId}>Suggested calendar events</h3>
       <ul>
         {events.map((ev) => (
           <li key={ev.key}>

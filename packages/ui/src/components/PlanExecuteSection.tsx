@@ -19,6 +19,20 @@ import { api, type PlanExecutePairT, type PlanExecuteStatusT, type TaskViewT } f
 import type { AsyncState } from '../useAsync';
 import { Select, SelectValue, SelectTrigger, SelectContent, SelectItem } from './ui/select';
 import { fmtWhen, openInbox, openRunInInbox } from './workforce-common';
+import { registerFeatureSurface } from './featureSurfaces';
+
+/**
+ * Mounted as a Tasks section (see TasksView's segmented switch). The anchor
+ * lives on that switch's button — always rendered regardless of which
+ * section is currently selected — not inside this section itself, which only
+ * mounts when 'pairs' is the active section.
+ */
+export const PLAN_EXECUTE_SURFACE = registerFeatureSurface({
+  key: 'plan_then_execute',
+  tab: 'tasks',
+  where: 'Tasks › Plan → execute',
+  anchorId: 'plan-execute',
+});
 
 type StatusFilter = 'all' | PlanExecuteStatusT;
 

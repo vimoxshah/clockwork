@@ -17,6 +17,21 @@
  */
 import { useEffect, useState } from 'react';
 import { getToken } from '../api';
+import { registerFeatureSurface } from './featureSurfaces';
+
+/**
+ * Mounted inside InboxView's report detail — reachable once a run is selected
+ * and inactive (`{!active && <OutcomeControls .../>}`). No always-rendered
+ * host exists for a per-run control, so the anchor is best-effort: honest
+ * about "no screen" vs. "a screen that only appears once you have picked a
+ * run", never the same as claiming a control with no code behind it.
+ */
+export const ACCEPT_WITH_NOTE_SURFACE = registerFeatureSurface({
+  key: 'accept_with_note',
+  tab: 'inbox',
+  where: 'Inbox › a run’s report',
+  anchorId: 'accept-with-note',
+});
 
 export type OutcomeDecisionT = 'accepted' | 'accepted_with_note' | 'rejected';
 
@@ -102,7 +117,7 @@ export function OutcomeControls({ runId }: { runId: string }): JSX.Element | nul
   if (!loaded) return null; // avoid a layout flash while the initial fetch resolves
 
   return (
-    <div className="outcome-controls mt-4 border-t border-border pt-3">
+    <div className="outcome-controls mt-4 border-t border-border pt-3" id={ACCEPT_WITH_NOTE_SURFACE.anchorId}>
       {outcome && (
         <div className="hint mono" data-testid="outcome-current">
           Decision: {outcome.decision.replace(/_/g, ' ')}

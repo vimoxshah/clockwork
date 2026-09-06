@@ -22,6 +22,15 @@ import { api } from '../api';
 import type { PerformanceScorecardT } from '../api';
 import { Button } from './ui/button';
 import { Textarea } from './ui/input';
+import { registerFeatureSurface } from './featureSurfaces';
+
+/** Mounted as the Analytics "Performance reviews" sub-tab — see AnalyticsView's Segmented switcher. */
+export const PERFORMANCE_REVIEWS_SURFACE = registerFeatureSurface({
+  key: 'performance_reviews',
+  tab: 'analytics',
+  where: 'Analytics › Performance reviews',
+  anchorId: 'performance-reviews',
+});
 
 function pctText(rate: number | null, decided: number): string {
   if (rate === null) return `not yet reviewed (${decided} decided)`;

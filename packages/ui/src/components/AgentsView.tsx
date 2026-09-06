@@ -11,6 +11,19 @@ import { Button } from './ui/button';
 import { Input, Textarea, Label } from './ui/input';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from './ui/dialog';
 import { Plus, Sparkles } from 'lucide-react';
+import { registerFeatureSurface } from './featureSurfaces';
+
+/**
+ * This screen IS local-agent execution: the profile library that runs
+ * entirely on this machine via the local CLI engines (no hosted/cloud
+ * runner — see daemon features.ts's note on why `cloud_agents` was removed).
+ */
+export const LOCAL_AGENTS_SURFACE = registerFeatureSurface({
+  key: 'local_agents',
+  tab: 'agents',
+  where: 'Agents › Agent library',
+  anchorId: 'agent-library',
+});
 
 const BUILTIN_EXPLAIN: Record<string, { what: string; use: string }> = {
   generalist: {
@@ -114,7 +127,7 @@ export default function AgentsView({ version }: { version: number }): JSX.Elemen
     <div className="agents-page">
       <div className="mb-3 flex items-center justify-between">
         <div>
-          <h2 className="text-base font-semibold">Agent Library</h2>
+          <h2 className="text-base font-semibold" id={LOCAL_AGENTS_SURFACE.anchorId}>Agent Library</h2>
           <p className="text-xs text-muted">
             A profile is a named persona: its instructions load into every run booked with it, plus its own
             model, permission mode, and budget defaults.

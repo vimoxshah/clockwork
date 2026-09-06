@@ -26,6 +26,34 @@
 import { useState } from 'react';
 import { api } from '../api';
 import { useAsync } from '../useAsync';
+import { registerFeatureSurface } from './featureSurfaces';
+
+/**
+ * The generic approval gate — every kind this card draws (plan, remediation,
+ * permission, unknown) is a human approval decision. Anchor lives on
+ * InboxView's "needs you" filter chip (always rendered); this card itself
+ * only mounts once an approval is pending.
+ */
+export const APPROVALS_SURFACE = registerFeatureSurface({
+  key: 'approvals',
+  tab: 'inbox',
+  where: 'Inbox › Approvals',
+  anchorId: 'approvals',
+});
+
+/**
+ * F8 self-healing: the 'remediation' kind of this same card is the
+ * self-healing screen — a diagnostic run's proposed fix, applied only on a
+ * human's click (RemediationBody below). Same anchor as `approvals` (that
+ * card is where a remediation proposal actually surfaces); distinct `where`
+ * copy names the specific feature.
+ */
+export const SELF_HEALING_SURFACE = registerFeatureSurface({
+  key: 'self_healing',
+  tab: 'inbox',
+  where: 'Inbox › Approvals (remediation proposals)',
+  anchorId: 'approvals',
+});
 
 export type ApprovalKind = 'plan' | 'remediation' | 'permission' | 'unknown';
 
