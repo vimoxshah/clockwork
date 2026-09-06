@@ -149,17 +149,18 @@ overstated the feature-module row by 36.
 |---|---|---|
 | Runner unit/scenario | 116 | `packages/runner/test/*` (15 files) |
 | Daemon scheduler fixtures | 18 | `packages/daemon/test/scheduler.test.ts` |
-| API contracts | 31 | `packages/daemon/test/api.test.ts` |
+| API contracts | 32 | `packages/daemon/test/api.test.ts` |
 | Full-loop child-process integration | 4 | `packages/daemon/test/full-loop.test.ts` |
 | Recovery (real orphan kills) | 3 | `packages/daemon/test/recovery.test.ts` |
 | Templates/chains | 9 | `packages/daemon/test/templates-chains.test.ts` |
-| Agent Workforce F1–F12 (feature modules) | 321 | `packages/daemon/test/{plan-execute,handoff,office-hours,sentinel,repo-jobs,acceptance,autonomy-policy,self-healing,proposed-events,timesheets,performance,proof-of-work}.test.ts` |
-| Agent Workforce foundation + API contracts | 97 | `packages/daemon/test/workforce-foundation.test.ts` (16), `packages/daemon/test/workforce-api.test.ts` (81) |
+| Agent Workforce F1–F12 (feature modules) | 332 | `packages/daemon/test/{plan-execute,handoff,office-hours,sentinel,repo-jobs,acceptance,autonomy-policy,self-healing,proposed-events,timesheets,performance,proof-of-work}.test.ts` |
+| Agent Workforce foundation + API contracts | 104 | `packages/daemon/test/workforce-foundation.test.ts` (16), `packages/daemon/test/workforce-api.test.ts` (88) |
 | Agent Workforce performance bench (T-113/T-307/S-9) | 16 | `packages/daemon/test/workforce-bench.test.ts` |
-| Claim tripwires (this table, the bench gate, the F3/F7 prose, the latency record) | 33 | `packages/daemon/test/claims-honesty.test.ts` |
+| Claim tripwires (this table, the bench gate, the F3/F7 prose, the latency record, the F5 red-flag/YAML claims, the F1/F8 UI notes, the autonomy call sites, ADR-039) | 44 | `packages/daemon/test/claims-honesty.test.ts` |
 | Other daemon suites (13 files) | 71 | chains, entitlements, event-prompts, feature-honesty, gates, ics, ics-ssrf, install-instructions, landing-honesty, loopback-bind, policy-engine, quiet-hours, triggers |
+| Finalize/teardown race regression | 6 | `packages/daemon/test/finalize-teardown.test.ts` |
 | UI component tests (5 files) | 33 | `packages/ui/test/*` |
-| **Total automated (measured 2026-09-06, `rtk proxy pnpm test`)** | **752 passed, 0 failed, across 54 files** | full run: daemon + runner + shared + ui workspaces (`packages/shared` ships no test file of its own) |
+| **Total automated (measured 2026-09-06, `rtk proxy pnpm test`)** | **788 passed, 0 failed, across 55 files** | full run: daemon + runner + shared + ui workspaces (`packages/shared` ships no test file of its own) |
 
 **The bench does not assert its latency bounds in this run.** Every wall-clock
 bound in `workforce-bench.test.ts` goes through `assertLatency`
@@ -186,9 +187,11 @@ non-zero**, on the same unhandled rejection originating in
 `TypeError: The database connection is not open` inside `RunManager.finalize`
 → `recordEvent` (`packages/daemon/src/run-manager.ts:649`, then line 876).
 No test failed; a run finalized asynchronously after its test had closed the
-database. So the count reproduces and the exit code does not — read "752
-passed, 0 failed" as the claim, and treat a non-zero exit with no failing test
-as this race until it is fixed. It is recorded rather than fixed here because
-it is a teardown race in daemon code this pass did not own.
+database. So the count reproduces and the exit code does not — read the total
+row above as the claim, and treat a non-zero exit with no failing test as this
+race until it is fixed. It is recorded rather than fixed here because it is a
+teardown race in daemon code this pass did not own. The F1-gate pass added one
+more `api.test.ts` test that books and cancels a run, so it uses the same
+mechanism; it does not change the race either way.
 
 Manual logs: sandbox escape matrix (13 checks) `spikes/reports/T008-sandbox.md`; live smoke (boot→book→fire→report→search) recorded in commit e583e01; real-engine verification runs T-001/T-008/T-009.

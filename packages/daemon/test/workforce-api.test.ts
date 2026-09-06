@@ -297,6 +297,112 @@ describe('F1 /workforce/plan-execute', () => {
 });
 
 // ---------------------------------------------------------------------------
+// F1's gate, asked on the ORDINARY task routes (ADR-039).
+//
+// `enabled=0` keeps the scheduler and the chain away from an execute half, but
+// three routes reach a task row directly and never looked at the pair:
+// POST /tasks/:id/run-now, the webhook fire path, and PATCH /tasks/:id
+// {enabled:true} — which re-arms the chain, because run-manager.ts:683 fires
+// successors `WHERE chain_after = ? AND enabled = 1` and the execute half does
+// carry `chain_after` (plan-execute.ts:180). docs/agent-workforce.md says "the
+// execute half never runs without your explicit approval of that specific
+// plan"; without these refusals that sentence is false on all three.
+// ---------------------------------------------------------------------------
+describe('F1 approval gate holds on the ordinary task routes (ADR-039)', () => {
+  /** A fresh pair, straight from the real route. Its execute half is the target. */
+  async function makePair(name: string): Promise<{ pairId: string; planTaskId: string; executeTaskId: string }> {
+    const sourceId = await makeTask(name);
+    const res = await app.inject(
+      auth({ method: 'POST', url: '/workforce/plan-execute', payload: { taskId: sourceId, planHour: 9, tz: 'UTC' } }),
+    );
+    expect(res.statusCode, res.body).toBe(201);
+    const body = res.json() as { id: string; planTaskId: string; executeTaskId: string };
+    return { pairId: body.id, planTaskId: body.planTaskId, executeTaskId: body.executeTaskId };
+  }
+
+  it('409s run-now for an execute half whose plan nobody approved, and enqueues nothing', async () => {
+    const { pairId, executeTaskId } = await makePair('F1 gate run-now');
+    const before = db.prepare('SELECT COUNT(*) c FROM runs').get();
+
+    const res = await app.inject(auth({ method: 'POST', url: `/tasks/${executeTaskId}/run-now` }));
+    expect(res.statusCode, res.body).toBe(409);
+    const body = res.json() as { error: string; code: string; pairId: string; pairStatus: string };
+    expect(body.code).toBe('plan_not_approved');
+    expect(body.pairId).toBe(pairId);
+    expect(body.pairStatus).toBe('awaiting_plan');
+    expect(body.error, 'the refusal has to be a sentence the UI can show').toMatch(/plan/i);
+    // The whole point: no run row exists to be pumped.
+    expect(db.prepare('SELECT COUNT(*) c FROM runs').get()).toEqual(before);
+  });
+
+  it('409s PATCH {enabled:true} for an execute half, leaving enabled=0 and the version unburned', async () => {
+    const { pairId, executeTaskId } = await makePair('F1 gate patch');
+    const before = db.prepare('SELECT enabled, version FROM tasks WHERE id=?').get(executeTaskId) as {
+      enabled: number;
+      version: number;
+    };
+    expect(before.enabled).toBe(0);
+
+    const res = await app.inject(auth({ method: 'PATCH', url: `/tasks/${executeTaskId}`, payload: { enabled: true } }));
+    expect(res.statusCode, res.body).toBe(409);
+    const body = res.json() as { error: string; code: string; pairId: string };
+    expect(body.code).toBe('execute_half_stays_disabled');
+    expect(body.pairId).toBe(pairId);
+
+    const after = db.prepare('SELECT enabled, version FROM tasks WHERE id=?').get(executeTaskId) as {
+      enabled: number;
+      version: number;
+    };
+    expect(after.enabled, 'the chain must stay un-armed (run-manager.ts:683)').toBe(0);
+    expect(after.version).toBe(before.version);
+  });
+
+  // Re-enabling stays refused AFTER the verdict too: resolve('approved') books
+  // the execute run itself (ADR-039), so an enabled execute half would only
+  // ever mean "the next plan run fires it again, with a plan nobody read".
+  it('409s PATCH {enabled:true} for an execute half whose pair is already resolved', async () => {
+    const { pairId, executeTaskId } = await makePair('F1 gate patch resolved');
+    db.prepare("UPDATE plan_execute_pairs SET status='executed', updated_at=? WHERE id=?").run(Date.now(), pairId);
+
+    const res = await app.inject(auth({ method: 'PATCH', url: `/tasks/${executeTaskId}`, payload: { enabled: true } }));
+    expect(res.statusCode, res.body).toBe(409);
+    expect((res.json() as { code: string }).code).toBe('execute_half_stays_disabled');
+    expect((db.prepare('SELECT enabled FROM tasks WHERE id=?').get(executeTaskId) as { enabled: number }).enabled).toBe(0);
+  });
+
+  it('409s the webhook fire path for an execute half, and books no run', async () => {
+    const { executeTaskId } = await makePair('F1 gate webhook');
+    const trg = await app.inject(
+      auth({ method: 'POST', url: '/triggers', payload: { name: 'f1-gate-trigger', taskId: executeTaskId } }),
+    );
+    expect(trg.statusCode, trg.body).toBe(201);
+    const triggerId = (trg.json() as { id: string }).id;
+    const before = db.prepare('SELECT COUNT(*) c FROM runs').get();
+
+    const fired = await app.inject({ method: 'POST', url: `/hooks/${triggerId}`, payload: { any: 'payload' } });
+    expect(fired.statusCode, fired.body).toBe(409);
+    expect((fired.json() as { code: string }).code).toBe('plan_not_approved');
+    expect(db.prepare('SELECT COUNT(*) c FROM runs').get()).toEqual(before);
+  });
+
+  // Blast radius. The gate reads one table that only F1 writes, so a task that
+  // is not an execute half is untouched — including the PLAN half, which is
+  // exactly what a human runs to GET a plan.
+  it('leaves ordinary tasks and the plan half alone: PATCH {enabled:true} still 200s', async () => {
+    const ordinary = await makeTask('F1 gate blast radius');
+    const off = await app.inject(auth({ method: 'PATCH', url: `/tasks/${ordinary}`, payload: { enabled: false } }));
+    expect(off.statusCode, off.body).toBe(200);
+    const on = await app.inject(auth({ method: 'PATCH', url: `/tasks/${ordinary}`, payload: { enabled: true } }));
+    expect(on.statusCode, on.body).toBe(200);
+    expect((db.prepare('SELECT enabled FROM tasks WHERE id=?').get(ordinary) as { enabled: number }).enabled).toBe(1);
+
+    const { planTaskId } = await makePair('F1 gate plan half');
+    const planPatch = await app.inject(auth({ method: 'PATCH', url: `/tasks/${planTaskId}`, payload: { enabled: true } }));
+    expect(planPatch.statusCode, planPatch.body).toBe(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // F2 shift-handoff
 // ---------------------------------------------------------------------------
 describe('F2 /workforce/handoff/:taskId', () => {
@@ -700,6 +806,54 @@ describe('F7 /workforce/autonomy', () => {
       }),
     );
     expect(allowed.statusCode, allowed.body).toBe(201);
+  });
+
+  // S-review (NIT from the re-review): the gate above judges the PROSPECTIVE
+  // row, which is right for a create and a trap for an edit. A GRANDFATHERED
+  // task — one stored `acceptEdits` before its profile was enrolled at rung
+  // 'plan' — fails the gate on its own stored values, so EVERY patch of it was
+  // refused, including `{enabled:false}`: the one edit that makes it safe. A
+  // fail-closed gate nobody can comply with is not fail-closed, it is stuck.
+  it('lets a grandfathered task be patched when the patch does not raise autonomy', async () => {
+    const gated = await makeProfile('f7-grandfathered');
+    const id = await makeTask('F7 grandfathered', { permissionMode: 'acceptEdits' });
+    // Enrol AFTER the task exists — POST /tasks would have refused it, which is
+    // exactly why this row can only be reached by having pre-dated the rung.
+    await app.inject(auth({ method: 'POST', url: `/workforce/autonomy/profiles/${gated}/enroll`, payload: { rung: 'plan' } }));
+    db.prepare('UPDATE tasks SET profile_id=? WHERE id=?').run(gated, id);
+
+    // Turning it OFF lowers nothing and raises nothing: it must land.
+    const off = await app.inject(auth({ method: 'PATCH', url: `/tasks/${id}`, payload: { enabled: false } }));
+    expect(off.statusCode, off.body).toBe(200);
+    expect((db.prepare('SELECT enabled FROM tasks WHERE id=?').get(id) as { enabled: number }).enabled).toBe(0);
+
+    // Lowering the mode toward the rung must land too ('default' is
+    // 'acceptEdits' plus a human prompt per action, so it is strictly less).
+    const lower = await app.inject(auth({ method: 'PATCH', url: `/tasks/${id}`, payload: { permissionMode: 'default' } }));
+    expect(lower.statusCode, lower.body).toBe(200);
+    expect((db.prepare('SELECT permission_mode FROM tasks WHERE id=?').get(id) as { permission_mode: string }).permission_mode).toBe('default');
+  });
+
+  it('still 403s a grandfathered task whose patch RAISES autonomy, and writes nothing', async () => {
+    const gated = await makeProfile('f7-grandfathered-raise');
+    const id = await makeTask('F7 grandfathered raise', { permissionMode: 'default' });
+    await app.inject(auth({ method: 'POST', url: `/workforce/autonomy/profiles/${gated}/enroll`, payload: { rung: 'plan' } }));
+    db.prepare('UPDATE tasks SET profile_id=? WHERE id=?').run(gated, id);
+    const before = db.prepare('SELECT permission_mode, version FROM tasks WHERE id=?').get(id) as {
+      permission_mode: string;
+      version: number;
+    };
+
+    const refused = await app.inject(auth({ method: 'PATCH', url: `/tasks/${id}`, payload: { permissionMode: 'acceptEdits' } }));
+    expect(refused.statusCode, refused.body).toBe(403);
+    expect((refused.json() as { violation: string }).violation).toMatch(/autonomy_rung_exceeded/);
+
+    const after = db.prepare('SELECT permission_mode, version FROM tasks WHERE id=?').get(id) as {
+      permission_mode: string;
+      version: number;
+    };
+    expect(after.permission_mode).toBe(before.permission_mode);
+    expect(after.version).toBe(before.version);
   });
 });
 

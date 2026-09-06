@@ -346,7 +346,7 @@ export class RunManager {
           artifacts: [],
           costUsd: cur.cost_usd,
           turns: cur.turns,
-        });
+        }).catch((e) => this.onFinalizeError(runId, e));
       }
     });
 
@@ -361,14 +361,16 @@ export class RunManager {
       if (r.heartbeat_at && now2 - r.heartbeat_at > HEARTBEAT_GAP_MS) {
         clearInterval(watchdog);
         this.killGroupIdentityVerified(r); // S-32
-        this.finalize(runId, { state: 'failed', failureReason: 'runner_crashed', artifacts: [], costUsd: r.cost_usd, turns: r.turns });
+        this.finalize(runId, { state: 'failed', failureReason: 'runner_crashed', artifacts: [], costUsd: r.cost_usd, turns: r.turns })
+          .catch((e) => this.onFinalizeError(runId, e));
         return;
       }
       const specTimeoutSec = spec.budget.timeoutSec;
       if (r.started_at && now2 - r.started_at > specTimeoutSec * 1000) {
         clearInterval(watchdog);
         this.killGroupIdentityVerified(r); // S-13
-        this.finalize(runId, { state: 'timed_out', artifacts: [], costUsd: r.cost_usd, turns: r.turns });
+        this.finalize(runId, { state: 'timed_out', artifacts: [], costUsd: r.cost_usd, turns: r.turns })
+          .catch((e) => this.onFinalizeError(runId, e));
       }
     }, 15_000);
     watchdog.unref?.();
@@ -457,7 +459,7 @@ export class RunManager {
         break;
       }
       case 'outcome': {
-        this.finalize(runId, msg.outcome);
+        this.finalize(runId, msg.outcome).catch((e) => this.onFinalizeError(runId, e));
         break;
       }
     }
@@ -687,6 +689,14 @@ export class RunManager {
     this.notifiedApprovalKeys.delete(runId);
     this.deps.keepAwake?.release(runId);
 
+    // Everything below this line is ADVISORY and runs after the commit above,
+    // each hook behind an `await`. Shutdown — or a test's `afterAll` — can
+    // close the handle in any of those gaps. The run is already terminal and
+    // durable on disk at this point, so once the database is gone there is
+    // nothing left for the tail to read or write: stop, rather than throw into
+    // a promise nobody is holding. Mid-tail closes are covered per hook below.
+    if (!this.dbOpen) return;
+
     // ---- workforce finalize hooks (plan/AGENT-WORKFORCE-SPEC.md §3) ----
     // ORDER: F2 -> F1 -> F4 -> F8 (memory first, so the others can read it).
     //
@@ -724,7 +734,14 @@ export class RunManager {
     }
 
     // F4 sentinel-worker: every finalize is an evaluation, tripped or not.
-    this.deps.onSentinelFinalize?.(runId, spec.taskId, JSON.stringify(report), now);
+    // Same boundary as F2/F1/F8 — this hook reads and writes the database from
+    // inside an already-finalized run's tail, so a fault here (including the
+    // handle closing mid-tail) is a note, never a rejection.
+    try {
+      this.deps.onSentinelFinalize?.(runId, spec.taskId, JSON.stringify(report), now);
+    } catch (e) {
+      this.recordEvent(now, runId, 'note', { sentinelError: String(e) }); // advisory; never fails the run
+    }
 
     // F8 self-healing (spec §4 F8). Same hazard (1) as F1 — the proposal's
     // inbox item would be killed before a human ever saw it. Also before
@@ -741,16 +758,24 @@ export class RunManager {
 
     // S-40/S-41: consecutive auth failures auto-pause the task after 2
     const failureReason = ('failureReason' in outcome ? outcome.failureReason : undefined) ?? null;
-    if (failureReason === 'auth') {
-      const { recordAuthFailureAndMaybePause } = await import('./policies.js');
-      const res = recordAuthFailureAndMaybePause(this.deps.db, spec.taskId);
-      if (res.paused) {
-        this.deps.notify('auto_paused', `Clockwork paused "${spec.taskName}"`, 'Two consecutive auth failures. Re-login in Claude Code, then re-enable the task.');
-        this.deps.safetyJournal.record('preflight_failure', `auto-paused task ${spec.taskId} after ${res.consecutive} auth failures`, runId);
+    // The streak bookkeeping is two `await import`s away from the commit, so it
+    // carries the same boundary as the hooks above. The PAUSE DECISION itself
+    // is unchanged — only its failure mode is, from "reject out of a floating
+    // promise" to "record a note".
+    try {
+      if (failureReason === 'auth') {
+        const { recordAuthFailureAndMaybePause } = await import('./policies.js');
+        const res = recordAuthFailureAndMaybePause(this.deps.db, spec.taskId);
+        if (res.paused) {
+          this.deps.notify('auto_paused', `Clockwork paused "${spec.taskName}"`, 'Two consecutive auth failures. Re-login in Claude Code, then re-enable the task.');
+          this.deps.safetyJournal.record('preflight_failure', `auto-paused task ${spec.taskId} after ${res.consecutive} auth failures`, runId);
+        }
+      } else if (outcome.state === 'completed') {
+        const { clearFailureStreak } = await import('./policies.js');
+        clearFailureStreak(this.deps.db, spec.taskId);
       }
-    } else if (outcome.state === 'completed') {
-      const { clearFailureStreak } = await import('./policies.js');
-      clearFailureStreak(this.deps.db, spec.taskId);
+    } catch (e) {
+      this.recordEvent(now, runId, 'note', { failureStreakError: String(e) });
     }
 
     // FR-18/S-43: delivery after persistence; failures become receipts only
@@ -914,7 +939,7 @@ export class RunManager {
     }
     if (['preparing','running','waiting_approval','finalizing'].includes(r.state)) {
       this.killGroupIdentityVerified(r);
-      this.finalize(runId, { state: 'cancelled' });
+      this.finalize(runId, { state: 'cancelled' }).catch((e) => this.onFinalizeError(runId, e));
       return true;
     }
     return false;
@@ -1064,14 +1089,66 @@ export class RunManager {
 
   getRun(id: string): RunRow | undefined {
     // Child-exit events can race daemon shutdown (db closed first) on slow CI.
-    if ((this.deps.db as unknown as { open?: boolean }).open === false) return undefined;
+    if (!this.dbOpen) return undefined;
     return this.deps.db.prepare('SELECT * FROM runs WHERE id=?').get(id) as unknown as RunRow | undefined;
   }
 
+  /**
+   * Is the sqlite handle still usable?
+   *
+   * The daemon (and every test's `afterAll`) closes the database while work
+   * scheduled before shutdown can still be in flight — `pump()` above and
+   * `getRun()` have always had to ask this. `finalize()`'s post-commit tail
+   * asks it too, because every hook in that tail sits behind an `await`.
+   */
+  private get dbOpen(): boolean {
+    return (this.deps.db as unknown as { open?: boolean }).open !== false;
+  }
+
   private recordEvent(at: number, runId: string, kind: string, data: unknown): void {
+    // Most callers are `catch` blocks whose whole job is "record it and carry
+    // on", and several of them run after `finalize()` has already committed,
+    // behind an `await`. If the handle closed during that await there is
+    // nowhere for the row to go, and THROWING here converts a benign teardown
+    // race into an unhandled rejection with no caller left to catch it — the
+    // suite then exits non-zero with every test passing.
+    //
+    // Only the closed handle is silent. A write that fails for any other
+    // reason (constraint, disk, corruption) still throws, so a real fault
+    // surfaces instead of being swallowed.
+    if (!this.dbOpen) return;
     this.deps.db
       .prepare('INSERT INTO events (at, run_id, kind, data_json) VALUES (?, ?, ?, ?)')
       .run(at, runId, kind, JSON.stringify(data));
+  }
+
+  /**
+   * Last net under a FLOATING `finalize()`.
+   *
+   * `finalize()` is fired and forgotten from five places (child close, the
+   * heartbeat watchdog, the timeout watchdog, the child's outcome message and
+   * `cancel()`), so a rejection there has no caller and becomes an unhandled
+   * rejection that reddens the whole process. This handler is that caller.
+   *
+   * It must not be able to throw. The discrimination is on `db.open`, never on
+   * the error text: with the handle closed the run row is already terminal and
+   * durable, and there is no table left to write to. The text test below only
+   * chooses the CHANNEL for the residual case — an error that is not the
+   * closed-handle error still gets a voice on stderr, the one surface that
+   * outlives `db.close()`.
+   */
+  private onFinalizeError(runId: string, e: unknown): void {
+    if (!this.dbOpen) {
+      if (!/database connection is not open/i.test(String(e))) {
+        console.error(`[clockwork] finalize(${runId}) failed after the database closed:`, e);
+      }
+      return;
+    }
+    try {
+      this.recordEvent(this.deps.clock.now(), runId, 'finalize_error', { error: String(e) });
+    } catch (writeError) {
+      console.error(`[clockwork] finalize(${runId}) failed and the event write failed too:`, e, writeError);
+    }
   }
 
   coveredOccurrences(scheduleId: string | null): number[] {

@@ -83,10 +83,14 @@ describe('agent workforce foundation — migration 0008', () => {
       (r) => r.id,
     );
     expect(applied).toContain(MIGRATION_ID);
-    // Filename order is load-bearing (db.ts sorts by name), so 0008 must be last.
-    expect(applied[applied.length - 1]).toBe(MIGRATION_ID);
-    const beyond = applied.filter((id) => /^\d{4}/.test(id) && Number(id.slice(0, 4)) > 8);
-    expect(beyond, `a second workforce migration appeared: ${beyond.join(', ')}`).toEqual([]);
+    // Filename order is load-bearing (db.ts sorts by name), so 0008 must apply
+    // after every migration that predates it. Later migrations from OTHER
+    // features are expected and fine; what this guards is that the workforce
+    // itself never adds a second one.
+    const idx = applied.indexOf(MIGRATION_ID);
+    expect(applied.slice(0, idx).every((id) => id < MIGRATION_ID)).toBe(true);
+    const extraWorkforce = applied.filter((id) => id !== MIGRATION_ID && /workforce/i.test(id));
+    expect(extraWorkforce, `a second workforce migration appeared: ${extraWorkforce.join(', ')}`).toEqual([]);
   });
 
   it('creates every table the twelve features own', () => {
@@ -313,9 +317,14 @@ describe('agent workforce foundation — capability registry honesty', () => {
       plan_then_execute: runManager.includes('this.deps.planExecute?.onPlanRunFinalized('),
       // F3: the scheduler tick defers a fire into the next answerable window.
       office_hours: scheduler.includes('shiftForApproval(this.deps.db, task.id, fireAt)'),
-      // F7: three 403 gates — task create, task patch, webhook fire.
+      // F7: three 403 gates — task create, task patch, webhook fire. The patch
+      // one spells the gate `evaluateEdit` (the same ceiling, compared against
+      // the row's stored values so a grandfathered task is not frozen); it is a
+      // call site of the same gate, so it counts here. The COUNT and the 403
+      // are what this asserts, not the spelling.
       earned_autonomy:
-        (api.match(/autonomy\.evaluate\(/g) ?? []).length >= 3 && api.includes('return reply.code(403).send(avio);'),
+        (api.match(/autonomy\.evaluate(?:Edit)?\(/g) ?? []).length >= 3 &&
+        api.includes('return reply.code(403).send(avio);'),
     };
     const unbacked = WORKFORCE_KEYS.filter((k) => FEATURES.find((f) => f.key === k)?.status === 'enforced' && GATES[k] !== true);
     expect(unbacked, "'enforced' claimed with no gate outside the /workforce/ routes").toEqual([]);

@@ -206,6 +206,25 @@ export class PlanExecute {
   }
 
   /**
+   * The gate as a QUESTION the ordinary task routes can ask: is `taskId` the
+   * execute half of a pair, and where does that pair stand?
+   *
+   * `enabled = 0` keeps the scheduler and the chain away from an execute half,
+   * but three routes reach a task row directly — run-now, the webhook fire
+   * path and `PATCH {enabled:true}` — and none of them can read `enabled` as a
+   * gate, because the first two ignore it and the third rewrites it. They ask
+   * this instead. Returns null for every ordinary task: only `createPair`
+   * writes this table, and it clones a FRESH execute task per pair, so there
+   * is at most one row per `execute_task_id`.
+   */
+  pairForExecuteTask(taskId: string): { pairId: string; status: PlanExecuteStatus } | null {
+    const row = this.db
+      .prepare('SELECT id, status FROM plan_execute_pairs WHERE execute_task_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1')
+      .get(taskId) as { id: string; status: string } | undefined;
+    return row ? { pairId: row.id, status: row.status as PlanExecuteStatus } : null;
+  }
+
+  /**
    * Call at finalize. When runId is the run of a pair's plan half:
    *  - completed  -> open an approvals row (§2.4) and move to awaiting_approval
    *  - anything else -> the pair is rejected and NO approval is opened; there

@@ -77,7 +77,7 @@
  *   measurement. The S-9 replica gets its own small DB because a tick over the
  *   5k corpus would be measuring something else.
  */
-import { beforeAll, afterAll, describe, expect, it } from 'vitest';
+import { beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -92,6 +92,29 @@ import { timesheet } from '../src/timesheets.js';
 import { scorecard, scorecards } from '../src/performance.js';
 import { SafetyJournal } from '@clockwork/runner';
 import { assertLatency } from './helpers/bench-gate.js';
+
+// ---------------------------------------------------------------------------
+// TIMEOUT HEADROOM — the OTHER way a benchmark reddens the default suite.
+//
+// Gating the ASSERTIONS (`helpers/bench-gate.ts`) shut one door and left the
+// second one open. These tests inherit `testTimeout: 30_000` from
+// `packages/daemon/vitest.config.ts`, and the T-307 year view spends 1 probe +
+// 2 warmups + 15 samples inside ONE `it()`: ~11s of that 30s budget at the
+// 585ms median measured on an Apple M4, with a single sample already at
+// 1196ms. A machine ~2.7x slower, or a loaded CI runner, blows the budget and
+// the default suite goes red as a TIMEOUT instead of as an assertion — the
+// same "your laptop was busy" verdict the gate exists to prevent, wearing a
+// different hat.
+//
+// So this file buys its own budget. `vi.setConfig` is file-scoped (verified
+// against vitest 2.1.9: a 50ms setting really did time a 400ms test out), and
+// the hook budget is raised with it because `beforeAll` seeds the entire
+// 5,000-run corpus under the DEFAULT 10s hook timeout, which nothing above
+// ever widened. No bound is loosened by this and no assertion is skipped: a
+// genuine hang still fails the suite, five minutes later instead of thirty
+// seconds later.
+// ---------------------------------------------------------------------------
+vi.setConfig({ testTimeout: 300_000, hookTimeout: 300_000 });
 
 const MIGRATIONS = loadMigrationsFrom(path.resolve(import.meta.dirname, '../migrations'));
 

@@ -50,6 +50,16 @@ const DEFAULT_STREAK_REQUIRED = 5;
 const BOTTOM_RUNG = autonomyRungs[0] as AutonomyRung;
 
 /**
+ * Permission modes ordered by how much autonomy they hand the agent, low to
+ * high. This is NOT `permissionModes`' declaration order
+ * (`plan, acceptEdits, default`), which is a list, not a ladder: `default` is
+ * `acceptEdits` plus a human prompt per action, so it sits BELOW it — the same
+ * reasoning `evaluate` states below for why it refuses on 'plan' alone.
+ * Used only to tell a patch that RAISES autonomy from one that does not.
+ */
+const MODE_RANK: Record<PermissionMode, number> = { plan: 0, default: 1, acceptEdits: 2 };
+
+/**
  * Fail closed. A stored rung that is not one of the known rungs is a CORRUPT
  * enrolment (a hand-edited row, or one written by a newer build), not an absent
  * one — reading it as "unenrolled" would let every permission mode through, so
@@ -139,9 +149,19 @@ export class AutonomyPolicy {
   }
 
   /**
-   * Fail-closed gate: a run that asks for more autonomy than its profile has
-   * earned is a policy violation, evaluated at enqueue time like every other
-   * policy.
+   * Fail-closed gate: a task that asks for more autonomy than its profile has
+   * earned is a policy violation.
+   *
+   * WHERE IT ACTUALLY RUNS. Three call sites, all in `api.ts`, all on the task
+   * ROW rather than on a run: `POST /tasks` and the webhook fire path call this
+   * method, and `PATCH /tasks/:id` calls `evaluateEdit` below. That is the
+   * whole set — nothing else in the daemon imports it.
+   *
+   * IT IS NOT AN ENQUEUE-TIME CHECK, whatever the surrounding policy engine
+   * does. `POST /tasks/:id/run-now`, the scheduler tick and F1/F4/F8's
+   * auto-bookers all reach `enqueueRunNow` without consulting it, so a row that
+   * exceeds its rung — one stored before the profile was enrolled — still runs
+   * on those paths. The ceiling is on what you can SAVE, not on what can fire.
    *
    * Only ONE mode is restrictive on this ladder. `acceptEdits` and `unattended`
    * both map to permission mode `acceptEdits` (they differ only in the approval
@@ -172,6 +192,42 @@ export class AutonomyPolicy {
       };
     }
     return null;
+  }
+
+  /**
+   * The same ceiling, applied to an EDIT of a row that already exists
+   * (PATCH /tasks/:id).
+   *
+   * `evaluate` judges a prospective row on its own merits, which is right for a
+   * create and a trap for an edit. A GRANDFATHERED row — stored `acceptEdits`
+   * before its profile was enrolled at rung 'plan' — fails it on its own stored
+   * values, so EVERY patch of that task was refused, `{enabled:false}`
+   * included: the one edit that makes it safe. A fail-closed gate nobody can
+   * comply with is not fail-closed, it is stuck, and it holds the escalation in
+   * place rather than removing it.
+   *
+   * So an edit is refused when it RAISES autonomy — a higher `MODE_RANK`, or a
+   * different profile, since a different profile is a different ceiling and
+   * this module has no honest way to rank one against another. An edit that
+   * leaves both alone, or lowers the mode, lands even though the row it lands
+   * on still exceeds its rung: it was already there, and refusing is what kept
+   * it there. An edit that INTRODUCES a violation on a compliant row is refused
+   * exactly as before — that is F7's whole point, and the first branch below.
+   */
+  evaluateEdit(
+    current: { profileId: string | null; permissionMode: PermissionMode },
+    next: { profileId: string | null; permissionMode: PermissionMode },
+  ): PolicyViolation | null {
+    const violation = this.evaluate(next);
+    if (!violation) return null;
+    if (!this.evaluate(current)) return violation; // the patch is what breaks the ceiling
+    // A mode outside the enum can only come from a hand-edited row. Ranking it
+    // at the bottom means every named mode above 'plan' reads as a RAISE and is
+    // refused — same fail-closed reading `parseRung` gives a corrupt rung.
+    const rank = (m: PermissionMode): number => MODE_RANK[m] ?? 0;
+    const raisesMode = rank(next.permissionMode) > rank(current.permissionMode);
+    const movesProfile = next.profileId !== current.profileId;
+    return raisesMode || movesProfile ? violation : null;
   }
 
   /**

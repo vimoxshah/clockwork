@@ -17,15 +17,23 @@
  * hostile file includes one; this module never reads it even if present.
  *
  * NO NEW DEPENDENCY: the workspace has no YAML parser. `.clockwork/jobs.json`
- * is fully supported; `.clockwork/jobs.yaml`/`.yml` goes through a
- * RESTRICTED parser written here: flat key/value mappings and a list of
- * mappings (one level of nesting, enough for a job's `schedule` block),
- * `#` comments, quoted and bare scalars. No anchors, aliases, multi-document
- * files, block scalars or nested sequences — each is rejected with a named
- * error rather than guessed at. Every scalar parses to a string; the fields
- * `RepoJobSpec` declares are all strings, so no number/boolean coercion is
- * needed and none is attempted. `RepoJobsFile.safeParse` is the single
- * validator both formats converge on.
+ * is fully supported; `.clockwork/jobs.yaml`/`.yml` goes through a RESTRICTED
+ * parser written here.
+ *
+ * DO NOT RESTATE THE GRAMMAR IN THIS COMMENT. The version that stood here
+ * claimed anchors, aliases, multi-document files, block scalars and nested
+ * sequences were "each rejected with a named error rather than guessed at",
+ * and two of the five were false: a multi-document file whose first document
+ * has no leading `---` is merged, and mapping nesting has no depth bound at
+ * all. A second copy of the list is a second thing to get wrong. The one
+ * authoritative list — what is accepted, what is rejected BY NAME, and what is
+ * NOT rejected — is `docs/agent-workforce.md` §F5, and
+ * `packages/daemon/test/claims-honesty.test.ts` checks that list against this
+ * parser in both directions, so neither can drift from the other in silence.
+ *
+ * Every scalar parses to a string; the fields `RepoJobSpec` declares are all
+ * strings, so no number/boolean coercion is needed and none is attempted.
+ * `RepoJobsFile.safeParse` is the single validator both formats converge on.
  */
 import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
@@ -41,6 +49,24 @@ import { securityPreview } from './templates.js';
 // Restricted YAML — internal, not exported. See module header for the
 // supported subset and the rationale for keeping every scalar a string.
 // ---------------------------------------------------------------------------
+
+/**
+ * How deeply the restricted parser will descend before it refuses.
+ *
+ * The two parse functions call each other, so an untrusted file could drive
+ * them to `RangeError: Maximum call stack size exceeded` — a THROW, which
+ * `parseJobsFile` rethrows and `discover()` does not catch. A real jobs file
+ * nests four levels, so this bound is far above anything legitimate and far
+ * below the stack.
+ */
+export const MAX_YAML_DEPTH = 32;
+
+/**
+ * The largest jobs file we will read. The file comes from a repository the
+ * user pointed us at, and `readFileSync` with no cap will happily pull a
+ * multi-gigabyte file into the daemon's heap.
+ */
+export const MAX_JOBS_FILE_BYTES = 64 * 1024;
 
 class YamlError extends Error {
   constructor(lineNo: number, message: string) {
@@ -192,7 +218,11 @@ function parseMappingEntries(
   indent: number,
   startIdx: number,
   firstEntry?: { content: string; lineNo: number; afterIdx: number },
+  depth = 1,
 ): [Record<string, unknown>, number] {
+  if (depth > MAX_YAML_DEPTH) {
+    throw new YamlError(lines[startIdx]?.lineNo ?? lines[lines.length - 1]?.lineNo ?? 1, 'nesting is too deep');
+  }
   const obj: Record<string, unknown> = {};
   const seenKeys = new Set<string>();
   let idx = startIdx;
@@ -226,8 +256,8 @@ function parseMappingEntries(
         const childIndent = lines[afterIdx]!.indent;
         const isSeq = lines[afterIdx]!.content === '-' || lines[afterIdx]!.content.startsWith('- ');
         const [val, nextIdx] = isSeq
-          ? parseSequence(lines, childIndent, afterIdx)
-          : parseMappingEntries(lines, childIndent, afterIdx);
+          ? parseSequence(lines, childIndent, afterIdx, depth + 1)
+          : parseMappingEntries(lines, childIndent, afterIdx, undefined, depth + 1);
         obj[kv.key] = val;
         idx = nextIdx;
       } else {
@@ -242,7 +272,10 @@ function parseMappingEntries(
   return [obj, idx];
 }
 
-function parseSequence(lines: Line[], indent: number, startIdx: number): [unknown[], number] {
+function parseSequence(lines: Line[], indent: number, startIdx: number, depth = 1): [unknown[], number] {
+  if (depth > MAX_YAML_DEPTH) {
+    throw new YamlError(lines[startIdx]?.lineNo ?? lines[lines.length - 1]?.lineNo ?? 1, 'nesting is too deep');
+  }
   const arr: unknown[] = [];
   let idx = startIdx;
   while (idx < lines.length && lines[idx]!.indent === indent && (lines[idx]!.content === '-' || lines[idx]!.content.startsWith('- '))) {
@@ -255,7 +288,7 @@ function parseSequence(lines: Line[], indent: number, startIdx: number): [unknow
         if (lines[afterIdx]!.content === '-' || lines[afterIdx]!.content.startsWith('- ')) {
           throw new YamlError(lines[afterIdx]!.lineNo, 'nested sequences are not supported');
         }
-        const [val, nextIdx] = parseMappingEntries(lines, childIndent, afterIdx);
+        const [val, nextIdx] = parseMappingEntries(lines, childIndent, afterIdx, undefined, depth + 1);
         arr.push(val);
         idx = nextIdx;
       } else {
@@ -268,7 +301,7 @@ function parseSequence(lines: Line[], indent: number, startIdx: number): [unknow
       const kv = matchKeyValue(rest);
       if (kv) {
         const itemIndent = indent + 2;
-        const [obj, nextIdx] = parseMappingEntries(lines, itemIndent, afterIdx, { content: rest, lineNo: line.lineNo, afterIdx });
+        const [obj, nextIdx] = parseMappingEntries(lines, itemIndent, afterIdx, { content: rest, lineNo: line.lineNo, afterIdx }, depth + 1);
         arr.push(obj);
         idx = nextIdx;
       } else {
@@ -340,7 +373,13 @@ export function findJobsFile(repoPath: string): { path: string; format: 'yaml' |
   for (const c of candidates) {
     const p = path.join(repoPath, '.clockwork', c.file);
     try {
-      if (!lstatSync(p).isFile()) continue; // a symlink is not a file to lstat
+      const st = lstatSync(p);
+      if (!st.isFile()) continue; // a symlink is not a file to lstat
+      // A HARD link defeats both checks below: lstat calls it a file, and
+      // realpath returns the in-repo path itself, so a link to a file outside
+      // the repo used to read straight through. The link COUNT is what tells
+      // them apart, and an ordinary jobs file has exactly one.
+      if (st.nlink > 1) continue;
       const real = realpathSync(p);
       if (real !== repoReal && !real.startsWith(repoReal + path.sep)) continue; // escaped the repo
       return { path: p, format: c.format };
@@ -453,9 +492,19 @@ export class RepoJobs {
     if (!found) return { offers: [] };
     let text: string;
     try {
+      // Cap BEFORE reading: the file belongs to a repo the caller named, and
+      // an uncapped readFileSync pulls whatever size it is into the heap.
+      const size = lstatSync(found.path).size;
+      if (size > MAX_JOBS_FILE_BYTES) {
+        return { offers: [], error: `jobs file is too large: ${size} bytes exceeds the ${MAX_JOBS_FILE_BYTES}-byte limit` };
+      }
       text = readFileSync(found.path, 'utf8');
     } catch (e) {
-      return { offers: [], error: `could not read ${found.path}: ${(e as Error).message}` };
+      // Structural, like every other error site here: the errno code is Node's
+      // own vocabulary and the candidate filename is one of our three. The
+      // absolute path is the caller's own input echoed back, so it stays out.
+      const code = (e as NodeJS.ErrnoException).code ?? 'unknown error';
+      return { offers: [], error: `could not read ${path.basename(found.path)}: ${code}` };
     }
     const parsed = parseJobsFile(text, found.format);
     if ('error' in parsed) return { offers: [], error: parsed.error };
@@ -526,6 +575,17 @@ export class RepoJobs {
     const row = this.getRow(id);
     if (!row) return 'not_found';
     if (row.status !== 'offered') return { error: 'this job offer has already been decided' };
+    // Spec §F5 requires this refusal, and it stays. But it is NOT a defence
+    // against a hostile jobs file and must not be advertised as one: `discover`
+    // is the only writer of `preview_json`, it goes through `previewForJob`,
+    // which hardcodes `permissionMode: 'acceptEdits'`, and the sole red-level
+    // flag `securityPreview` raises is the `bypassPermissions` one. So no
+    // repo-shipped offer can reach this branch, whatever the file says — what
+    // actually keeps a repo from choosing its own power is `RepoJobSpec` having
+    // no such field plus the hardcoded defaults below. This is live only for a
+    // `repo_jobs` row planted directly in the table (repo-jobs.test.ts pins
+    // that), so it is defence in depth against a future writer, not a gate the
+    // discovery path exercises. docs/agent-workforce.md §F5 says the same.
     const preview = row.preview_json ? (JSON.parse(row.preview_json) as SecurityPreviewResult) : null;
     if (preview && preview.flags.some((f) => f.level === 'red')) {
       return { error: 'job rejected by security preview' };

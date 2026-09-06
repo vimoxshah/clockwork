@@ -51,7 +51,23 @@ it, reading the plan through the existing `{{previous.report}}` chain binding.
 - **You decide**: `POST /workforce/plan-execute/:id/resolve` with
   `{ "decision": "approved" }` books the execute run directly (it does not
   re-enable the task — see ADR-041), or `"rejected"` to drop it.
+- **The ordinary task routes hold the same gate** (ADR-041): while a pair is
+  not approved, `POST /tasks/:id/run-now` on its execute half and a webhook
+  trigger bound to that half are both refused with **409** and a sentence
+  naming the pair. `PATCH /tasks/:id {"enabled": true}` is refused for an
+  execute half at any pair status — re-enabling it would re-arm the one-shot
+  chain and let a later plan run fire it with a plan nobody read.
 - List/inspect: `GET /workforce/plan-execute`, `GET /workforce/plan-execute/:id`.
+- UI: the inbox row is `ApprovalCard`'s `PlanBody`
+  (`packages/ui/src/components/ApprovalCard.tsx`, mounted from
+  `packages/ui/src/components/InboxView.tsx`). It shows the plan text carried in
+  the approval payload, labels the buttons *Approve & book execute run* /
+  *Reject plan*, and deliberately omits the "answer within ~2 min or it is
+  auto-denied" line that live permission prompts carry — an F1 row's
+  `timeout_at` is 30 days out and nothing sweeps the table, so that deadline
+  does not exist here. Both buttons post to `/approvals/:id/respond`, which
+  forwards into `planExecute.resolve` on the `pairId` in the payload, so the
+  inbox and the resolve route land in the same state.
 
 **What it enforces:** the execute half never runs without your explicit
 approval of that specific plan. **What it does not do:** it does not evaluate
@@ -200,9 +216,14 @@ offers** them; it never imports anything on its own.
   `offered` and clears your decision, so an edited job asks again rather than
   silently re-applying your old dismissal.
 - `POST /workforce/repo-jobs/:id/import` creates the task **disabled** — you
-  still schedule and enable it yourself. A job whose security preview carries
-  a **red** flag is refused outright (422); yellow/info flags import but stay
-  visible in the preview.
+  still schedule and enable it yourself. `import` does refuse a row whose
+  stored preview carries a **red** flag (422), but **no discovery can produce
+  one**, so do not read that as a defence against a hostile jobs file: the
+  preview is computed with the permission mode import will actually use
+  (`acceptEdits`, hardcoded in `previewForJob`), and the only red-level flag
+  `securityPreview` raises is for `bypassPermissions`, which a repo file has no
+  field to ask for. A discovered offer's flags are yellow/info only. The real
+  defence is the next bullet.
 - **The job file cannot choose its own power or budget, full stop.** The
   imported task always gets `permissionMode: 'acceptEdits'`,
   `budget: { maxUsd: 2, maxTurns: 50, timeoutSec: 3600 }`, and
@@ -212,11 +233,28 @@ offers** them; it never imports anything on its own.
   and a real schedule yourself once you've reviewed the disabled task. See
   ADR-040.
 - **No new YAML dependency was added.** `.yaml`/`.yml` files go through a
-  restricted parser written for this feature: flat key/value mappings and one
-  level of nested lists (enough for a job's `schedule` block), `#` comments,
-  quoted and bare scalars. Anchors, aliases, multi-document files, block
-  scalars, and deeper nesting are rejected with a named error rather than
-  guessed at.
+  restricted parser written for this feature (`parseRestrictedYaml` in
+  `packages/daemon/src/repo-jobs.ts`). It accepts a top-level mapping, `#`
+  comments, bare and single/double-quoted scalars — every scalar stays a
+  string, nothing is coerced to a number or a boolean — and sequences whose
+  items are scalars or mappings.
+  Rejected with a named error: anchors, aliases, block scalars, flow
+  collections (`[…]`, `{…}`), nested sequences, tab indentation, duplicate
+  keys, nesting past a **depth** bound of `MAX_YAML_DEPTH` (32 levels, against
+  four in a real jobs file), and a file over `MAX_JOBS_FILE_BYTES` (64 KiB),
+  which is refused on its size before a byte of it is parsed. Those last two
+  are limits `plan/AGENT-WORKFORCE-SPEC.md` §F5 never considered; both were
+  added after a review found that the two parse functions recurse into each
+  other with nothing stopping them, so a deeply nested file reached
+  `RangeError: Maximum call stack size exceeded` — a throw, not a refusal —
+  and that the file was read with no cap at all.
+  Not rejected — the list a sceptical reader needs, because an earlier version
+  of this page claimed the opposite: a multi-document file whose FIRST document
+  carries no leading `---` is merged rather than refused, because the first
+  `---` anywhere in the file is taken as that leading marker and dropped — only
+  a `---` seen *after* one has already been consumed raises `multi-document
+  files are not supported`. That one shape contradicts §F5, which asks for a
+  named rejection and does not get one on it.
 
 Test: `packages/daemon/test/repo-jobs.test.ts`.
 
@@ -333,6 +371,16 @@ prompt or profile diff — that a human applies or rejects.
 - A task that recovers gets a clean slate — the shared failure-streak row
   (also used by the pre-existing auth-failure pause feature) is deleted, which
   clears the diagnostic bookkeeping too.
+- UI: the inbox row is `ApprovalCard`'s `RemediationBody`
+  (`packages/ui/src/components/ApprovalCard.tsx`, mounted from
+  `packages/ui/src/components/InboxView.tsx`). Approving here is the click that
+  rewrites the task, so the card shows the target field, the current value
+  fetched from the proposal row, the proposed value and the rationale, and
+  labels the buttons *Apply change* / *Reject change*. If that fetch fails the
+  card says the current value is unavailable rather than blanking — what would
+  be applied is already in the payload. Both buttons post to
+  `/approvals/:id/respond`, which forwards into `selfHealing.apply` or
+  `selfHealing.reject` on the `proposalId` in the payload.
 
 See ADR-039 for the "propose, never apply" boundary in full.
 

@@ -73,7 +73,7 @@ beforeAll(() => {
   mkdirSync(repoDir, { recursive: true });
   execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repoDir });
   execFileSync('git', ['config', 'user.email', 't@t'], { cwd: repoDir });
-  execFileSync('git', ['config', 'user.name', 't']);
+  execFileSync('git', ['config', 'user.name', 't'], { cwd: repoDir });
   writeFileSync(path.join(repoDir, 'f.txt'), '1\n');
   execFileSync('git', ['add', '-A'], { cwd: repoDir });
   execFileSync('git', ['commit', '-qm', 'init'], { cwd: repoDir });

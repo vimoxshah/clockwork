@@ -7,12 +7,19 @@
  * from a repo-controlled file.
  */
 import { describe, expect, it, afterEach, beforeEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, linkSync, chmodSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { openDatabase, createMigrator, loadMigrationsFrom, type DB } from '../src/db.js';
 import { newId } from '@clockwork/shared';
-import { findJobsFile, parseJobsFile, digestOf, RepoJobs } from '../src/repo-jobs.js';
+import {
+  findJobsFile,
+  parseJobsFile,
+  digestOf,
+  RepoJobs,
+  MAX_JOBS_FILE_BYTES,
+  MAX_YAML_DEPTH,
+} from '../src/repo-jobs.js';
 
 function freshDb(): { db: DB; dir: string } {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'cw-repojobs-db-'));
@@ -690,6 +697,204 @@ describe('parseJobsFile — errors describe structure, never the bytes read', ()
     if ('error' in result) {
       expect(result.error).toMatch(/duplicate job key/);
       expect(result.error).not.toContain('secret-key-xyz');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S-review (unbounded untrusted input): the jobs file comes from a repository
+// the user points at, so both of the parser's unbounded dimensions are a
+// denial of service on the daemon process. Recursion depth blew the stack
+// (`RangeError: Maximum call stack size exceeded` at 20,000 nested mappings,
+// rethrown out of parseJobsFile and uncaught by discover(), i.e. a 500 out of
+// POST /workforce/repo-jobs/discover), and the read had no size cap at all.
+// Both now refuse with a NAMED error, the same way every other unsupported
+// form does.
+// ---------------------------------------------------------------------------
+const VALID_YAML = [
+  'schema: clockwork.jobs.v1',
+  'jobs:',
+  '  - key: nightly-tests',
+  '    name: Nightly test run',
+  '    prompt: Run the full test suite and report failures.',
+  '    schedule:',
+  '      kind: cron',
+  "      cron: '0 2 * * *'",
+  '      tz: UTC',
+].join('\n');
+
+/** A mapping nested `levels` deep below the schema key (max depth is `levels + 1`). */
+function nestedMappings(levels: number): string {
+  const out = ['schema: clockwork.jobs.v1'];
+  for (let i = 0; i < levels; i++) out.push(`${' '.repeat(2 * i)}k${i}:`);
+  out.push(`${' '.repeat(2 * levels)}leaf: v`);
+  return out.join('\n');
+}
+
+describe('parseJobsFile — the restricted parser bounds its recursion depth', () => {
+  it('refuses nesting past the bound with a named error', () => {
+    const result = parseJobsFile(nestedMappings(200), 'yaml');
+    expect('error' in result).toBe(true);
+    if ('error' in result) {
+      expect(result.error).toMatch(/nesting is too deep/);
+      expect(result.error).toMatch(/line \d+/); // located, like every other YamlError
+    }
+  });
+
+  it('returns that error instead of exhausting the call stack', () => {
+    // Before the bound this exact shape reached `RangeError: Maximum call
+    // stack size exceeded` at 20,000 levels — a throw parseJobsFile rethrows
+    // and discover() does not catch. The bound is hit long before the stack
+    // is, so a fixture only has to be deeper than the bound to prove it.
+    expect(() => parseJobsFile(nestedMappings(5_000), 'yaml')).not.toThrow();
+  });
+
+  it('accepts a file exactly at the bound and refuses the very next level', () => {
+    const atBound = parseJobsFile(nestedMappings(MAX_YAML_DEPTH - 1), 'yaml');
+    expect('error' in atBound && /too deep/.test(atBound.error), 'the bound itself must parse').toBe(false);
+
+    const pastBound = parseJobsFile(nestedMappings(MAX_YAML_DEPTH), 'yaml');
+    expect('error' in pastBound && /too deep/.test(pastBound.error), 'one level past the bound must refuse').toBe(true);
+  });
+
+  it('leaves a real jobs file, which nests four levels, far inside the bound', () => {
+    const result = parseJobsFile(VALID_YAML, 'yaml');
+    expect('error' in result, `a valid file was refused: ${JSON.stringify(result)}`).toBe(false);
+  });
+
+  it('names the fault without echoing a byte of the file', () => {
+    const deep = nestedMappings(200).replace('leaf: v', 'leaf: SECRET_DEPTH_XYZ');
+    const result = parseJobsFile(deep, 'yaml');
+    expect('error' in result).toBe(true);
+    if ('error' in result) expect(result.error).not.toContain('SECRET_DEPTH_XYZ');
+  });
+});
+
+describe('discover() — the jobs file is read under a size cap', () => {
+  let repoDir: string;
+  beforeEach(() => {
+    repoDir = makeRepo();
+  });
+  afterEach(() => {
+    rmSync(repoDir, { recursive: true, force: true });
+  });
+
+  it('reads a normal file (the control: the fixture really is valid and under the cap)', () => {
+    const { db, dir: dbDir } = freshDb();
+    try {
+      writeJobsFile(repoDir, 'jobs.yaml', VALID_YAML);
+      const result = new RepoJobs(db).discover(repoDir);
+      expect(result.error).toBeUndefined();
+      expect(result.offers).toHaveLength(1);
+    } finally {
+      db.close();
+      rmSync(dbDir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a file over the cap with a named error, and never parses it', () => {
+    const { db, dir: dbDir } = freshDb();
+    try {
+      // A VALID file padded past the cap with comments: without the cap this
+      // parses and yields an offer, so the refusal below is the cap doing the
+      // work and not the content being malformed.
+      const padding = `\n# ${'p'.repeat(200)}`;
+      const repeats = Math.ceil(MAX_JOBS_FILE_BYTES / padding.length) + 1;
+      writeJobsFile(repoDir, 'jobs.yaml', VALID_YAML + padding.repeat(repeats));
+
+      const result = new RepoJobs(db).discover(repoDir);
+      expect(result.offers).toEqual([]);
+      expect(result.error).toMatch(/too large/);
+      expect(result.error).toContain(String(MAX_JOBS_FILE_BYTES));
+    } finally {
+      db.close();
+      rmSync(dbDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('findJobsFile — hard-link containment', () => {
+  let repoDir: string;
+  let outsideDir: string;
+
+  beforeEach(() => {
+    repoDir = makeRepo();
+    outsideDir = mkdtempSync(path.join(os.tmpdir(), 'cw-repojobs-outside-hard-'));
+  });
+  afterEach(() => {
+    rmSync(repoDir, { recursive: true, force: true });
+    rmSync(outsideDir, { recursive: true, force: true });
+  });
+
+  it('refuses a jobs file that is a HARD link to a file outside the repo', () => {
+    // The symlink checks do not see this one: `lstat().isFile()` is true for a
+    // hard link and `realpathSync` returns the in-repo path itself, so both
+    // pre-existing checks passed and the read went through. The link COUNT is
+    // what tells them apart, and it is the same number on every POSIX
+    // filesystem that reports one.
+    const secret = path.join(outsideDir, 'secret.txt');
+    writeFileSync(secret, 'SECRET_TOKEN_XYZ\n', 'utf8');
+    mkdirSync(path.join(repoDir, '.clockwork'), { recursive: true });
+    linkSync(secret, path.join(repoDir, '.clockwork', 'jobs.yaml'));
+
+    expect(findJobsFile(repoDir)).toBeNull();
+  });
+
+  it('discover() leaks nothing through a hard link: no offers, no error text', () => {
+    const { db, dir: dbDir } = freshDb();
+    try {
+      const secret = path.join(outsideDir, 'secret.txt');
+      writeFileSync(secret, 'SECRET_TOKEN_XYZ\n', 'utf8');
+      mkdirSync(path.join(repoDir, '.clockwork'), { recursive: true });
+      linkSync(secret, path.join(repoDir, '.clockwork', 'jobs.yaml'));
+
+      const result = new RepoJobs(db).discover(repoDir);
+      expect(result).toEqual({ offers: [] });
+      expect(JSON.stringify(result)).not.toContain('SECRET_TOKEN_XYZ');
+    } finally {
+      db.close();
+      rmSync(dbDir, { recursive: true, force: true });
+    }
+  });
+
+  it('still finds an ordinary single-linked file (the check is not a blanket refusal)', () => {
+    writeJobsFile(repoDir, 'jobs.json', VALID_JSON);
+    expect(findJobsFile(repoDir)).toEqual({ path: path.join(repoDir, '.clockwork', 'jobs.json'), format: 'json' });
+  });
+});
+
+describe('discover() — a read failure is structural too', () => {
+  let repoDir: string;
+  beforeEach(() => {
+    repoDir = makeRepo();
+  });
+  afterEach(() => {
+    rmSync(repoDir, { recursive: true, force: true });
+  });
+
+  it('names the errno and the candidate, never the caller-supplied path', () => {
+    // The remaining error site that still returned a raw errno string. Node's
+    // message is "EACCES: permission denied, open '<absolute path>'"; the
+    // candidate filename is ours (findJobsFile only ever looks at three), the
+    // errno code is Node's own vocabulary, and neither is a byte of the file.
+    // ASSUMES A NON-ROOT UID, as CI has (`.github/workflows/ci.yml` runs on a
+    // macos-14 runner as `runner`): root ignores mode 000.
+    const { db, dir: dbDir } = freshDb();
+    const file = path.join(repoDir, '.clockwork', 'jobs.json');
+    try {
+      writeJobsFile(repoDir, 'jobs.json', VALID_JSON);
+      chmodSync(file, 0o000);
+
+      const result = new RepoJobs(db).discover(repoDir);
+      expect(result.offers).toEqual([]);
+      expect(result.error).toMatch(/could not read/);
+      expect(result.error).toMatch(/EACCES/);
+      expect(result.error, 'the absolute path is still echoed back').not.toContain(repoDir);
+      expect(result.error).toContain('jobs.json');
+    } finally {
+      chmodSync(file, 0o644);
+      db.close();
+      rmSync(dbDir, { recursive: true, force: true });
     }
   });
 });

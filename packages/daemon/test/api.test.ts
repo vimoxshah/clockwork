@@ -331,6 +331,39 @@ describe('run-now + runs surface (FR-5)', () => {
     expect(rep.statusCode).toBe(200);
     expect(rep.json().report).toBeNull();
   });
+
+  // S-review: run-now now asks F1's approval gate before it enqueues (api.ts,
+  // ADR-039). This is the blast-radius half of that change — the gate reads a
+  // table only F1 writes, so an ordinary task must still run and still patch,
+  // and the refusal must LIFT once a human has approved that specific plan.
+  it('F1 approval gate leaves an ordinary task alone, and lifts for an approved pair', async () => {
+    const ordinary = (
+      await app.inject(auth({ method: 'POST', url: '/tasks', payload: { ...VALID_ONCE_TASK, name: 'f1 gate ordinary' } }))
+    ).json();
+
+    const ran = await app.inject(auth({ method: 'POST', url: `/tasks/${ordinary.id}/run-now` }));
+    expect(ran.statusCode, ran.body).toBe(202);
+    await app.inject(auth({ method: 'POST', url: `/runs/${ran.json().runId}/cancel` }));
+
+    const patched = await app.inject(auth({ method: 'PATCH', url: `/tasks/${ordinary.id}`, payload: { enabled: true } }));
+    expect(patched.statusCode, patched.body).toBe(200);
+
+    const pair = await app.inject(
+      auth({ method: 'POST', url: '/workforce/plan-execute', payload: { taskId: ordinary.id, planHour: 9, tz: 'UTC' } }),
+    );
+    expect(pair.statusCode, pair.body).toBe(201);
+    const { id: pairId, executeTaskId } = pair.json();
+    // The verdict a human gives at the gate, without going through resolve()
+    // (which books the run itself): what is under test is the ROUTE.
+    db.prepare("UPDATE plan_execute_pairs SET status='approved', decided_at=?, updated_at=? WHERE id=?").run(
+      Date.now(),
+      Date.now(),
+      pairId,
+    );
+    const approvedRun = await app.inject(auth({ method: 'POST', url: `/tasks/${executeTaskId}/run-now` }));
+    expect(approvedRun.statusCode, approvedRun.body).toBe(202);
+    await app.inject(auth({ method: 'POST', url: `/runs/${approvedRun.json().runId}/cancel` }));
+  });
 });
 
 describe('search (FR-29-lite)', () => {

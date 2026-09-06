@@ -65,9 +65,17 @@ export const FEATURES: FeatureDef[] = [
   // Only three qualify as enforced.
   //   F1 withholds the execute run until a human resolves the pair's approval
   //     (run-manager finalize -> approvals row). The execute task is created
-  //     enabled=0 and is NEVER re-enabled: resolve('approved') leaves
-  //     enabled=0 and books the run directly, so enabled=0 is the whole gate
-  //     and there is no moment where the chain is re-armed (ADR-041).
+  //     enabled=0 and is never re-enabled by this feature: resolve('approved')
+  //     leaves enabled=0 and books the run directly (ADR-041). What enabled=0
+  //     buys on its own is exactly two things — the scheduler skips the half
+  //     (queue schedule, next_fire NULL) and chain firing skips it
+  //     (run-manager.ts:683 selects `enabled = 1`). The routes that reach a
+  //     task row directly cannot be gated on that column, so they are gated on
+  //     the PAIR: POST /tasks/:id/run-now and POST /hooks/:id refuse an execute
+  //     half whose pair is not approved, and PATCH /tasks/:id {enabled:true}
+  //     refuses to re-enable an execute half at any pair status (409 each,
+  //     api.ts `planExecuteGate`). TaskRepo.patch is the only writer that can
+  //     put a 1 back in that column, and PATCH /tasks/:id is its only caller.
   //   F3 defers a scheduled fire out of the tick loop into the next
   //     office-hours window — but only for a task whose PROFILE carries
   //     may_require_approval=1, which nothing outside F7 enrolment sets.

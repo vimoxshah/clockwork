@@ -239,6 +239,63 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       return runId;
     },
   });
+  /**
+   * F1's approval gate, asked from the ORDINARY task routes (ADR-039).
+   *
+   * `enabled=0` gates the execute half against the scheduler and against chain
+   * firing, and it is no gate at all against the three routes that reach a task
+   * row directly: run-now and the webhook fire path never read it, and PATCH
+   * rewrites it. `docs/agent-workforce.md` promises "the execute half never
+   * runs without your explicit approval of that specific plan" — these
+   * refusals are what make that sentence true of the product rather than of
+   * the scheduler alone.
+   *
+   *   'run'    (run-now, webhook fire) is refused while the pair is not
+   *            approved. 'approved'/'executed' means a human read THAT plan, so
+   *            a manual re-run is theirs to make; 'rejected' stays refused,
+   *            because a rejected plan was never approved either.
+   *   'enable' (PATCH {enabled:true}) is refused for an execute half at ANY
+   *            status: resolve('approved') books the execute run itself, so
+   *            enabled=1 could only ever mean "let the next plan run fire this
+   *            half through the chain, carrying a plan nobody read".
+   *
+   * Returns null for every task that is not an execute half — only createPair
+   * writes that table, and it clones a fresh execute task per pair.
+   */
+  const planExecuteGate = (
+    taskId: string,
+    action: 'run' | 'enable',
+  ): { error: string; code: string; pairId: string; pairStatus: string } | null => {
+    const pair = planExecute.pairForExecuteTask(taskId);
+    if (!pair) return null;
+    const resolveRoute = `POST /workforce/plan-execute/${pair.pairId}/resolve`;
+    if (action === 'enable') {
+      return {
+        error:
+          `This task is the execute half of plan-then-execute pair ${pair.pairId}, and it stays disabled by design. ` +
+          `Enabling it would let a later plan run fire it through the chain with a plan nobody approved. ` +
+          `Approve the plan instead (${resolveRoute}) and Clockwork books the execute run for you.`,
+        code: 'execute_half_stays_disabled',
+        pairId: pair.pairId,
+        pairStatus: pair.status,
+      };
+    }
+    if (pair.status === 'approved' || pair.status === 'executed') return null;
+    const because =
+      pair.status === 'rejected'
+        ? 'you rejected that plan'
+        : pair.status === 'awaiting_approval'
+          ? 'its plan is waiting for your approval'
+          : 'its plan run has not produced a plan yet';
+    return {
+      error:
+        `This task is the execute half of plan-then-execute pair ${pair.pairId}, and ${because}. ` +
+        `Approve the plan (${resolveRoute}) and Clockwork books the execute run itself.`,
+      code: 'plan_not_approved',
+      pairId: pair.pairId,
+      pairStatus: pair.status,
+    };
+  };
   let token = loadOrCreateToken(deps.dataDir);
   const sseClients = new Set<FastifyReply>();
 
@@ -548,6 +605,19 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     if (expectedVersion !== undefined && expectedVersion !== current.version) {
       return reply.code(409).send({ error: 'version_conflict' }); // S-82
     }
+    // F1 (ADR-039): re-enabling the execute half re-arms the one-shot chain —
+    // run-manager.ts:683 fires successors `WHERE chain_after = ? AND enabled = 1`
+    // and the execute half does carry `chain_after` (plan-execute.ts:180), so a
+    // later plan run would launch it with a plan nobody approved. Refused ahead
+    // of the two content gates below because it turns on WHICH TASK this is,
+    // not on what the patch asks for.
+    if (parsed.data.enabled === true) {
+      const peGate = planExecuteGate(current.id, 'enable');
+      if (peGate) {
+        audit('task.update_rejected', 'task', current.id, { code: peGate.code, pairId: peGate.pairId });
+        return reply.code(409).send(peGate);
+      }
+    }
     // Policy gate on edits that change engine/byok/budget.
     const pvEdit = evaluatePolicy(
       parsed.data.engine ?? (current as unknown as { engine?: string }).engine ?? undefined,
@@ -561,10 +631,23 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     // F7 earned-autonomy, on the profile and mode the row WILL hold. `patch`
     // writes any key that is not `undefined`, so an explicit null profileId
     // detaches the profile — mirror that, do not coalesce it away.
-    const avEdit = autonomy.evaluate({
-      profileId: parsed.data.profileId !== undefined ? parsed.data.profileId : current.profile_id,
-      permissionMode: (parsed.data.permissionMode ?? current.permission_mode) as PermissionMode,
-    });
+    //
+    // S-review (usability trap): judging the prospective row ALONE made a
+    // grandfathered task — one stored above its profile's rung before that
+    // profile was enrolled — unpatchable for every field, `{enabled:false}`
+    // included. `evaluateEdit` compares the prospective row with the stored one
+    // and refuses only a patch that RAISES autonomy, so the fail-closed
+    // direction is unchanged and the escape hatch is reachable.
+    const avEdit = autonomy.evaluateEdit(
+      {
+        profileId: current.profile_id,
+        permissionMode: current.permission_mode as PermissionMode,
+      },
+      {
+        profileId: parsed.data.profileId !== undefined ? parsed.data.profileId : current.profile_id,
+        permissionMode: (parsed.data.permissionMode ?? current.permission_mode) as PermissionMode,
+      },
+    );
     if (avEdit) {
       const avio = { violation: `${avEdit.code}: ${avEdit.message}` };
       audit('task.update_rejected', 'task', current.id, { ...avio });
@@ -589,6 +672,13 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
   app.post('/tasks/:id/run-now', async (req, reply) => {
     const row = tasks.get((req.params as any).id);
     if (!row) return reply.code(404).send({ error: 'not_found' });
+    // F1 (ADR-039): the execute half of a pair a human has not approved is not
+    // launchable by hand either. Ahead of the enqueue, so nothing is booked.
+    const peGate = planExecuteGate(row.id, 'run');
+    if (peGate) {
+      audit('run.enqueue_rejected', 'task', row.id, { code: peGate.code, pairId: peGate.pairId, pairStatus: peGate.pairStatus });
+      return reply.code(409).send(peGate);
+    }
     const runId = enqueueRunNow(deps.db, row);
     audit('run.enqueue', 'run', runId, { taskId: row.id, taskName: row.name, via: 'run-now' });
     deps.runManager.pump();
@@ -737,6 +827,10 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       if (pv) return respond(403, { error: 'policy', ...pv }, false, 'policy_violation');
       const av = autonomy.evaluate({ profileId: taskRow.profile_id ?? null, permissionMode: taskRow.permission_mode as PermissionMode });
       if (av) return respond(403, { error: 'policy', violation: `${av.code}: ${av.message}` }, false, 'policy_violation');
+      // F1 (ADR-039): a trigger bound to the execute half of an unapproved pair
+      // is a third way to launch it unapproved — same refusal as run-now.
+      const peGate = planExecuteGate(taskRow.id, 'run');
+      if (peGate) return respond(409, peGate, false, peGate.code);
 
       const runId = enqueueRunNow(deps.db, taskRow);
       // Stash the event payload into the run's spec so prompts can use {{event.*}}.
@@ -1047,7 +1141,6 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
         }
         return { resolved: true, forwarded: result.forwarded };
       }
-    }
     }
   });
 
