@@ -13,6 +13,8 @@ import { useAsync } from '../useAsync';
 import { ProposedEvents } from './ProposedEvents';
 import { OutcomeControls } from './OutcomeControls';
 import { ApprovalCard } from './ApprovalCard';
+import { ProofOfWorkExport } from './ProofOfWorkExport';
+import { TaskMemoryPanel } from './TaskMemoryPanel';
 
 type OutcomeFilter = 'all' | 'completed' | 'failed' | 'active' | 'needsyou';
 
@@ -26,13 +28,44 @@ function chipFor(state: string): string {
   return '';
 }
 
-function matchesFilter(state: string, f: OutcomeFilter): boolean {
+/**
+ * "needs you" used to check only the RUN's own state
+ * (`waiting_approval`/`awaiting_user` — true for a live permission prompt).
+ * F1 plan approvals and F8 remediation proposals are opened when a run
+ * FINALIZES (plan-execute.ts, self-healing.ts), so the run they hang off is
+ * already `completed` by the time the approval exists — that state can never
+ * match, so the one filter meant to surface work needing a human showed
+ * nothing for the two most common cases. `needsYouRunIds` (every run_id with
+ * an unresolved approval, computed from `GET /approvals`) is unioned in here
+ * so a finalized run with a pending decision still shows up under the chip.
+ */
+export function matchesFilter(r: Pick<RunRowT, 'id' | 'state'>, f: OutcomeFilter, needsYouRunIds: ReadonlySet<string>): boolean {
+  const state = r.state;
   switch (f) {
     case 'all': return true;
     case 'completed': return state === 'completed';
     case 'failed': return ['failed', 'timed_out', 'budget_exceeded', 'missed'].includes(state);
     case 'active': return ['running', 'queued', 'preparing', 'finalizing'].includes(state);
-    case 'needsyou': return ['waiting_approval', 'awaiting_user'].includes(state);
+    case 'needsyou': return needsYouRunIds.has(r.id) || ['waiting_approval', 'awaiting_user'].includes(state);
+  }
+}
+
+/**
+ * Honest empty state: "No runs yet" is only true when there truly are no
+ * runs. A filter or search that simply matched nothing gets its own message
+ * instead of implying the user has never booked a run.
+ */
+export function emptyMessageFor(q: string, filter: OutcomeFilter, totalRuns: number): string {
+  const term = q.trim();
+  if (term) return `No runs match “${term}”.`;
+  if (totalRuns === 0) return 'No runs yet. Book one from the calendar.';
+  switch (filter) {
+    case 'needsyou':
+      return 'Nothing needs your decision right now — plan approvals and remediation proposals show up here the moment one is waiting.';
+    case 'completed': return 'No completed runs yet.';
+    case 'failed': return 'No failed runs — nothing to fix.';
+    case 'active': return 'Nothing running right now.';
+    default: return 'No runs match this filter.';
   }
 }
 
@@ -86,6 +119,14 @@ export default function InboxView({ version }: { version: number }): JSX.Element
     };
   }, [q]);
 
+  // Every run_id with an unresolved approval — a plan (F1) or remediation
+  // (F8) approval opens once its run has already finalized, so this is the
+  // only way "needs you" can find that run again (see matchesFilter above).
+  const needsYouRunIds = useMemo(
+    () => new Set((approvals.data ?? []).map((a) => String(a.run_id))),
+    [approvals.data],
+  );
+
   const visibleRuns = useMemo(() => {
     let rows = runs.data ?? [];
     if (ftsOrder) {
@@ -95,8 +136,8 @@ export default function InboxView({ version }: { version: number }): JSX.Element
         return ai - bi;
       }).filter((r) => ftsOrder.has(r.id));
     }
-    return rows.filter((r) => matchesFilter(r.state, filter));
-  }, [runs.data, ftsOrder, filter]);
+    return rows.filter((r) => matchesFilter(r, filter, needsYouRunIds));
+  }, [runs.data, ftsOrder, filter, needsYouRunIds]);
 
   // IA: group by recency so the inbox answers "what happened while I wasn't looking?"
   const grouped = useMemo(() => {
@@ -171,6 +212,16 @@ export default function InboxView({ version }: { version: number }): JSX.Element
           </button>
         </div>
 
+        {approvals.error && (
+          <div className="error-banner" role="alert">
+            Couldn’t load approvals: {approvals.error}
+            <div>
+              <button className="btn small" style={{ marginTop: 8 }} onClick={approvals.reload}>
+                Retry
+              </button>
+            </div>
+          </div>
+        )}
         {(approvals.data?.length ?? 0) > 0 && (
           <div style={{ marginBottom: 12 }}>
             <div className="chip needs-you" style={{ display: 'inline-block', marginBottom: 6 }}>
@@ -199,7 +250,7 @@ export default function InboxView({ version }: { version: number }): JSX.Element
         )}
         {!runs.loading && !runs.error && visibleRuns.length === 0 && (
           <div className="empty">
-            {q ? `No runs match “${q}”.` : 'No runs yet. Book one from the calendar.'}
+            {emptyMessageFor(q, filter, (runs.data ?? []).length)}
           </div>
         )}
         {grouped.map(([label, rows]) => (
@@ -220,6 +271,9 @@ export default function InboxView({ version }: { version: number }): JSX.Element
                   <strong>{spec.taskName}</strong>
                   <div className="meta">
                     <span className={`chip ${chipFor(r.state)}`}>{r.state.replace('_', ' ')}</span>
+                    {needsYouRunIds.has(r.id) && !['waiting_approval', 'awaiting_user'].includes(r.state) && (
+                      <span className="chip needs-you">awaiting your decision</span>
+                    )}
                     {r.state === 'failed' && r.outcome_reason && (
                       <span className="mono" style={{ color: 'var(--danger, #c0392b)' }} title={FAILURE_GUIDANCE[r.outcome_reason]?.next}>
                         {r.outcome_reason.replace('_', ' ')}
@@ -291,6 +345,8 @@ function ReportDetail({ runId, version }: { runId: string; version: number }): J
         {run.branch && <span>{run.branch}</span>}
       </div>
 
+      <TaskMemoryPanel taskId={run.task_id} runId={runId} version={version} />
+
       {active && <LiveTail runId={runId} />}
       {report?.summary ? (
         <div className="summary-block">{report.summary}</div>
@@ -353,6 +409,8 @@ function ReportDetail({ runId, version }: { runId: string; version: number }): J
           {showTr && <pre>{tr.data.lines.join('\n')}</pre>}
         </div>
       )}
+
+      {!active && <ProofOfWorkExport runId={runId} />}
     </>
   );
 }

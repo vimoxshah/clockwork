@@ -945,6 +945,19 @@ Behaviour:
 yet; the field is optional, so this feature ships returning `[]` and starts
 returning data the moment a runner writes one.
 
+> **Update 2026-09-06 — that runner now exists.** The producer is the agent's
+> own final summary: one fenced `clockwork-events` JSON block, parsed by
+> `packages/runner/src/proposed-events-parse.ts` and applied in
+> `run-manager.finalize()`, which also strips the block from the stored
+> summary. The parse treats model output as untrusted input (≤20 events,
+> ≤8 KB block, first block only, Clockwork-assigned `key`, control characters
+> stripped, credentials masked) and never throws — a bad block costs the
+> suggestions, never the run. Convention documented in
+> `docs/agent-workforce.md` §F9. This annotates the paragraph above rather
+> than rewriting it: the sentence was true when the spec was written, and the
+> run-manager freeze it refers to was scoped to the twelve wave-1 feature
+> agents, not to the file forever.
+
 ---
 
 ### F10 — timesheets

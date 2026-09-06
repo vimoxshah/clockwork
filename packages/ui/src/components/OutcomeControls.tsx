@@ -102,7 +102,7 @@ export function OutcomeControls({ runId }: { runId: string }): JSX.Element | nul
   if (!loaded) return null; // avoid a layout flash while the initial fetch resolves
 
   return (
-    <div className="outcome-controls">
+    <div className="outcome-controls mt-4 border-t border-border pt-3">
       {outcome && (
         <div className="hint mono" data-testid="outcome-current">
           Decision: {outcome.decision.replace(/_/g, ' ')}
@@ -114,7 +114,7 @@ export function OutcomeControls({ runId }: { runId: string }): JSX.Element | nul
           {err}
         </div>
       )}
-      <div className="outcome-actions">
+      <div className="outcome-actions mt-2 flex flex-wrap items-center gap-2">
         <button
           className="btn primary small"
           data-testid="outcome-accept"
@@ -144,7 +144,7 @@ export function OutcomeControls({ runId }: { runId: string }): JSX.Element | nul
         </button>
       </div>
       {noteOpen && (
-        <div className="outcome-note-form">
+        <div className="outcome-note-form mt-2 flex max-w-md flex-col gap-2">
           <textarea
             className="outcome-note-input"
             data-testid="outcome-note-input"

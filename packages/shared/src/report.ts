@@ -102,11 +102,18 @@ export const RunReport = z.object({
    * UI offers them as a downloadable .ics; Clockwork never writes to the
    * user's real calendar.
    *
-   * Deliberately `.optional()` and not `.default([])`: RunReport is the zod
-   * OUTPUT type, so a default would make this key REQUIRED in the report
-   * literal at run-manager.ts and force an edit to a file the workforce
-   * feature agents are forbidden to touch. undefined = the run proposed
-   * nothing, or the report predates the field. Read it with `?.`.
+   * PRODUCER: the agent's own summary. `run-manager.finalize()` runs
+   * `extractProposedEvents()` (packages/runner/src/proposed-events-parse.ts)
+   * over it and sets this field from the fenced ```clockwork-events block, if
+   * there is one. The convention is documented in docs/agent-workforce.md §F9.
+   *
+   * Deliberately `.optional()` and not `.default([])`. RunReport is the zod
+   * OUTPUT type, so a default would make the key REQUIRED on every report
+   * literal — and, worse, would print `"proposedEvents": []` into the stored
+   * report_json for the overwhelming majority of runs that propose nothing,
+   * which reads as "the agent was asked and declined". undefined = the run
+   * proposed nothing, OR the report predates the field; the two are
+   * deliberately indistinguishable. Read it with `?.`.
    */
   proposedEvents: z.array(ProposedEvent).optional(),
 });

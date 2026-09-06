@@ -10,9 +10,27 @@ import { Badge } from './ui/card';
 import { ByokCard } from './ByokCard';
 import { LicenseCard } from './LicenseCard';
 import { UpgradeHint } from './UpgradeHint';
+import { OfficeHoursCard } from './OfficeHoursCard';
+import { AutonomyCard } from './AutonomyCard';
 import { Select, SelectValue, SelectTrigger, SelectContent, SelectItem } from './ui/select';
 import { api } from '../api';
 import { useAsync } from '../useAsync';
+import { registerFeatureSurface } from './featureSurfaces';
+
+/**
+ * The capabilities THIS FILE mounts, declared next to the mounts themselves so
+ * the plan matrix in LicenseCard can stop ticking features that have no screen
+ * (see featureSurfaces.ts for why this is not one central list). Office hours
+ * and earned autonomy register inside their own card files; these four have no
+ * file of their own to register from — ProvidersCard and TriggersCard live at
+ * the bottom of this one, and ByokCard is mounted here.
+ */
+registerFeatureSurface({ key: 'byok_providers', tab: 'settings', where: 'Settings › API providers (BYOK)', anchorId: 'byok-providers' });
+// The BYOK connect flow is where a custom OpenAI-compatible base URL is
+// entered (ProviderConnectFlow, kind `custom_openai`), so it is the same screen.
+registerFeatureSurface({ key: 'custom_endpoints', tab: 'settings', where: 'Settings › API providers (BYOK)', anchorId: 'byok-providers' });
+registerFeatureSurface({ key: 'cli_engines', tab: 'settings', where: 'Settings › CLI engines', anchorId: 'cli-engines' });
+registerFeatureSurface({ key: 'event_triggers', tab: 'settings', where: 'Settings › Event triggers', anchorId: 'event-triggers' });
 
 export default function SettingsView({ version }: { version: number }): JSX.Element {
   const { pref, setPref } = useTheme();
@@ -93,6 +111,12 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
           )}
         </div>
       )}
+
+      <h3 className="section-title" style={{ marginTop: 20 }} id="office-hours">Office hours</h3>
+      <OfficeHoursCard version={version} />
+
+      <h3 className="section-title" style={{ marginTop: 20 }} id="earned-autonomy">Earned autonomy</h3>
+      <AutonomyCard version={version} />
 
       <h3 className="section-title" style={{ marginTop: 20 }}>Usage &amp; limits</h3>
       <div className="settings-grid">
@@ -181,16 +205,16 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
       <h3 className="section-title" style={{ marginTop: 20 }}>Plan &amp; license</h3>
       <LicenseCard version={version} />
 
-      <h3 className="section-title" style={{ marginTop: 20 }}>API providers (BYOK)</h3>
+      <h3 className="section-title" style={{ marginTop: 20 }} id="byok-providers">API providers (BYOK)</h3>
       <ByokCard version={version} />
 
-      <h3 className="section-title" style={{ marginTop: 20 }}>CLI engines</h3>
+      <h3 className="section-title" style={{ marginTop: 20 }} id="cli-engines">CLI engines</h3>
       <div className="settings-grid">
         <div>
           <ProvidersCard version={version} />
         </div>
         <div>
-          <h3 className="section-title" style={{ marginTop: 0 }}>Event triggers</h3>
+          <h3 className="section-title" style={{ marginTop: 0 }} id="event-triggers">Event triggers</h3>
           <TriggersCard version={version} />
         </div>
       </div>

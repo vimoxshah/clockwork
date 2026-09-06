@@ -1,10 +1,22 @@
 /**
  * AnalyticsView (ADR-029): cost & reliability intelligence.
  * Answers: what did AI cost me? which task costs the most? success rates?
+ *
+ * Also the mount point for F10 (timesheets) and F11 (performance reviews),
+ * as an internal sub-tab switcher rather than a second top-level nav entry:
+ * App.tsx owns routing/nav and is frozen for this change, and 'analytics' is
+ * the only tab that already reaches this file — so this is the sole
+ * reachable path to F10/F11. Both share this view's existing days selector
+ * rather than inventing a second range control.
  */
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { Select, SelectValue, SelectTrigger, SelectContent, SelectItem } from './ui/select';
+import { Segmented } from './ui/segmented';
+import TimesheetsPanel from './TimesheetsPanel';
+import PerformanceReviewsPanel from './PerformanceReviewsPanel';
+
+type SubView = 'overview' | 'timesheets' | 'performance';
 
 interface Analytics {
   range: { from: number; to: number; days: number };
@@ -16,18 +28,20 @@ interface Analytics {
 }
 
 export default function AnalyticsView({ version }: { version: number }): JSX.Element {
+  const [view, setView] = useState<SubView>('overview');
   const [data, setData] = useState<Analytics | null>(null);
   const [days, setDays] = useState(30);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
+    if (view !== 'overview') return;
     let alive = true;
     setData(null);
     api.analytics(days)
       .then((d) => { if (alive) { setData(d); setErr(null); } })
       .catch((e: Error) => { if (alive) setErr(String(e.message ?? e)); });
     return () => { alive = false; };
-  }, [version, days]);
+  }, [version, days, view]);
 
   const maxDailyCost = data ? Math.max(...data.daily.map((d) => d.costUsd), 0.0001) : 1;
 
@@ -35,6 +49,16 @@ export default function AnalyticsView({ version }: { version: number }): JSX.Ele
     <div style={{ width: '100%', maxWidth: 'none' }}>
       <div className="tasks-toolbar">
         <h3 className="section-title" style={{ margin: 0 }}>Analytics</h3>
+        <Segmented
+          aria-label="Analytics section"
+          value={view}
+          onChange={setView}
+          options={[
+            { value: 'overview', label: 'Overview' },
+            { value: 'timesheets', label: 'Timesheets' },
+            { value: 'performance', label: 'Performance reviews' },
+          ]}
+        />
         <span className="grow" />
         <Select value={String(days)} onValueChange={(v) => setDays(Number(v))}>
           <SelectTrigger aria-label="Time range" className="w-auto h-8 text-caption">
@@ -48,10 +72,13 @@ export default function AnalyticsView({ version }: { version: number }): JSX.Ele
         </Select>
       </div>
 
-      {err && <div className="error-banner" role="alert">{err}</div>}
-      {!data && !err && <div className="state-line"><span className="spinner" /> Computing analytics…</div>}
+      {view === 'timesheets' && <TimesheetsPanel version={version} days={days} />}
+      {view === 'performance' && <PerformanceReviewsPanel version={version} days={days} />}
 
-      {data && (
+      {view === 'overview' && err && <div className="error-banner" role="alert">{err}</div>}
+      {view === 'overview' && !data && !err && <div className="state-line"><span className="spinner" /> Computing analytics…</div>}
+
+      {view === 'overview' && data && (
         <>
           {/* headline numbers */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginBottom: 18 }}>

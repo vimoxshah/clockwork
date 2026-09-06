@@ -405,14 +405,64 @@ stays a read-only subscription source and is untouched.
 - UI: `ProposedEvents` is mounted in the inbox report view for any run with
   proposals.
 
-**Currently returns `[]` for every run.** Nothing in the shipped runners
-writes `proposedEvents` into a report yet — no engine or profile currently
-asks the model to produce that field. The module and its routes are real and
-tested against hand-built report fixtures; the feature starts showing data
-the moment a profile's output contract is written to populate the field. Do
-not read this as "agents currently propose events" — they don't, yet.
+### How an agent proposes an event
 
-Test: `packages/daemon/test/proposed-events.test.ts`.
+The producer is the agent's own final summary. Put **one** fenced block in it
+with the info string `clockwork-events` and a JSON array inside:
+
+````text
+Triaged the queue. Two items need a human.
+
+```clockwork-events
+[
+  { "title": "Review PR 42", "durationMin": 10, "notes": "CI is red on main",
+    "suggestedAt": "2026-09-08T15:00:00Z" },
+  { "title": "Pair on the flaky sentinel test" }
+]
+```
+````
+
+Only `title` is required. `durationMin` defaults to 15 and is clamped to
+1–1440. `notes` defaults to none. `suggestedAt` takes epoch **milliseconds** or
+an ISO-8601 string; leave it out and Clockwork schedules the `.ics` entry at
+the next whole hour, so the user picks the real time in their calendar app.
+Do not send a `key` — Clockwork assigns one.
+
+**Ask for it in the prompt.** Nothing is injected into your prompts for you, so
+an agent that is never asked never proposes anything — which is why most runs
+show no suggestions. Copy this sentence into a task's prompt, or into a
+profile's **system prompt extra**, and every run of that task can suggest events:
+
+> If a human should schedule anything after this run, end your summary with one
+> ` ```clockwork-events ` block containing a JSON array of
+> `{ "title", "durationMin"?, "notes"?, "suggestedAt"? }`. Leave the block out
+> entirely when nothing needs scheduling.
+
+**The block is machine channel, not prose.** Clockwork removes it from the
+summary before storing the report, so the block never shows up in your inbox,
+your email digest or your Telegram message.
+
+**Model output is untrusted input**, so the parse is deliberately narrow —
+`packages/runner/src/proposed-events-parse.ts`:
+
+- at most **20** suggestions per run, from a block of at most **8 KB**, in a
+  summary of at most 256 KB; only the **first** block in a summary is read
+- `key` is assigned by Clockwork (`ev-1`, `ev-2`, …), never taken from the
+  agent — it is the `.ics` `UID` component, where a duplicate would overwrite a
+  real calendar entry
+- control characters are stripped from `title` and `notes`, and credentials in
+  them are masked, before anything reaches the calendar file
+- a `suggestedAt` outside a year back / two years forward is treated as "no
+  time given" rather than booking a wrong date — a timestamp in **seconds**
+  lands in 1970 and is refused this way
+- **a bad block never fails a run.** The report still commits and the run still
+  reaches its terminal state; the suggestions are what get dropped, and the
+  report's timeline carries a note saying what was refused and why
+
+Tests: `packages/daemon/test/proposed-events.test.ts` (read path),
+`packages/runner/test/proposed-events-parse.test.ts` (the convention and its
+refusals), `packages/daemon/test/proposed-events-producer.test.ts` (agent
+summary → stored report → `.ics`, end to end).
 
 ---
 

@@ -30,6 +30,7 @@ import {
   removeWorktree,
   runGit,
   maskSecrets,
+  extractProposedEvents,
 } from '@clockwork/runner';
 import { SafetyJournal, augmentedPath } from '@clockwork/runner';
 import { indexRun } from './repo.js';
@@ -663,6 +664,17 @@ export class RunManager {
       }
     }
 
+    // F9 proposed-events (spec §F9): the agent's summary is the producer. A
+    // fenced ```clockwork-events block becomes report.proposedEvents, and the
+    // block leaves the prose — it is a machine channel, not something a human
+    // should read in their inbox or receive by email. The parse is bounded and
+    // total (packages/runner/src/proposed-events-parse.ts): it never throws, so
+    // a malformed or hostile block costs the suggestions and nothing else.
+    // Runs BEFORE maskSecrets, because masking can rewrite a credential-shaped
+    // substring inside the JSON and break the block's syntax; the parser masks
+    // each title/notes itself.
+    const proposals = extractProposedEvents(typeof outcome.summary === 'string' ? outcome.summary : '', now);
+
     const report: RunReport = {
       runId,
       taskId: spec.taskId,
@@ -673,7 +685,7 @@ export class RunManager {
       state: outcome.state,
       failureReason: ('failureReason' in outcome ? outcome.failureReason : undefined) ?? null,
       // S-68: best-effort credential masking — documented as such, transcripts stay local
-      summary: maskSecrets(typeof outcome.summary === 'string' ? outcome.summary : ''),
+      summary: maskSecrets(proposals.text),
       branch: spec.repoPath ? spec.branch : null,
       baseSha: null,
       basedOnLocalState: false,
@@ -699,10 +711,18 @@ export class RunManager {
         resolvedAt: null,
         resolution: null as 'approved' | 'denied' | 'timeout-deny-and-continue' | 'timeout-abort' | null,
       })),
-      timeline: [],
+      // A refused proposal block is disclosed, not swallowed: the agent tried
+      // to suggest something and the user gets to know it was dropped and why.
+      timeline: proposals.reason
+        ? [{ at: now, kind: 'note' as const, text: `Proposed calendar events: ${proposals.reason}.` }]
+        : [],
       deliveries: [],
       queueDelayMs: r.started_at && r.scheduled_for ? Math.max(0, r.started_at - r.scheduled_for) : 0,
       repoLockDelayMs: 0,
+      // Left `undefined` when the run proposed nothing, so `report_json` keeps
+      // the "no proposals" and "predates the field" cases indistinguishable —
+      // which is what every reader already assumes (`report?.proposedEvents ?? []`).
+      proposedEvents: proposals.events.length > 0 ? proposals.events : undefined,
     };
 
     const tx = this.deps.db.transaction(() => {

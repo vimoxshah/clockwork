@@ -3,10 +3,20 @@
  * honestly (free / active / grace / expired), lets the user activate a
  * license key, deactivate, and browse the full capability matrix with real
  * availability. No dark patterns: grace and expiry are explained plainly.
+ *
+ * The matrix used to answer a question nobody asked. `GET /capabilities` says
+ * whether your PLAN entitles you to a feature; the matrix drew that answer as
+ * a green "included" tick, which every reader takes to mean "and you can use
+ * it here". Nine of the twelve agent-workforce capabilities were ticked while
+ * having no screen anywhere in the app. The tick now needs both halves —
+ * entitled AND this build has a screen for it — and the screen's location is
+ * printed beside it as the evidence. See featureSurfaces.ts for why that list
+ * is not maintained here.
  */
 import { useEffect, useState } from 'react';
-import { CheckCircle2, ShieldCheck, TriangleAlert } from 'lucide-react';
+import { CheckCircle2, Circle, ShieldCheck, TriangleAlert } from 'lucide-react';
 import { api } from '../api';
+import { featureSurface, revealFeatureSurface } from './featureSurfaces';
 
 type Capabilities = Awaited<ReturnType<typeof api.capabilities>>;
 
@@ -124,22 +134,59 @@ export function LicenseCard({ version }: { version: number }): JSX.Element {
           {groupByCategory(caps.features).map(([cat, feats]) => (
             <div key={cat}>
               <p className="mb-1 mt-2 text-xxs font-semibold uppercase tracking-wide text-dim">{cat}</p>
-              {feats.map((f) => (
-                <div key={f.key} className="flex items-center gap-2 px-1 py-1 text-compact">
-                  {f.enabled
-                    ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-accent" aria-label="included" />
-                    : <TriangleAlert className="h-3.5 w-3.5 shrink-0 text-dim" aria-hidden />}
-                  <span>{f.label}</span>
-                  {f.limit && <span className="text-xxs text-dim">({f.limit})</span>}
-                  {!f.enabled && f.status === 'planned' && <span className="chip" style={{ marginLeft: 'auto' }}>planned</span>}
-                </div>
-              ))}
+              {feats.map((f) => <CapabilityRow key={f.key} feature={f} />)}
             </div>
           ))}
           <p className="hint" style={{ margin: '6px 4px' }}>
-            This list is generated from the app itself — it always matches what this build enforces.
+            Generated from this build, not from a brochure. A tick means two things at once: your
+            plan includes it, <em>and</em> this build has a screen for it — the location beside it is
+            where to find it. Where there is no location, your plan still includes the capability but
+            Clockwork cannot point you at a screen for it — look in the section it belongs to, or
+            drive it through the daemon API.
           </p>
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * One capability, in three honest states:
+ *   entitled + a screen in this build  → tick, plus where the screen is
+ *   entitled, no screen registered     → no tick, and no claim either way
+ *   not entitled                       → unchanged (warning glyph, `planned` chip)
+ *
+ * The registry is read HERE, during render, never at module scope: a surface
+ * registers when its module is imported, which can happen after this one is.
+ */
+function CapabilityRow({ feature }: { feature: Capabilities['features'][number] }): JSX.Element {
+  const surface = feature.enabled ? featureSurface(feature.key) : undefined;
+  return (
+    <div className="flex items-center gap-2 px-1 py-1 text-compact" data-testid={`capability-${feature.key}`}>
+      {!feature.enabled && <TriangleAlert className="h-3.5 w-3.5 shrink-0 text-dim" aria-hidden />}
+      {feature.enabled && surface && (
+        <CheckCircle2
+          className="h-3.5 w-3.5 shrink-0 text-accent"
+          aria-label="included in your plan, with a screen in this build"
+          data-testid={`capability-tick-${feature.key}`}
+        />
+      )}
+      {feature.enabled && !surface && (
+        <Circle className="h-3.5 w-3.5 shrink-0 text-dim" aria-label="included in your plan" />
+      )}
+      <span>{feature.label}</span>
+      {feature.limit && <span className="text-xxs text-dim">({feature.limit})</span>}
+      {surface && (
+        <button
+          className="ml-auto text-xxs text-dim underline-offset-2 hover:text-fg hover:underline"
+          data-testid={`capability-goto-${feature.key}`}
+          onClick={() => revealFeatureSurface(surface)}
+        >
+          {surface.where}
+        </button>
+      )}
+      {!feature.enabled && feature.status === 'planned' && (
+        <span className="chip" style={{ marginLeft: 'auto' }}>planned</span>
       )}
     </div>
   );
