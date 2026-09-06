@@ -15,6 +15,8 @@ import { TaskRepo, ProfileRepo } from './repo.js';
 import { seedBuiltinProfiles, makeSkillResolver } from './profiles.js';
 import { Notifier } from './notifier.js';
 import { readPrefs } from './api.js';
+import { loadDeliveryCreds } from './delivery.js';
+import { TelegramApprovalsPoller } from './telegram-approvals.js';
 
 // Single source of truth: the daemon package.json. Keeps --version, /health,
 // and the UI footer in lockstep with releases (no more hardcoded literals).
@@ -97,10 +99,27 @@ export async function main(argv: string[] = process.argv): Promise<number> {
 
   scheduler.start(30_000);
 
+  // Reachable approvals (inbound half, ADR-036): outbound-only long-poll of
+  // the Telegram Bot API, started only when a bot token is actually
+  // configured. The daemon still binds loopback only (see above) — this is a
+  // client of api.telegram.org, never a server.
+  const telegramBotToken = loadDeliveryCreds(dataDir).telegramBotToken;
+  const telegramPoller = telegramBotToken
+    ? new TelegramApprovalsPoller({
+        db,
+        runManager,
+        botToken: telegramBotToken,
+        log: (msg) => process.stderr.write(`[telegram-approvals] ${msg}\n`),
+      })
+    : null;
+  telegramPoller?.start();
+
   const shutdown = (): void => {
     scheduler.stop();
-    db.close();
-    process.exit(0);
+    void Promise.resolve(telegramPoller?.stop()).finally(() => {
+      db.close();
+      process.exit(0);
+    });
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);

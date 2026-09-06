@@ -686,28 +686,21 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
   app.post('/approvals/:id/respond', async (req, reply) => {
     const id = (req.params as any).id;
     const body = req.body as any;
-    const now = Date.now();
-    // CAS on responded_at (S-57): first writer wins
-    const r = deps.db
-      .prepare(`UPDATE approvals SET responded_at=?, response_json=? WHERE id=? AND responded_at IS NULL`)
-      .run(now, JSON.stringify(body ?? {}), id);
-    if (r.changes === 0) return reply.code(409).send({ error: 'already_resolved' });
-    // Forward into the live run when the child's decision window is still open.
-    let forwarded = false;
-    try {
-      const row = deps.db.prepare('SELECT run_id, payload_json FROM approvals WHERE id=?').get(id) as any;
-      if (row) {
-        const payload = typeof row.payload_json === 'string' ? JSON.parse(row.payload_json) : row.payload_json ?? {};
-        const decision = body?.decision === 'approved';
-        if (payload.reqId) {
-          forwarded = deps.runManager.respondToChild(row.run_id, String(payload.reqId), decision);
-        }
-      }
-    } catch {
-      /* forwarding best-effort; the CAS record stands either way */
+    const decision: import('./run-manager.js').ApprovalDecision = body?.decision === 'approved' ? 'approved' : 'denied';
+    // Reachable approvals (ADR-036): CAS/forwarding/broadcast/journal all live
+    // in RunManager.respondToApproval — the Telegram inline-keyboard path
+    // (telegram-approvals.ts) calls the exact same function, so both surfaces
+    // behave identically.
+    const result = deps.runManager.respondToApproval(id, decision, { kind: 'api' }, body);
+    switch (result.status) {
+      case 'not_found':
+        return reply.code(404).send({ error: 'not_found' });
+      case 'already_resolved':
+        return reply.code(409).send({ error: 'already_resolved' });
+      case 'resolved':
+      case 'run_gone':
+        return { resolved: true, forwarded: result.forwarded };
     }
-    deps.runManager.pump();
-    return { resolved: true, forwarded };
   });
 
   // ---- profiles ----

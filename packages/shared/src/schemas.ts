@@ -202,6 +202,14 @@ export const DeliveryConfig = z.object({
   telegram: z
     .object({
       chatId: z.string(),
+      /**
+       * Reachable approvals (inbound half, ADR-036): in a group/supergroup
+       * chat a chat-id match alone isn't enough (anyone in the group could
+       * tap the button), so a button press additionally requires the
+       * pressing user's Telegram id to be on this list. Absent in a group
+       * chat means refuse every callback there — no allow-list, no trust.
+       */
+      allowedUserIds: z.array(z.union([z.string(), z.number()])).optional(),
     })
     .optional(),
   webhook: z
