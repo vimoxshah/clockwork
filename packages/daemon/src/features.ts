@@ -55,6 +55,23 @@ export const FEATURES: FeatureDef[] = [
   // the execution target that actually exists today — see GET /targets.
   { key: 'container_execution', label: 'Isolated container execution', category: 'execution', tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'available' },
   { key: 'agent_chains',        label: 'Agent chains',                 category: 'execution',  tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'available' },
+  // ---- Agent Workforce (plan/AGENT-WORKFORCE-SPEC.md) ----
+  // Schema landed in migration 0008; the daemon modules land in the next wave.
+  // Every entry is `planned` on purpose: the registry reports IMPLEMENTATION
+  // status, not intent, and nothing below runs yet. No upgrade-modal copy may
+  // reference these keys while they are planned (feature-honesty.test.ts).
+  { key: 'plan_then_execute',    label: 'Plan-then-execute bookings',    category: 'execution',    tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'planned' },
+  { key: 'shift_handoff',        label: 'Shift handoff memory',          category: 'execution',    tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'planned' },
+  { key: 'office_hours',         label: 'Office hours for approvals',    category: 'scheduling',   tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'planned' },
+  { key: 'sentinel_worker',      label: 'Sentinel + worker pairs',       category: 'scheduling',   tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'planned' },
+  { key: 'repo_shipped_jobs',    label: 'Repo-shipped jobs',             category: 'integrations', tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'planned' },
+  { key: 'accept_with_note',     label: 'Accept with a note',            category: 'governance',   tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'planned' },
+  { key: 'earned_autonomy',      label: 'Earned autonomy',               category: 'governance',   tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'planned' },
+  { key: 'self_healing',         label: 'Self-healing task diagnostics', category: 'governance',   tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'planned' },
+  { key: 'proposed_events',      label: 'Agent-proposed calendar events', category: 'integrations', tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'planned' },
+  { key: 'agent_timesheets',     label: 'Agent timesheets',              category: 'analytics',    tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'planned' },
+  { key: 'performance_reviews',  label: 'Agent performance reviews',     category: 'analytics',    tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'planned' },
+  { key: 'proof_of_work_export', label: 'Proof-of-work export',          category: 'analytics',    tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'planned' },
   { key: 'sso_scim',            label: 'SSO / SCIM',                   category: 'governance', tiers: { enterprise: { available: true } }, status: 'planned' },
 ];
 
