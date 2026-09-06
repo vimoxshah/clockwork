@@ -106,6 +106,17 @@ export interface RunRowT {
   jobspec_json: string;
 }
 
+/**
+ * GET /calendar returns a WINDOWED PROJECTION of RunRowT, not the whole row
+ * (NFR-3). A year view holds ~5,000 rows, so the route omits `jobspec_json`,
+ * `report_json`, `branch` and `worktree_path` and projects the one field the
+ * calendar reads — the frozen S-5 snapshot name — as `task_name`. Fetch the
+ * full row from `/runs/:id` when a view needs more than a chip.
+ */
+export type CalendarRunRowT = Omit<RunRowT, 'jobspec_json' | 'report_json' | 'branch' | 'worktree_path'> & {
+  task_name: string | null;
+};
+
 export interface CalendarEvent {
   kind: 'run' | 'booking' | 'human';
   id: string;
@@ -124,6 +135,26 @@ export interface AnalyticsT {
   byTask: Array<{ taskId: string; name: string; runs: number; completed: number; failed: number; costUsd: number; successRate: number; avgDurationMs: number }>;
   byProvider: Array<{ engine: string; runs: number; completed: number; failed: number; costUsd: number; successRate: number }>;
   daily: Array<{ day: string; runs: number; costUsd: number }>;
+}
+
+/**
+ * F8 self-healing proposal (GET /workforce/remediations/:id). The approvals
+ * payload carries only `target` + `proposedValue`; `currentValue` and
+ * `rationale` live on the proposal row, and the inbox card needs both to show
+ * a human what the change would actually replace.
+ */
+export interface RemediationProposalT {
+  id: string;
+  taskId: string;
+  runId: string | null;
+  approvalId: string | null;
+  target: 'prompt' | 'profile';
+  currentValue: string | null;
+  proposedValue: string;
+  rationale: string | null;
+  status: 'proposed' | 'applied' | 'rejected';
+  createdAt: number;
+  decidedAt: number | null;
 }
 
 export const api = {
@@ -152,7 +183,7 @@ export const api = {
   deleteTask: (id: string) => req<{ deleted: boolean }>('DELETE', `/tasks/${id}`),
   runNow: (id: string) => req<{ runId: string }>('POST', `/tasks/${id}/run-now`),
   calendar: (from: number, to: number) =>
-    req<{ from: number; to: number; runs: RunRowT[]; bookings: Array<{ taskId: string; name: string; at: number; kind: 'booking' }>; humans?: Array<{ uid: string; name: string; at: number; allDay: boolean }> }>(
+    req<{ from: number; to: number; runs: CalendarRunRowT[]; bookings: Array<{ taskId: string; name: string; at: number; kind: 'booking' }>; humans?: Array<{ uid: string; name: string; at: number; allDay: boolean }> }>(
       'GET',
       `/calendar?from=${from}&to=${to}`,
     ),
@@ -196,6 +227,8 @@ export const api = {
     ),
   cancelRun: (id: string) => req<unknown>('POST', `/runs/${id}/cancel`),
   approvals: () => req<any[]>('GET', '/approvals'),
+  remediation: (id: string) =>
+    req<RemediationProposalT>('GET', `/workforce/remediations/${encodeURIComponent(id)}`),
   respondApproval: (id: string, decision: 'approved' | 'denied') =>
     req<{ resolved: boolean }>('POST', `/approvals/${id}/respond`, { decision }),
   profiles: () => req<any[]>('GET', '/profiles'),

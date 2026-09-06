@@ -49,6 +49,55 @@ Zones: schedules follow their stored IANA zone, never the system zone (S-22).
 - Runs keep wall-clock timeouts: a sleep-inflated run may hit its timeout — the
   report says so honestly (S-13).
 
+## Office hours (F3, `packages/daemon/src/office-hours.ts`)
+
+A second, optional deferral layer sits right after quiet hours in the tick
+loop, for a different reason: quiet hours protects *your* rest, office hours
+protects *your ability to answer approvals*. It only ever applies to tasks
+whose profile is flagged `may_require_approval` — a task that never asks for
+approval is never shifted by this feature.
+
+- **Three setup steps, not two.** (1) Turn the feature on:
+  `workforce_prefs.office_hours_enabled` starts at `0`. (2) Define windows via
+  `/workforce/office-hours`. (3) **Flag the profile.** The deferral only ever
+  looks at tasks whose profile has `may_require_approval = 1`, and **no
+  profile route sets that column** — `ProfileCreate` and `ProfilePatch` have
+  no such field. The only two writers in the product are F7 earned autonomy:
+  `POST /workforce/autonomy/profiles/:profileId/enroll` and accepting an
+  autonomy offer. So office hours is reachable only by first enrolling the
+  profile in the autonomy ladder, at rung `plan` or `acceptEdits` — enrolling
+  at `unattended` sets the flag to `0` and makes the profile ineligible
+  again. With steps 1 and 2 done and step 3 skipped, the feature is on and
+  defers nothing, silently. See `docs/agent-workforce.md` (F3 and F7).
+- **Not** the same mechanism as quiet hours, in two deliberate ways. It does
+  mark the claimed occurrence `disposition='deferred'` the way quiet hours
+  does, and it leaves the occurrence ledger's primary key, the claim
+  transaction, and all 18 `scheduler.test.ts` fixtures unmodified — that
+  invariant was a hard constraint during implementation. But:
+  - **It does not pre-claim a row at the resume instant.** Quiet hours
+    inserts a fresh `pending` claim there; office hours deliberately does
+    not, because the tick at the resume instant has to win its own claim. A
+    row pre-claimed here would make that tick's claim a no-op, `if (!claimed)
+    return` would fire, and the schedule would be pinned at the deferral
+    forever.
+  - **It bumps `next_fire` for every schedule kind, `once` included.** Quiet
+    hours bumps only recurring schedules. Office hours has to bump one-shots
+    too: the claim transaction that just ran has already NULLed a `once`
+    schedule's `next_fire`, and a dropped one-shot is lost work, not a
+    skipped repeat.
+
+  Both differences are in `scheduler.ts`, in the office-hours branch, with the
+  same reasoning in a comment beside them.
+- Windows never cross midnight (`endMin > startMin`); a shift that does is two
+  rows. The search for the next open window gives up after 14 days and
+  defers no further — a badly configured window set stops deferring rather
+  than hanging forever.
+- **Fails open.** Any error evaluating office hours — malformed windows, the
+  feature being off, the task's profile not flagged, or the fire time already
+  being inside a window — results in "don't shift"; the run fires on its
+  normal schedule. A broken office-hours configuration can only make a run
+  late, never make it silently disappear.
+
 ## Overlap policy
 
 When a recurring fire lands while the previous run is still executing:

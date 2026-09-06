@@ -316,7 +316,17 @@ export class PlanExecute {
     const prompt = renderChainPrompt(executeTask.prompt, planRun);
 
     // NOTE: the execute task stays enabled=0. It is booked directly.
-    const executeRunId = this.deps.bookRun(row.execute_task_id, prompt);
+    //
+    // S-review: the verdict CAS above has already committed, so a throw out of
+    // the booker would escape as a 500 on a decision that is recorded. F8 wraps
+    // its own booker for the same reason (self-healing.ts:170-176). A thrown
+    // refusal is treated as a returned one — same landing, no run.
+    let executeRunId: string | null = null;
+    try {
+      executeRunId = this.deps.bookRun(row.execute_task_id, prompt);
+    } catch {
+      executeRunId = null;
+    }
     if (!executeRunId) return toPair(row); // refused (policy, paused, …): stays 'approved', no run
 
     this.db

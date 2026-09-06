@@ -371,6 +371,29 @@ describe('resolve — the human verdict, and everything it refuses', () => {
     expect(booked).toHaveLength(1);
   });
 
+  // S-review: `bookRun` is called AFTER the verdict CAS has committed, and it
+  // was the only one of the three workforce bookers with no try/catch (F8 has
+  // one at self-healing.ts:170-176). A throw out of `enqueueRunNow` therefore
+  // escaped the route as a 500 with the verdict already recorded. A thrown
+  // refusal now lands exactly where a returned one does.
+  it('survives a booker that throws, landing where a refused booking lands', () => {
+    const { pairId } = pairAtTheGate();
+    const throwing = new PlanExecute({
+      db,
+      bookRun: () => {
+        throw new Error('enqueueRunNow exploded');
+      },
+    });
+
+    const runsBefore = db.prepare('SELECT COUNT(*) c FROM runs').get();
+    const res = throwing.resolve(pairId, 'approved', NOW + 2000);
+    expect(typeof res).not.toBe('string');
+    if (typeof res === 'string') return;
+    expect(res.status).toBe('approved');
+    expect(res.executeRunId).toBeNull();
+    expect(db.prepare('SELECT COUNT(*) c FROM runs').get()).toEqual(runsBefore);
+  });
+
   it('does not book when the execute task was deleted between plan and verdict', () => {
     const { pairId, executeTaskId } = pairAtTheGate();
     tasks.softDelete(executeTaskId);

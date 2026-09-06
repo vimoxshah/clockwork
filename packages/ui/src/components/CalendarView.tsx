@@ -85,7 +85,7 @@ export default function CalendarView({
         kind: 'run',
         id: r.id as string,
         taskId: String(r.task_id),
-        name: safeName(r.jobspec_json),
+        name: r.task_name ?? '(task)',
         at: at as number,
         state: String(r.state),
         costUsd: Number(r.cost_usd ?? 0),
@@ -454,12 +454,4 @@ function chipFor(state: string): string {
   if (['running', 'queued', 'preparing', 'finalizing'].includes(state)) return 'running';
   if (['waiting_approval', 'awaiting_user'].includes(state)) return 'needs-you';
   return '';
-}
-
-function safeName(jobspec: string): string {
-  try {
-    return JSON.parse(jobspec)?.taskName ?? '(task)';
-  } catch {
-    return '(task)';
-  }
 }

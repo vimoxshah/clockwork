@@ -27,7 +27,7 @@
  * needed and none is attempted. `RepoJobsFile.safeParse` is the single
  * validator both formats converge on.
  */
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { newId } from '@clockwork/shared';
@@ -138,7 +138,9 @@ function parseDoubleQuoted(value: string, lineNo: number): string {
           out += '\\';
           break;
         default:
-          throw new YamlError(lineNo, `unsupported escape sequence '\\${next ?? ''}'`);
+          // S-review: the offending character is a byte of an untrusted file. Name
+          // the fault and its line; never echo what was read.
+          throw new YamlError(lineNo, 'unsupported escape sequence');
       }
       i += 2;
       continue;
@@ -213,8 +215,11 @@ function parseMappingEntries(
       afterIdx = idx + 1;
     }
     const kv = matchKeyValue(content);
-    if (!kv) throw new YamlError(lineNo, `cannot parse mapping entry: ${JSON.stringify(content)}`);
-    if (seenKeys.has(kv.key)) throw new YamlError(lineNo, `duplicate key '${kv.key}'`);
+    // S-review (disclosure oracle): this used to quote `content` verbatim, and
+    // the route hands the message straight to the caller. The line number says
+    // WHERE without saying WHAT.
+    if (!kv) throw new YamlError(lineNo, 'cannot parse mapping entry');
+    if (seenKeys.has(kv.key)) throw new YamlError(lineNo, 'duplicate key');
     seenKeys.add(kv.key);
     if (kv.value === '') {
       if (afterIdx < lines.length && lines[afterIdx]!.indent > indent) {
@@ -307,16 +312,41 @@ function canonicalJson(value: unknown): string {
 // Public module surface
 // ---------------------------------------------------------------------------
 
-/** Searches `<repoPath>/.clockwork/` for jobs.json, then jobs.yaml, then jobs.yml. */
+/**
+ * Searches `<repoPath>/.clockwork/` for jobs.json, then jobs.yaml, then jobs.yml.
+ *
+ * SECURITY (S-review — arbitrary-file disclosure): `repoPath` is caller-supplied
+ * (POST /workforce/repo-jobs/discover), and `existsSync`/`statSync` FOLLOW
+ * symlinks. `.clockwork/jobs.yaml -> /any/file`, or a symlinked `.clockwork`
+ * directory, therefore handed the reader a file outside the repo — which the
+ * parse error then quoted back to the caller. Two checks close it: `lstatSync`
+ * refuses a symlinked leaf outright, and the candidate's realpath must resolve
+ * INSIDE the repo's realpath, which is what catches a symlink among the parent
+ * components. The path RETURNED is the unresolved one, so `repo_jobs.source_path`
+ * still reads as the user wrote it.
+ */
 export function findJobsFile(repoPath: string): { path: string; format: 'yaml' | 'json' } | null {
   const candidates: Array<{ file: string; format: 'yaml' | 'json' }> = [
     { file: 'jobs.json', format: 'json' },
     { file: 'jobs.yaml', format: 'yaml' },
     { file: 'jobs.yml', format: 'yaml' },
   ];
+  let repoReal: string;
+  try {
+    repoReal = realpathSync(repoPath);
+  } catch {
+    return null; // unreadable or absent repo — the same answer as "no jobs file"
+  }
   for (const c of candidates) {
     const p = path.join(repoPath, '.clockwork', c.file);
-    if (existsSync(p) && statSync(p).isFile()) return { path: p, format: c.format };
+    try {
+      if (!lstatSync(p).isFile()) continue; // a symlink is not a file to lstat
+      const real = realpathSync(p);
+      if (real !== repoReal && !real.startsWith(repoReal + path.sep)) continue; // escaped the repo
+      return { path: p, format: c.format };
+    } catch {
+      continue; // absent candidate, broken link, or a link loop
+    }
   }
   return null;
 }
@@ -328,7 +358,10 @@ export function parseJobsFile(text: string, format: 'yaml' | 'json'): RepoJobsFi
     try {
       raw = JSON.parse(text);
     } catch (e) {
-      return { error: `invalid JSON: ${(e as Error).message}` };
+      // S-review: Node's SyntaxError quotes a ~20-character window of the
+      // source text. A byte offset locates the fault without disclosing it.
+      const at = /position (\d+)/.exec((e as Error).message);
+      return { error: at ? `invalid JSON at position ${at[1]}` : 'invalid JSON' };
     }
   } else {
     try {
@@ -341,11 +374,15 @@ export function parseJobsFile(text: string, format: 'yaml' | 'json'): RepoJobsFi
   const result = RepoJobsFile.safeParse(raw);
   if (!result.success) {
     const issue = result.error.issues[0];
-    return { error: `invalid jobs file: ${issue ? `${issue.path.join('.') || '(root)'}: ${issue.message}` : result.error.message}` };
+    // S-review: `issue.message` embeds the REJECTED VALUE for several zod codes
+    // (`invalid_enum_value` renders "…received 'x'"). The path and the code are
+    // derived from our own schema, so they carry no file content.
+    return { error: `invalid jobs file: ${issue ? `${issue.path.join('.') || '(root)'}: ${issue.code}` : 'does not match clockwork.jobs.v1'}` };
   }
   const seen = new Set<string>();
-  for (const job of result.data.jobs) {
-    if (seen.has(job.key)) return { error: `duplicate job key '${job.key}'` };
+  for (const [i, job] of result.data.jobs.entries()) {
+    // S-review: the key is repo-authored text. The index is ours.
+    if (seen.has(job.key)) return { error: `duplicate job key at jobs.${i}` };
     seen.add(job.key);
   }
   return result.data;

@@ -62,12 +62,19 @@ export const FEATURES: FeatureDef[] = [
   //   'enforced'  = daemon code OUTSIDE the /workforce/ routes refuses or
   //                 defers a user action because of this feature.
   //   'available' = a user can reach it through the API right now.
-  // Only three qualify as enforced. F1 withholds the execute run until a
-  // human resolves the pair's approval (run-manager finalize -> approvals
-  // row; the execute task stays enabled=0 until resolve()). F3 defers a
-  // scheduled fire out of the tick loop into the next office-hours window.
-  // F7 returns 403 from POST /tasks, PATCH /tasks/:id and the webhook fire
-  // path when a task asks for more autonomy than its profile has earned.
+  // Only three qualify as enforced.
+  //   F1 withholds the execute run until a human resolves the pair's approval
+  //     (run-manager finalize -> approvals row). The execute task is created
+  //     enabled=0 and is NEVER re-enabled: resolve('approved') leaves
+  //     enabled=0 and books the run directly, so enabled=0 is the whole gate
+  //     and there is no moment where the chain is re-armed (ADR-041).
+  //   F3 defers a scheduled fire out of the tick loop into the next
+  //     office-hours window — but only for a task whose PROFILE carries
+  //     may_require_approval=1, which nothing outside F7 enrolment sets.
+  //   F7 returns 403 from POST /tasks, PATCH /tasks/:id and the webhook fire
+  //     path — in practice only when the profile is enrolled at rung 'plan'
+  //     and the task asks for a mode other than 'plan'. The two upper rungs
+  //     share permission mode 'acceptEdits', so the gate never fires there.
   // Everything else is reachable but gates nothing, so it says 'available'.
   // No upgrade-modal copy may reference any of these keys (feature-honesty.test.ts).
   { key: 'plan_then_execute',    label: 'Plan-then-execute bookings',    category: 'execution',    tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'enforced' },

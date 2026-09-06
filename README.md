@@ -91,6 +91,18 @@ REPEAT  Make it weekly. Search your retained run history.
   optimization suggestions that surface money-burning failures
 - 🏠 **Local-first** — SQLite in `~/.clockwork`, loopback-only API, no account,
   no cloud, no telemetry
+- 🧑‍💼 **Agent workforce (12 features)** — a plan-then-execute approval gate,
+  shift-handoff memory across occurrences, an opt-in office-hours approval
+  deferral that fails open (and applies only to autonomy-enrolled profiles),
+  sentinel→worker trigger pairs, repo-shipped job
+  offers that can never inherit a repo's own choice of permissions or budget,
+  accept/reject-with-a-note, an earned-autonomy ladder that only ever
+  *offers* the next rung (never auto-grants it), self-healing diagnostics
+  that *propose* a prompt/profile fix for a human to apply (never
+  self-apply), agent-proposed calendar events as a download-only `.ics`
+  (never written to your real calendar), agent timesheets, agent
+  performance scorecards, and a portable proof-of-work export — full guide:
+  [docs/agent-workforce.md](docs/agent-workforce.md)
 
 Event triggers — webhooks and GitHub events start tasks; see
 [docs/triggers.md](docs/triggers.md).
@@ -284,6 +296,8 @@ Details: [docs/security.md](docs/security.md) · [docs/privacy.md](docs/privacy.
   can reach once installed, and why quarantine must be cleared by hand
 - [Troubleshooting](docs/troubleshooting.md) — daemon, auth, scheduling, and
   license/plan problems
+- [Agent workforce guide](docs/agent-workforce.md) — all twelve features:
+  routes, what each one enforces vs. merely offers, and where it's tested
 
 ## 🧪 Development
 
@@ -316,6 +330,15 @@ themes, palette, providers, ICS overlay, 1000-task benchmarks).
       selector
 - [x] Governance: policy engine, audit log, retention, capability matrix
 - [x] Event triggers: webhook + GitHub sources fire tasks (HMAC-verified)
+- [x] Plan-then-execute approval gate + sentinel→worker trigger pairs +
+      repo-shipped job offers (`docs/agent-workforce.md`)
+- [x] Governance ladder: office-hours approval deferral, an earned-autonomy
+      ladder that only offers (never auto-grants) the next rung — of which
+      only the bottom rung refuses a task, see `docs/agent-workforce.md` —
+      self-healing diagnostics that only propose (never self-apply) a fix
+- [x] Workforce analytics: shift-handoff memory, accept/reject-with-a-note,
+      agent timesheets, performance scorecards, portable proof-of-work
+      export, download-only agent-proposed calendar events
 - [ ] Chaining v2 (fan-in/out DAGs)
 - [ ] RRULE expansion for external calendars
 - [ ] Team delivery targets (Slack/Telegram webhooks GA)

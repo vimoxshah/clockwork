@@ -223,6 +223,31 @@ describe('F8 self-healing', () => {
     expect(streak()?.count).toBe(2); // same row, not a second table
   });
 
+  // S-review (high): F8 increments the SAME `task_failure_streaks` row that
+  // policies.ts uses for the S-40/S-41 guarantee, and policies.ts incremented
+  // it blindly. That silently redefined "auto-pause after 2 consecutive AUTH
+  // failures" as "pause after 1 auth failure preceded by any work failure".
+  // Sharing the ROW is the spec's design (§F8); sharing the auth COUNT is the
+  // regression.
+  it('does not let a work failure count toward the S-40/S-41 two-auth-failure pause', () => {
+    failTimes(1); // F8: count=1, kind='failure'
+    expect(streak()?.count).toBe(1);
+
+    const first = recordAuthFailureAndMaybePause(db, TASK);
+    expect(first).toEqual({ paused: false, consecutive: 1 }); // ONE auth failure, not two
+    expect(db.prepare('SELECT enabled FROM tasks WHERE id=?').get(TASK)).toEqual({ enabled: 1 });
+
+    // and the original guarantee is intact: the SECOND consecutive auth failure pauses.
+    const second = recordAuthFailureAndMaybePause(db, TASK);
+    expect(second).toEqual({ paused: true, consecutive: 2 });
+    expect(db.prepare('SELECT enabled FROM tasks WHERE id=?').get(TASK)).toEqual({ enabled: 0 });
+  });
+
+  it('pauses on two consecutive auth failures with no work failure involved (S-40/S-41, unchanged)', () => {
+    expect(recordAuthFailureAndMaybePause(db, TASK)).toEqual({ paused: false, consecutive: 1 });
+    expect(recordAuthFailureAndMaybePause(db, TASK)).toEqual({ paused: true, consecutive: 2 });
+  });
+
   it('never books a diagnostic for a diagnostic that failed', () => {
     bookerReturns('run-diag');
     failTimes(3);

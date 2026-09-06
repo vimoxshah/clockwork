@@ -37,6 +37,8 @@ let dir: string;
 let app: FastifyInstance;
 let token: string;
 let tasks: TaskRepo;
+/** module-scoped so a test can reach the finalize-hook wiring buildServer attaches to it */
+let rm: RunManager;
 
 const MIGRATIONS = loadMigrationsFrom(path.resolve(import.meta.dirname, '../migrations'));
 const tmpDirs: string[] = [];
@@ -47,7 +49,7 @@ beforeAll(async () => {
   createMigrator(db, MIGRATIONS).migrate();
   tasks = new TaskRepo(db);
 
-  const rm = new RunManager({
+  rm = new RunManager({
     db,
     clock: new FakeClock(Date.now()),
     dataDir: dir,
@@ -177,6 +179,52 @@ describe('auth prefix: every /workforce/ route family refuses an anonymous calle
       expect(res.statusCode, res.body).toBe(401);
     });
   }
+
+  // S-review (auth bypass, critical): every entry above tests the CANONICAL
+  // spelling. The router percent-decodes before it matches, so one encoded
+  // character used to skip the hook and still reach a mutating workforce
+  // handler — repo-job import and remediation apply among them.
+  it('refuses the percent-encoded spelling of a workforce route too', async () => {
+    const encodedPrefix = await app.inject({ method: 'GET', url: '/%77orkforce/repo-jobs' });
+    expect(encodedPrefix.statusCode, encodedPrefix.body).toBe(401);
+
+    const encodedTail = await app.inject({
+      method: 'POST',
+      url: '/workforce/repo-job%73/discover',
+      payload: { repoPath: '/tmp' },
+    });
+    expect(encodedTail.statusCode, encodedTail.body).toBe(401);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F8's auto-booker — the wiring, not the module. The other two auto-bookers
+// (F1 at api.ts and F4's bookWorker) evaluate the policy engine before they
+// enqueue; this one did not, so every automatically booked diagnostic ran
+// outside the engine allowlist, the BYOK restriction and the budget ceiling.
+// ---------------------------------------------------------------------------
+describe('F8 diagnostic booking obeys the policy engine', () => {
+  it('refuses to book a diagnostic that breaks policy, and enqueues nothing', async () => {
+    const taskId = await makeTask('F8 policy gate'); // default budget 2.0
+    const booker = (rm as unknown as { deps: { selfHealing: { deps: { bookRun(t: string, p: string): string | null } } } }).deps
+      .selfHealing.deps;
+    const runsBefore = db.prepare('SELECT COUNT(*) c FROM runs').get();
+
+    try {
+      const put = await app.inject(auth({ method: 'PUT', url: '/policies', payload: { maxCostPerRunUsd: 1 } }));
+      expect(put.statusCode, put.body).toBe(200);
+
+      expect(booker.bookRun(taskId, 'diagnostic prompt')).toBeNull();
+      expect(db.prepare('SELECT COUNT(*) c FROM runs').get()).toEqual(runsBefore);
+    } finally {
+      await app.inject(auth({ method: 'PUT', url: '/policies', payload: { maxCostPerRunUsd: null } }));
+    }
+
+    // with no policy in the way it still books, so the gate is the only change
+    const runId = booker.bookRun(taskId, 'diagnostic prompt');
+    expect(runId).not.toBeNull();
+    db.prepare('DELETE FROM runs WHERE id=?').run(runId);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -568,6 +616,51 @@ describe('F7 /workforce/autonomy', () => {
     const second = await app.inject(auth({ method: 'POST', url: `/workforce/autonomy/offers/${offerId}/respond`, payload: { decision: 'accepted' } }));
     expect(second.statusCode).toBe(409);
     expect(second.json()).toEqual({ error: 'already_resolved' });
+  });
+
+  // S-review (high): the PATCH gate used to run AFTER `tasks.patch` had already
+  // committed, so the 403 reported an escalation it had just persisted. F7 is
+  // declared `enforced` and spec §F7 calls the gate fail-closed; a refusal that
+  // leaves the new permission mode in the row is neither. The row assertions
+  // below — not the status code — are what that regression would break.
+  it('403s PATCH /tasks/:id BEFORE the escalation is written, leaving the row untouched', async () => {
+    const gated = await makeProfile('f7-patch-gate');
+    await app.inject(auth({ method: 'POST', url: `/workforce/autonomy/profiles/${gated}/enroll`, payload: { rung: 'plan' } }));
+
+    const created = await app.inject(
+      auth({
+        method: 'POST',
+        url: '/tasks',
+        payload: {
+          name: 'F7 patch target',
+          prompt: 'Do the thing.',
+          profileId: gated,
+          permissionMode: 'plan',
+          schedule: { kind: 'queue', tz: 'UTC' },
+        },
+      }),
+    );
+    expect(created.statusCode, created.body).toBe(201);
+    const id = (created.json() as { id: string }).id;
+    const before = db.prepare('SELECT permission_mode, version FROM tasks WHERE id=?').get(id) as {
+      permission_mode: string;
+      version: number;
+    };
+
+    const refused = await app.inject(auth({ method: 'PATCH', url: `/tasks/${id}`, payload: { permissionMode: 'acceptEdits' } }));
+    expect(refused.statusCode, refused.body).toBe(403);
+    expect((refused.json() as { violation: string }).violation).toMatch(/autonomy_rung_exceeded/);
+
+    const after = db.prepare('SELECT permission_mode, version FROM tasks WHERE id=?').get(id) as {
+      permission_mode: string;
+      version: number;
+    };
+    expect(after.permission_mode).toBe('plan'); // the escalation never landed
+    expect(after.version).toBe(before.version); // and no version was burned
+
+    // The same PATCH within the earned rung is still accepted.
+    const allowed = await app.inject(auth({ method: 'PATCH', url: `/tasks/${id}`, payload: { name: 'F7 patch target renamed' } }));
+    expect(allowed.statusCode, allowed.body).toBe(200);
   });
 
   // This is the evidence behind features.ts saying `earned_autonomy: 'enforced'`:

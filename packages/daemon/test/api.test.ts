@@ -12,7 +12,7 @@ import { openDatabase, createMigrator, loadMigrationsFrom, type DB } from '../sr
 import { RunManager } from '../src/run-manager.js';
 import { Scheduler } from '../src/scheduler.js';
 import { FakeClock } from '../src/clock.js';
-import { buildServer } from '../src/api.js';
+import { buildServer, requiresAuth } from '../src/api.js';
 import { SafetyJournal } from '@clockwork/runner';
 import type { FastifyInstance } from 'fastify';
 
@@ -129,6 +129,22 @@ describe('auth', () => {
     const res = await app.inject(auth({ method: 'GET', url: '/tasks' }));
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual([]);
+  });
+
+  // S-review (auth bypass, critical): the hook used to test the RAW undecoded
+  // URL while find-my-way percent-DECODES the path before matching a route, so
+  // a single encoded character in the prefix skipped the hook and still reached
+  // the handler. `GET /%74asks` answered 200 with no credential at all.
+  it('rejects a percent-encoded spelling of a protected route, which the router still matches', async () => {
+    const first = await app.inject({ method: 'GET', url: '/%74asks' });
+    expect(first.statusCode, first.body).toBe(401);
+    const middle = await app.inject({ method: 'GET', url: '/ta%73ks' });
+    expect(middle.statusCode, middle.body).toBe(401);
+  });
+
+  it('still routes the encoded spelling for an authenticated caller', async () => {
+    const res = await app.inject(auth({ method: 'GET', url: '/%74asks' }));
+    expect(res.statusCode, res.body).toBe(200);
   });
 
   it('rejects unauthenticated access to calendar ICS sources (data route)', async () => {
@@ -344,5 +360,99 @@ describe('widget snapshot + pause', () => {
     expect(p.json().paused).toBe(true);
     const r = await app.inject(auth({ method: 'POST', url: '/resume' }));
     expect(r.json().paused).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S-review: both PATCH gates used to run AFTER `tasks.patch` committed, so a
+// 403 reported a change it had already persisted. The policy gate is the
+// pre-existing one; it moved with F7's autonomy gate because they share the
+// shape and the same argument applies to both.
+// ---------------------------------------------------------------------------
+describe('PATCH /tasks/:id policy gate runs before the write', () => {
+  it('403s a budget that breaks policy without persisting it', async () => {
+    const created = await app.inject(auth({ method: 'POST', url: '/tasks', payload: { ...VALID_ONCE_TASK, name: 'policy patch target' } }));
+    expect(created.statusCode, created.body).toBe(201);
+    const id = (created.json() as { id: string }).id;
+    const before = db.prepare('SELECT budget_usd, version FROM tasks WHERE id=?').get(id) as { budget_usd: number; version: number };
+
+    try {
+      const put = await app.inject(auth({ method: 'PUT', url: '/policies', payload: { maxCostPerRunUsd: 1 } }));
+      expect(put.statusCode, put.body).toBe(200);
+
+      const refused = await app.inject(
+        auth({ method: 'PATCH', url: `/tasks/${id}`, payload: { budget: { maxUsd: 5, maxTurns: 50, timeoutSec: 3600 } } }),
+      );
+      expect(refused.statusCode, refused.body).toBe(403);
+
+      const after = db.prepare('SELECT budget_usd, version FROM tasks WHERE id=?').get(id) as { budget_usd: number; version: number };
+      expect(after.budget_usd).toBe(before.budget_usd); // the over-budget edit never landed
+      expect(after.version).toBe(before.version);
+    } finally {
+      await app.inject(auth({ method: 'PUT', url: '/policies', payload: { maxCostPerRunUsd: null } }));
+    }
+  });
+
+  it('keeps 404 and 409 ahead of the gates, as before', async () => {
+    const missing = await app.inject(auth({ method: 'PATCH', url: '/tasks/nope', payload: { name: 'x' } }));
+    expect(missing.statusCode).toBe(404);
+
+    const created = await app.inject(auth({ method: 'POST', url: '/tasks', payload: { ...VALID_ONCE_TASK, name: 'version order target' } }));
+    const id = (created.json() as { id: string }).id;
+    try {
+      await app.inject(auth({ method: 'PUT', url: '/policies', payload: { maxCostPerRunUsd: 1 } }));
+      const stale = await app.inject(
+        auth({ method: 'PATCH', url: `/tasks/${id}`, payload: { version: 99, budget: { maxUsd: 5, maxTurns: 50, timeoutSec: 3600 } } }),
+      );
+      expect(stale.statusCode, stale.body).toBe(409); // version conflict still wins over the 403
+    } finally {
+      await app.inject(auth({ method: 'PUT', url: '/policies', payload: { maxCostPerRunUsd: null } }));
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S-review (auth bypass): the hook's decision is now a pure function, so the
+// fail-CLOSED branch is reachable from a test. Fastify answers a malformed
+// percent-escape with 400 FST_ERR_BAD_URL *before* onRequest hooks run, so
+// `app.inject` can never exercise it.
+// ---------------------------------------------------------------------------
+describe('requiresAuth — decides on the same path the router matches', () => {
+  it('protects the canonical and the percent-encoded spelling alike', () => {
+    expect(requiresAuth('/tasks')).toBe(true);
+    expect(requiresAuth('/%74asks')).toBe(true);
+    expect(requiresAuth('/ta%73ks')).toBe(true);
+    expect(requiresAuth('/workforce/repo-jobs/discover')).toBe(true);
+    expect(requiresAuth('/%77orkforce/repo-jobs/discover')).toBe(true);
+    expect(requiresAuth('/workforce%2fremediations/x/apply')).toBe(true);
+  });
+
+  it('protects the absolute-form request target, which the router also resolves to /tasks', () => {
+    // RFC 7230 §5.3.2. Verified against a real socket: `GET http://host/tasks
+    // HTTP/1.1` reaches the /tasks handler while `req.raw.url` is the whole
+    // absolute URL, so a prefix test on that string sees no match.
+    expect(requiresAuth('http://127.0.0.1:4747/tasks')).toBe(true);
+    expect(requiresAuth('http://127.0.0.1:4747/workforce/repo-jobs')).toBe(true);
+    expect(requiresAuth('http://127.0.0.1:4747/%74asks')).toBe(true);
+    expect(requiresAuth('http://127.0.0.1:4747/health')).toBe(false);
+    expect(requiresAuth('*')).toBe(true); // not origin-form, not a URL: fail closed
+  });
+
+  it('fails CLOSED on a malformed percent-escape instead of letting it through', () => {
+    expect(requiresAuth('/%ZZtasks')).toBe(true);
+    expect(requiresAuth('/%E0%A4%A')).toBe(true);
+    expect(requiresAuth('/%')).toBe(true);
+  });
+
+  it('leaves health and the static UI open, as before', () => {
+    expect(requiresAuth('/health')).toBe(false);
+    expect(requiresAuth('/')).toBe(false);
+    expect(requiresAuth('/assets/index-abc123.js')).toBe(false);
+  });
+
+  it('decides on the path only, never on the query string', () => {
+    expect(requiresAuth('/tasks?since=1')).toBe(true);
+    expect(requiresAuth('/health?next=/tasks')).toBe(false);
+    expect(requiresAuth('/health?next=%2Ftasks')).toBe(false);
   });
 });

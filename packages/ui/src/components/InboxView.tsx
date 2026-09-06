@@ -1,13 +1,18 @@
 /**
  * Inbox (T-124): run reports with FTS-backed search, outcome filters,
- * unread tracking, approvals with REAL respond actions (within the child's
- * decision window), report detail with transcript viewer.
+ * unread tracking, approvals with REAL respond actions, report detail with
+ * transcript viewer.
+ *
+ * The approvals list is mixed: a live permission prompt (answer inside the
+ * child's decision window) sits beside F1 plan approvals and F8 remediation
+ * proposals, which have no window at all. ApprovalCard tells them apart.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, type RunRowT } from '../api';
 import { useAsync } from '../useAsync';
 import { ProposedEvents } from './ProposedEvents';
 import { OutcomeControls } from './OutcomeControls';
+import { ApprovalCard } from './ApprovalCard';
 
 type OutcomeFilter = 'all' | 'completed' | 'failed' | 'active' | 'needsyou';
 
@@ -245,47 +250,6 @@ export function setPendingRunId(runId: string): void {
   pendingRunId = runId;
   // nudge any mounted InboxView; if not mounted, it reads pendingRunId on mount
   window.dispatchEvent(new CustomEvent('clockwork:open-run', { detail: runId }));
-}
-
-function ApprovalCard({ approval, onChanged }: { approval: any; onChanged: () => void }): JSX.Element {
-  const payload = typeof approval.payload_json === 'string' ? safeJson(approval.payload_json) : approval.payload_json ?? {};
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  const respond = async (decision: 'approved' | 'denied'): Promise<void> => {
-    setBusy(true);
-    setErr(null);
-    try {
-      await api.respondApproval(approval.id, decision);
-      onChanged();
-    } catch (e) {
-      setErr(String((e as Error).message ?? e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="approval-card">
-      <strong>Permission request</strong>
-      <div className="meta mono" style={{ color: 'var(--dim)', fontSize: 12, margin: '3px 0' }}>
-        {String(payload.tool ?? '').slice(0, 100)}
-      </div>
-      <p className="hint" style={{ margin: 0 }}>
-        Answer within the engine’s decision window (~2 min) to steer this live run. After that it is
-        auto-denied (unattended fail-safe) and shown for audit.
-      </p>
-      {err && <div className="error-banner">{err}</div>}
-      <div className="approval-actions">
-        <button className="btn primary small" disabled={busy} onClick={() => void respond('approved')}>
-          Approve
-        </button>
-        <button className="btn danger small" disabled={busy} onClick={() => void respond('denied')}>
-          Deny
-        </button>
-      </div>
-    </div>
-  );
 }
 
 function ReportDetail({ runId, version }: { runId: string; version: number }): JSX.Element {

@@ -100,6 +100,63 @@ export function bearerMatches(header: string | undefined, token: string): boolea
   return timingSafeEqual(given, want);
 }
 
+/**
+ * Does this URL need the bearer token?
+ *
+ * S-review (auth bypass, critical): this test used to run against
+ * `req.raw.url` — the RAW, undecoded URL — while find-my-way percent-DECODES
+ * the path before it matches a route. One encoded character in the prefix
+ * therefore skipped the hook and still reached the handler: `GET /%74asks`
+ * answered 200 with no credential, and so did every `/workforce/` route,
+ * including the fifteen mutating ones.
+ *
+ * The decision now runs over EVERY spelling the router could resolve this URL
+ * to — the raw path plus its decoded forms (`decodeURI` is what the router's
+ * sanitizer applies to static segments; `decodeURIComponent` is the more
+ * permissive reading, and covering both means no decoder disagreement can open
+ * a route). Any one of them hitting a protected prefix demands the token. A
+ * malformed escape makes decoding throw, and that fails CLOSED.
+ *
+ * Exported because the fail-closed branch is otherwise untestable: Fastify
+ * answers a malformed escape with 400 FST_ERR_BAD_URL before onRequest hooks
+ * run, so `app.inject` can never reach it.
+ */
+export function requiresAuth(rawUrl: string): boolean {
+  let target = rawUrl || '';
+  // RFC 7230 §5.3.2 absolute-form: `GET http://host/tasks HTTP/1.1` is a legal
+  // request line, Node hands the whole thing to us as `req.raw.url`, and the
+  // router still matches `/tasks` — verified against a real socket. The old
+  // prefix test simply missed it, because the string starts with `http:`.
+  // Reduce it to the path the router will use; an unparseable target (the
+  // asterisk-form of OPTIONS, say) is refused rather than guessed at.
+  if (target !== '' && !target.startsWith('/')) {
+    try {
+      target = new URL(target).pathname;
+    } catch {
+      return true; // not origin-form and not a URL — fail closed
+    }
+  }
+  const rawPath = target.split(/[?#]/)[0]!;
+  const spellings = new Set<string>([rawPath]);
+  try {
+    spellings.add(decodeURI(rawPath));
+    spellings.add(decodeURIComponent(rawPath));
+  } catch {
+    return true; // malformed percent-escape — fail closed, never open
+  }
+  for (const url of spellings) {
+    const needsAuth =
+      /^\/(tasks|runs|approvals|profiles|search|widget|queue|onboarding|pause-all|resume|capacity)/.test(url) ||
+      /^\/(analytics|retention|audit|policies|capabilities|targets|byok|triggers|trigger-events|ics|usage)/.test(url) ||
+      /^\/(license|support|auth)\//.test(url) || // S-review: control plane + diagnostics must not be anonymous
+      /^\/(calendars|templates)\//.test(url) || // S-audit: ICS export leaks task data; template preview is control plane
+      /^\/workforce\//.test(url) || // all twelve workforce features
+      url.startsWith('/events');
+    if (needsAuth) return true;
+  }
+  return false;
+}
+
 export function rotateToken(dataDir: string): string {
   mkdirSync(dataDir, { recursive: true });
   const next = randomBytes(32).toString('base64url');
@@ -195,15 +252,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
 
   // ---- auth hook: bearer token on data routes; static UI + health open ----
   app.addHook('onRequest', async (req, reply) => {
-    const url = (req.raw.url ?? '').split('?')[0]!;
-    const needsAuth =
-      /^\/(tasks|runs|approvals|profiles|search|widget|queue|onboarding|pause-all|resume|capacity)/.test(url) ||
-      /^\/(analytics|retention|audit|policies|capabilities|targets|byok|triggers|trigger-events|ics|usage)/.test(url) ||
-      /^\/(license|support|auth)\//.test(url) || // S-review: control plane + diagnostics must not be anonymous
-      /^\/(calendars|templates)\//.test(url) || // S-audit: ICS export leaks task data; template preview is control plane
-      /^\/workforce\//.test(url) || // <-- ADD (all twelve workforce features)
-      url.startsWith('/events');
-    if (!needsAuth) return; // /health + static UI assets carry no user data
+    if (!requiresAuth(req.raw.url ?? '')) return; // /health + static UI assets carry no user data
     // S-audit: /events used to accept ?token= because EventSource cannot set
     // headers. A bearer token in a URL reaches proxy logs, browser history and
     // Referer headers — tolerable on loopback, disqualifying for any remote
@@ -273,6 +322,18 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     bookRun: (taskId, promptOverride) => {
       const taskRow = tasks.get(taskId);
       if (!taskRow) return null;
+      // S-review: the two sibling auto-bookers gate on the policy engine before
+      // enqueueing (F1 above, F4's bookWorker below); this one did not, so every
+      // automatically booked diagnostic ran outside the engine allowlist, the
+      // BYOK restriction and the budget ceiling. Refusing here is safe by F8's
+      // own design: a null booking leaves `diagnostic_at` NULL, so the next
+      // failure tries again instead of the streak going quiet
+      // (self-healing.ts onRunFailed).
+      const pv = evaluatePolicy((taskRow as any).engine ?? null, (taskRow as any).byok_id ?? null, Number(taskRow.budget_usd ?? 2));
+      if (pv) {
+        audit('self_heal.book_rejected', 'task', taskId, pv);
+        return null;
+      }
       // permission_mode 'plan' makes "propose, don't apply" a runner guarantee
       // rather than prompt wording. The shallow copy is deliberate: the
       // diagnostic prompt is never written back to tasks.prompt (spec §3).
@@ -473,28 +534,45 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       if (!probe.ok) return reply.code(422).send({ error: probe.error });
       nextFire = probe.nextFire;
     }
-    const res = tasks.patch((req.params as any).id, parsed.data, (req.body as any)?.version, nextFire ?? null);
-    if (res === 'not_found') return reply.code(404).send({ error: 'not_found' });
-    if (res === 'version_conflict') return reply.code(409).send({ error: 'version_conflict' }); // S-82
+    // S-review (high): both gates below used to run AFTER `tasks.patch` had
+    // committed, so a 403 reported an escalation it had already persisted —
+    // spec §F7 calls the autonomy ceiling fail-closed, and it was fail-open on
+    // this path. They now decide on the PROSPECTIVE row: the patch's own value
+    // wherever it supplies one, the stored value otherwise, which is exactly
+    // what the write would produce. 404 and 409 stay ahead of them so the
+    // refusal order is unchanged, and `tasks.patch` still owns the real CAS.
+    const taskId = (req.params as any).id;
+    const current = tasks.get(taskId);
+    if (!current) return reply.code(404).send({ error: 'not_found' });
+    const expectedVersion = (req.body as any)?.version;
+    if (expectedVersion !== undefined && expectedVersion !== current.version) {
+      return reply.code(409).send({ error: 'version_conflict' }); // S-82
+    }
     // Policy gate on edits that change engine/byok/budget.
     const pvEdit = evaluatePolicy(
-      parsed.data.engine ?? (res as unknown as { engine?: string }).engine ?? undefined,
+      parsed.data.engine ?? (current as unknown as { engine?: string }).engine ?? undefined,
       'byokId' in parsed.data ? ((parsed.data as unknown as { byokId?: string }).byokId ?? undefined) : undefined,
-      parsed.data.budget?.maxUsd ?? res.budget_usd,
+      parsed.data.budget?.maxUsd ?? current.budget_usd,
     );
     if (pvEdit) {
-      audit('task.update_rejected', 'task', res.id, { ...pvEdit });
+      audit('task.update_rejected', 'task', current.id, { ...pvEdit });
       return reply.code(403).send(pvEdit);
     }
+    // F7 earned-autonomy, on the profile and mode the row WILL hold. `patch`
+    // writes any key that is not `undefined`, so an explicit null profileId
+    // detaches the profile — mirror that, do not coalesce it away.
     const avEdit = autonomy.evaluate({
-      profileId: res.profile_id,
-      permissionMode: res.permission_mode as PermissionMode,
+      profileId: parsed.data.profileId !== undefined ? parsed.data.profileId : current.profile_id,
+      permissionMode: (parsed.data.permissionMode ?? current.permission_mode) as PermissionMode,
     });
     if (avEdit) {
       const avio = { violation: `${avEdit.code}: ${avEdit.message}` };
-      audit('task.update_rejected', 'task', res.id, { ...avio });
+      audit('task.update_rejected', 'task', current.id, { ...avio });
       return reply.code(403).send(avio);
     }
+    const res = tasks.patch(taskId, parsed.data, expectedVersion, nextFire ?? null);
+    if (res === 'not_found') return reply.code(404).send({ error: 'not_found' });
+    if (res === 'version_conflict') return reply.code(409).send({ error: 'version_conflict' }); // S-82
     audit('task.update', 'task', res.id, { fields: Object.keys(parsed.data) });
     broadcast({ type: 'task.changed', taskId: res.id, at: Date.now() });
     const s = tasks.scheduleFor(res.id);
@@ -1072,9 +1150,22 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     const { occurrencesBetween } = await import('./recurrence.js');
 
     // Runs whose scheduled_for OR started/ended fall in range.
+    //
+    // NFR-3 ("windowed fetch") is why this projects `task_name` instead of
+    // returning `jobspec_json`: a year view holds ~5,000 rows and the calendar
+    // reads exactly one key out of that blob — the frozen S-5 snapshot name.
+    // Shipping the whole spec (prompt, profile, skills, paths) made the year
+    // view a 10.16MB response; projecting the one field it reads makes it
+    // 1.15MB. Measured on the 5k corpus in
+    // packages/daemon/test/workforce-bench.test.ts. This is a payload/memory
+    // win, NOT a latency win — request latency is dominated by the RRULE
+    // expansion, see that file's notes on recurrence.ts.
+    // json_extract, NOT a join to tasks.name: the calendar must keep showing the
+    // name the run was booked under, not the task's current name.
     const runRows = deps.db
       .prepare(
-        `SELECT id, task_id, state, outcome_reason, scheduled_for, started_at, ended_at, cost_usd, turns, jobspec_json
+        `SELECT id, task_id, state, outcome_reason, scheduled_for, started_at, ended_at, cost_usd, turns,
+                json_extract(jobspec_json, '$.taskName') AS task_name
          FROM runs
          WHERE (scheduled_for BETWEEN ? AND ?)
             OR (started_at BETWEEN ? AND ?)

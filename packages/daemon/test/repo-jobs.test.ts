@@ -7,7 +7,7 @@
  * from a repo-controlled file.
  */
 import { describe, expect, it, afterEach, beforeEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { openDatabase, createMigrator, loadMigrationsFrom, type DB } from '../src/db.js';
@@ -554,5 +554,142 @@ describe('RepoJobs.dismiss', () => {
     const imported = repoJobs.import(offer.id);
     if (typeof imported !== 'object' || !('taskId' in imported)) throw new Error('expected import to succeed');
     expect(repoJobs.dismiss(offer.id)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S-review (arbitrary-file disclosure oracle): `POST /workforce/repo-jobs/
+// discover` takes an attacker-controlled repoPath, and the discovery /
+// parse pair used to (a) follow a symlink out of the repo and (b) quote the
+// bytes it read back to the caller. Either half alone turns the route into a
+// read oracle for any file the daemon user can open. Both halves are tested
+// here: the file must stay INSIDE the repo, and an error must describe the
+// structure it could not parse, never the content.
+// ---------------------------------------------------------------------------
+describe('findJobsFile — symlink containment (arbitrary-file disclosure)', () => {
+  let repoDir: string;
+  let outsideDir: string;
+
+  beforeEach(() => {
+    repoDir = makeRepo();
+    outsideDir = mkdtempSync(path.join(os.tmpdir(), 'cw-repojobs-outside-'));
+  });
+  afterEach(() => {
+    rmSync(repoDir, { recursive: true, force: true });
+    rmSync(outsideDir, { recursive: true, force: true });
+  });
+
+  it('refuses a jobs file that is a symlink to a file outside the repo', () => {
+    const secret = path.join(outsideDir, 'secret.txt');
+    writeFileSync(secret, 'SECRET_TOKEN_XYZ\n', 'utf8');
+    mkdirSync(path.join(repoDir, '.clockwork'), { recursive: true });
+    symlinkSync(secret, path.join(repoDir, '.clockwork', 'jobs.yaml'));
+
+    expect(findJobsFile(repoDir)).toBeNull();
+  });
+
+  it('refuses a jobs file reached through a symlinked .clockwork directory', () => {
+    writeFileSync(path.join(outsideDir, 'jobs.json'), VALID_JSON, 'utf8');
+    symlinkSync(outsideDir, path.join(repoDir, '.clockwork'));
+
+    expect(findJobsFile(repoDir)).toBeNull();
+  });
+
+  it('still finds a real file inside the repo (the containment check is not a blanket refusal)', () => {
+    writeJobsFile(repoDir, 'jobs.json', VALID_JSON);
+    expect(findJobsFile(repoDir)).toEqual({ path: path.join(repoDir, '.clockwork', 'jobs.json'), format: 'json' });
+  });
+
+  it('discover() leaks nothing from a symlinked target: no offers, no error text', () => {
+    const { db, dir: dbDir } = freshDb();
+    try {
+      const secret = path.join(outsideDir, 'secret.txt');
+      writeFileSync(secret, 'SECRET_TOKEN_XYZ\n', 'utf8');
+      mkdirSync(path.join(repoDir, '.clockwork'), { recursive: true });
+      symlinkSync(secret, path.join(repoDir, '.clockwork', 'jobs.yaml'));
+
+      const result = new RepoJobs(db).discover(repoDir);
+      expect(result).toEqual({ offers: [] });
+      expect(JSON.stringify(result)).not.toContain('SECRET_TOKEN_XYZ');
+    } finally {
+      db.close();
+      rmSync(dbDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('parseJobsFile — errors describe structure, never the bytes read', () => {
+  it('does not quote the offending line of a YAML file it cannot parse', () => {
+    const result = parseJobsFile(['schema: clockwork.jobs.v1', 'SECRET_LINE_XYZ'].join('\n'), 'yaml');
+    expect('error' in result).toBe(true);
+    if ('error' in result) {
+      expect(result.error).not.toContain('SECRET_LINE_XYZ');
+      expect(result.error).toMatch(/line 2/); // located, and structural
+    }
+  });
+
+  it('does not quote a duplicate mapping key back to the caller', () => {
+    const yaml = [
+      'schema: clockwork.jobs.v1',
+      'jobs:',
+      '  - key: k',
+      '    SECRET_KEY_XYZ: 1',
+      '    SECRET_KEY_XYZ: 2',
+      '    name: N',
+      '    prompt: P',
+    ].join('\n');
+    const result = parseJobsFile(yaml, 'yaml');
+    expect('error' in result).toBe(true);
+    if ('error' in result) {
+      expect(result.error).toMatch(/duplicate key/);
+      expect(result.error).not.toContain('SECRET_KEY_XYZ');
+    }
+  });
+
+  it('does not quote the offending escape character of a double-quoted scalar', () => {
+    const yaml = ['schema: clockwork.jobs.v1', 'jobs:', '  - key: k', '    name: "a\\q"', '    prompt: P'].join('\n');
+    const result = parseJobsFile(yaml, 'yaml');
+    expect('error' in result).toBe(true);
+    if ('error' in result) {
+      expect(result.error).toMatch(/escape sequence/);
+      expect(result.error).not.toContain('\\q');
+    }
+  });
+
+  it("does not pass Node's JSON.parse message through, which embeds the source text", () => {
+    // Node quotes a ~20-character window of the source around the offending
+    // token, so the marker is deliberately short enough to land inside it.
+    const result = parseJobsFile('{ "a": SECRETXYZ }', 'json');
+    expect('error' in result).toBe(true);
+    if ('error' in result) expect(result.error).not.toContain('SECRETXYZ');
+  });
+
+  it("does not pass zod's message through, which embeds a rejected enum value", () => {
+    const bad = JSON.stringify({
+      schema: 'clockwork.jobs.v1',
+      jobs: [{ key: 'k1', name: 'N', prompt: 'P', schedule: { kind: 'SECRET_ENUM_XYZ', tz: 'UTC' } }],
+    });
+    const result = parseJobsFile(bad, 'json');
+    expect('error' in result).toBe(true);
+    if ('error' in result) {
+      expect(result.error).not.toContain('SECRET_ENUM_XYZ');
+      expect(result.error).toMatch(/jobs\.0\.schedule\.kind/); // the PATH is structural, and stays
+    }
+  });
+
+  it('does not quote a duplicate job key, which is repo-authored text', () => {
+    const dup = JSON.stringify({
+      schema: 'clockwork.jobs.v1',
+      jobs: [
+        { key: 'secret-key-xyz', name: 'A', prompt: 'do a' },
+        { key: 'secret-key-xyz', name: 'B', prompt: 'do b' },
+      ],
+    });
+    const result = parseJobsFile(dup, 'json');
+    expect('error' in result).toBe(true);
+    if ('error' in result) {
+      expect(result.error).toMatch(/duplicate job key/);
+      expect(result.error).not.toContain('secret-key-xyz');
+    }
   });
 });
