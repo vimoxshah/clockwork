@@ -104,6 +104,32 @@ function dtstartLineFor(wallMs: number): string {
   return `DTSTART:${DateTime.fromMillis(wallMs, { zone: 'utc' }).toFormat("yyyyLLdd'T'HHmmss")}Z`;
 }
 
+/** A BY part rrule parsed into a list: absent reads as `null` or `[]`. */
+function statedByPart(part: unknown): boolean {
+  return Array.isArray(part) ? part.length > 0 : part != null;
+}
+
+/**
+ * Does any BY part reject whole DAYS? Those are the parts that make
+ * `removeFilteredDays` report `filtered`, and `filtered` is the ONLY thing that
+ * makes rrule's sub-daily counter jump by more than one INTERVAL at a time
+ * (`DateTime.addMinutes`/`addSeconds` "jump to one iteration before next day").
+ * A day-level part is harmless for DAILY and coarser — their `add` ignores the
+ * flag entirely — so this is only consulted below HOURLY.
+ */
+function filtersWholeDays(o: ParsedRule['options']): boolean {
+  return (
+    statedByPart(o.bymonth) ||
+    statedByPart(o.byweekno) ||
+    statedByPart(o.byweekday) ||
+    statedByPart(o.bynweekday) ||
+    statedByPart(o.byyearday) ||
+    statedByPart(o.bymonthday) ||
+    statedByPart(o.bynmonthday) ||
+    o.byeaster != null
+  );
+}
+
 /**
  * How far forward the synthetic epoch anchor may be moved, in fake-UTC ms, or
  * `EPOCH_ANCHOR_MS` to leave it at 1970.
@@ -111,79 +137,130 @@ function dtstartLineFor(wallMs: number): string {
  * WHY THIS EXISTS. `between()` is not a search, it is a replay: the iterator
  * walks from DTSTART one period at a time and only then starts accepting dates
  * (`rrule/dist/esm/iter/index.js`, `if (res >= dtstart)`). A 1970 anchor
- * therefore replays 56 years of history to answer a 31-day question — measured
- * 2026-09-07 on an Apple M4, one `occurrencesBetween` call per sample,
- * median-of-9 in one process, one schedule over one `/calendar` month window:
- * 29.66ms -> 0.108ms for a FREQ=DAILY rule and 6.58ms -> 0.037ms for a
- * FREQ=WEEKLY one, same occurrences either way. It also grows by ~365
- * iterations per schedule per calendar year on its own.
+ * therefore replays 56 years of history to answer an 8-day question, and the
+ * finer the FREQ the worse it is — measured 2026-09-07 on an Apple M4, ONE
+ * `nextOccurrenceAfter` over an 8-day horizon, America/New_York:
+ * `FREQ=DAILY;BYHOUR=9;BYMINUTE=0` 25ms, `FREQ=HOURLY` 1,347ms,
+ * `FREQ=MINUTELY` 78,941ms. Those are user-creatable rules, and a 79-second
+ * expansion is not a slow path: it blocks the API request that saves the task
+ * and the scheduler tick that touches the schedule. It also grows on its own,
+ * by another year of replay per calendar year.
  *
  * WHY IT IS SAFE. Moving the anchor forward by a WHOLE number of INTERVAL
- * periods in the rule's own FREQ unit yields exactly the old occurrence set
+ * periods IN THE RULE'S OWN FREQ UNIT yields exactly the old occurrence set
  * intersected with `[newAnchor, ∞)`, and nothing else:
  *
  *  - the period grid is a suffix of the old one — the iterator steps by
  *    INTERVAL from DTSTART, and WEEKLY snaps to WKST before stepping
  *    (`DateTime.addWeekly`), so an anchor a whole number of INTERVAL weeks on
  *    lands on the same week grid;
- *  - every component `parseOptions` reads OFF DTSTART is unchanged, because a
- *    whole-day step preserves the time of day, a whole-week step preserves the
- *    weekday, and a whole-month step from the 1st preserves both the day of
- *    the month and midnight;
+ *  - every component `parseOptions` reads OFF DTSTART is unchanged, and this is
+ *    the reason the phase-carrying BY parts need not be stated. The anchor is
+ *    always a whole multiple of the FREQ unit measured from 1970-01-01T00:00:00
+ *    (or, for MONTHLY, the 1st of a month at midnight), so every finer
+ *    component stays at zero and every coarser one stays on its grid: a
+ *    whole-day step preserves the time of day (DAILY's implicit
+ *    BYHOUR/BYMINUTE/BYSECOND), a whole-week step preserves the weekday
+ *    (WEEKLY's implicit BYDAY), a whole-month step from the 1st preserves the
+ *    day of the month (MONTHLY's implicit BYMONTHDAY), a whole-hour step
+ *    preserves minute and second (HOURLY's implicit BYMINUTE/BYSECOND), a
+ *    whole-minute step preserves the second (MINUTELY's implicit BYSECOND);
  *  - the anchor is kept a full period BELOW the padded lower `between()`
  *    bound, so the part of the set that is intersected away is entirely below
- *    the window being asked about.
+ *    the window being asked about. That backoff is load-bearing, not slack:
+ *    WEEKLY's first dayset runs from DTSTART's weekday to the next WKST rather
+ *    than over a whole week, so the two walks genuinely disagree below the
+ *    anchor;
+ *  - both walks are then the same deterministic state machine on the same
+ *    grid, so they cannot disagree above the anchor.
  *
- * WHEN IT IS NOT. Two refusals, and they are not the same refusal:
+ * WHEN IT IS NOT. Three refusals, and they are not the same refusal:
  *
  *  - COUNT. It changes WHICH occurrences exist rather than where iteration
  *    starts: dropping the early ones promotes later ones into the count, and
  *    an exhausted rule stops being exhausted. Verified: forcing the advance on
  *    `FREQ=DAILY;COUNT=5;BYHOUR=9;BYMINUTE=0` turns an empty 2026 window into
  *    three occurrences. This refusal is load-bearing for S-24 auto-disable.
- *  - AN IMPLICIT PHASE. Without BYHOUR+BYMINUTE (DAILY), BYDAY (WEEKLY) or
- *    BYMONTHDAY (MONTHLY), DTSTART itself supplies the time of day, the
- *    weekday or the day of the month, so the rule's identity is tangled up
- *    with its anchor. A whole-period step does preserve those components — see
- *    above — but the module refuses anyway: the phase-carrying parts being
- *    explicit is the condition this fix was scoped and reviewed against, and
- *    all it costs is that those shapes keep today's behaviour.
+ *  - A SUB-DAILY COUNTER THAT CAN LEAVE THE GRID. Below HOURLY the counter walk
+ *    stops being plain arithmetic. `DateTime.addMinutes` normalizes its minute
+ *    carry through `addHours(hourDiv, false, byhour)`, whose skip loop adds
+ *    `hourDiv` hours AGAIN for every hour BYHOUR rejects — a whole number of
+ *    hours, which is not a whole number of INTERVAL minutes unless INTERVAL
+ *    divides 60. Verified: `FREQ=MINUTELY;INTERVAL=7;BYHOUR=5` walks
+ *    00:00 -> 05:03, off the 7-minute grid, and forcing the advance on it
+ *    yields 9 occurrences where the epoch anchor yields 8. `addSeconds` carries
+ *    the same way through `addMinutes`, so BYHOUR and BYMINUTE are both
+ *    hazards for SECONDLY (verified: `FREQ=SECONDLY;INTERVAL=7;BYMINUTE=5`
+ *    disagrees). Two ways out, and the gate below accepts either: state no
+ *    coarser BY part, so the skip loop never runs; or let INTERVAL divide 60
+ *    AND reject no whole day, so every carry is exactly one unit of the next
+ *    coarser field and every skip step is one whole hour or minute. HOURLY
+ *    needs neither: `addHours` adds exactly INTERVAL hours per step and rechecks
+ *    BYHOUR at every step, so it can neither leave the grid nor skip a
+ *    matching point.
+ *  - A DEGENERATE INTERVAL. INTERVAL=0 yields no occurrences at all and a
+ *    negative one walks backwards out of the calendar — both are the untouched
+ *    path's problem, not this one's.
  *
- * Every other FREQ keeps the epoch anchor too. HOURLY and finer would need
- * their own equivalence argument and are out of scope here.
+ * YEARLY keeps the epoch anchor. A whole-INTERVAL-year step off 1970-01-01
+ * preserves everything `parseOptions` reads (month, day of month, time of day)
+ * and the probe found it equivalent, but 56 iterations is not a hazard, so it
+ * is left on the path it has always been on.
+ *
+ * A rule whose BY parts are unreachable from its own INTERVAL grid — the
+ * clearest one is `FREQ=HOURLY;INTERVAL=2;BYHOUR=3`, whose hours stay even —
+ * spins forever inside rrule 2.8.1's skip loop. It does so at EVERY on-grid
+ * anchor, because the reachable residues mod 24 depend only on
+ * `gcd(INTERVAL, 24)`: verified hanging at both the 1970 anchor and the
+ * advanced one, and answering only from a deliberately off-grid anchor. The
+ * whole-period discipline preserves that hang exactly as it preserves
+ * everything else; it is an upstream defect, reachable today, and out of scope
+ * here.
  *
  * @param rule the rule as parsed WITH the epoch anchor
  * @param notAfterWallMs the padded lower `between()` bound, in fake-UTC ms
  * @returns the fake-UTC ms of the anchor to use; `EPOCH_ANCHOR_MS` for "don't"
  */
 function advancedAnchorMs(rule: ParsedRule, notAfterWallMs: number): number {
-  const given = rule.origOptions; // ONLY the parts the rule text actually stated
-  const { freq, interval } = rule.options;
-  if (given.count != null) return EPOCH_ANCHOR_MS;
+  const o = rule.options;
+  const { freq, interval } = o;
+  if (rule.origOptions.count != null) return EPOCH_ANCHOR_MS; // as STATED, not as defaulted
   // A window at or before the epoch has nothing to advance past. An unparseable
   // bound (NaN) reaches `between()` and throws there today; keeping the epoch
   // anchor keeps that pre-existing contract, and keeps NaN out of the DTSTART.
   if (!(notAfterWallMs > 0)) return EPOCH_ANCHOR_MS;
-  // INTERVAL=0 yields no occurrences at all and a negative one spins forever
-  // inside rrule 2.8.1 — both are the untouched path's problem, not this one's.
   if (!Number.isInteger(interval) || interval <= 0) return EPOCH_ANCHOR_MS;
+  // Every carry is exactly one unit of the next coarser field, and every skip
+  // step with it, so the walk stays on the INTERVAL grid even when a coarser BY
+  // part makes it skip. `60 % interval === 0` also bounds INTERVAL at 60, which
+  // is what keeps the carry to a single unit; the day-filter clause is what
+  // keeps `filtered`'s multi-unit jump out of the picture.
+  const skipStaysOnGrid = 60 % interval === 0 && !filtersWholeDays(o);
 
   let periodMs: number;
   switch (freq) {
     case RRule.DAILY:
-      if (given.byhour == null || given.byminute == null) return EPOCH_ANCHOR_MS;
       periodMs = interval * 86_400_000;
       break;
     case RRule.WEEKLY:
-      if (given.byweekday == null) return EPOCH_ANCHOR_MS;
       periodMs = interval * 7 * 86_400_000;
       break;
+    case RRule.HOURLY:
+      periodMs = interval * 3_600_000;
+      break;
+    case RRule.MINUTELY:
+      if (statedByPart(o.byhour) && !skipStaysOnGrid) return EPOCH_ANCHOR_MS;
+      periodMs = interval * 60_000;
+      break;
+    case RRule.SECONDLY:
+      if ((statedByPart(o.byhour) || statedByPart(o.byminute)) && !skipStaysOnGrid) return EPOCH_ANCHOR_MS;
+      periodMs = interval * 1000;
+      break;
     case RRule.MONTHLY: {
-      if (given.bymonthday == null) return EPOCH_ANCHOR_MS;
       // Months are not a fixed number of milliseconds, so this rung counts
       // calendar months off 1970-01 and lets Luxon do the arithmetic. The
       // result is always day 1 at 00:00:00, which is what leaves an implicit
-      // BYHOUR/BYMINUTE/BYSECOND untouched.
+      // BYMONTHDAY/BYHOUR/BYMINUTE/BYSECOND untouched.
       const bound = DateTime.fromMillis(notAfterWallMs, { zone: 'utc' });
       const wholeMonths = (bound.year - 1970) * 12 + (bound.month - 1);
       const periods = Math.floor(wholeMonths / interval) - 1;
@@ -193,7 +270,7 @@ function advancedAnchorMs(rule: ParsedRule, notAfterWallMs: number): number {
         .toMillis();
     }
     default:
-      return EPOCH_ANCHOR_MS;
+      return EPOCH_ANCHOR_MS; // YEARLY, and anything a later rrule adds
   }
   // One period short of the bound on purpose: `floor` alone would already land
   // at or below it, and the extra period leaves the intersected-away part of

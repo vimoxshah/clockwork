@@ -379,6 +379,12 @@ function deriveImportLabel(explicit: unknown, calName: string | null, filename: 
   return 'Imported calendar';
 }
 
+/**
+ * The largest RRULE COUNT accepted at save time. Cost is linear in COUNT and
+ * 40,000,000 measured 79 seconds for a single next-fire; see the call site.
+ */
+export const MAX_RRULE_COUNT = 100_000;
+
 export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance; token: string; sseClients: Set<FastifyReply> }> {
   const app = Fastify({ logger: false });
 
@@ -638,8 +644,21 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
   app.get('/health', async () => {
     const active = deps.runManager.countActive();
     const queued = (deps.db.prepare("SELECT COUNT(*) c FROM runs WHERE state='queued'").get() as any).c;
+    // The predicate MUST match `Scheduler.tick`'s exactly. It used to filter on
+    // `schedules.enabled` alone, which is a weaker condition than the tick's:
+    // deleting or disabling a task leaves its schedule row `enabled=1` with a
+    // materialized `next_fire`, and nothing ever advances that timestamp again
+    // because the tick correctly refuses to fire it. So the header advertised a
+    // "next run" that had already passed and could never move — a real report
+    // read `next 22 Aug at 9:52 AM` on 7 Sep with nothing scheduled at all.
     const nextFire = (
-      deps.db.prepare('SELECT MIN(next_fire) nf FROM schedules WHERE enabled=1 AND next_fire IS NOT NULL').get() as any
+      deps.db
+        .prepare(
+          `SELECT MIN(s.next_fire) nf FROM schedules s
+           JOIN tasks t ON t.id = s.task_id
+           WHERE s.enabled=1 AND t.enabled=1 AND t.deleted_at IS NULL AND s.next_fire IS NOT NULL`,
+        )
+        .get() as any
     ).nf;
     // Read per request and never cached: the point of the field is that this
     // process does not change while the file under it does. A throwing reader
@@ -737,6 +756,26 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       }
       nextFire = input.schedule.runAt ?? null;
     } else if (input.schedule.kind === 'rrule' || input.schedule.kind === 'cron') {
+      // A large COUNT is the one expansion cost the anchor fix cannot touch.
+      // `recurrence.ts` advances a DTSTART-less anchor by whole INTERVAL
+      // periods, which is exact — but only while COUNT is absent, because
+      // dropping early occurrences promotes later ones into the count and
+      // un-exhausts an exhausted rule. That is what the gate's COUNT negative
+      // control proves. So a COUNT rule keeps the 1970 anchor and pays the
+      // replay, and the cost is linear in COUNT: measured on an Apple M4, one
+      // next-fire over the save-time rung costs 34ms at COUNT=10,000, 277ms at
+      // 100,000, 2.6s at 1,000,000 and 79 SECONDS at 40,000,000 — which blocks
+      // this request and the scheduler tick that later touches the schedule.
+      // A ceiling is the honest lever: a small COUNT is already cheap (COUNT=10
+      // is 0.4ms, because iteration stops once satisfied), and 100,000 still
+      // lets a per-minute rule fire for 69 days or a daily one for 274 years.
+      const countMatch = /(?:^|;)\s*COUNT\s*=\s*(\d+)/i.exec(input.schedule.rrule ?? '');
+      if (countMatch && Number(countMatch[1]) > MAX_RRULE_COUNT) {
+        return {
+          ok: false,
+          error: `RRULE COUNT is too large: ${countMatch[1]} exceeds the ${MAX_RRULE_COUNT} limit. Expanding it would block the scheduler — drop COUNT and use UNTIL, or lower it.`,
+        };
+      }
       try {
         nextFire = nextFireForSave(
           {
@@ -2016,7 +2055,14 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       deps.db.prepare(`SELECT COUNT(*) c FROM runs WHERE report_json IS NOT NULL AND ended_at > ?`).get(Date.now() - 24 * 3600_000) as any
     ).c;
     const next = deps.db
-      .prepare('SELECT next_fire, t.name FROM schedules s JOIN tasks t ON t.id=s.task_id WHERE s.enabled=1 AND s.next_fire IS NOT NULL ORDER BY next_fire LIMIT 1')
+      // Same tick-matching predicate as /health above: a soft-deleted or
+      // disabled task must not supply the "next run" the tray reports.
+      .prepare(
+        `SELECT s.next_fire, t.name FROM schedules s
+         JOIN tasks t ON t.id=s.task_id
+         WHERE s.enabled=1 AND t.enabled=1 AND t.deleted_at IS NULL AND s.next_fire IS NOT NULL
+         ORDER BY s.next_fire LIMIT 1`,
+      )
       .get() as any;
     return { runsToday, needsYou, recentReports: unread, nextRun: next ?? null, paused: isPaused() };
   });
