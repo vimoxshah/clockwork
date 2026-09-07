@@ -2,7 +2,7 @@
  * Clockwork shell: topbar + tab navigation (hash-persisted), connect gate,
  * error boundary, SSE-driven refresh counter, theme provider.
  */
-import { Component, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, openEventStream, setToken } from './api';
 import { ThemeProvider } from './theme';
 import CalendarView from './components/CalendarView';
@@ -69,6 +69,9 @@ export function formatNextFire(ts: number, now: Date = new Date()): string {
 export default function App(): JSX.Element {
   const [tab, setTab] = useState<Tab>(tabFromHash);
   const [health, setHealth] = useState<Health | null>(null);
+  /** The daemon version this window first saw; see the health poll below. */
+  const loadedDaemonVersion = useRef<string | null>(null);
+  const [stalePage, setStalePage] = useState(false);
   const [unauthorized, setUnauthorized] = useState(false);
   const [dataVersion, setDataVersion] = useState(0);
 
@@ -89,6 +92,16 @@ export default function App(): JSX.Element {
       try {
         const h = await api.health();
         if (alive) {
+          // The daemon changed version underneath a window that is still
+          // running the bundle it shipped before. `versionSkew` cannot see
+          // this — that compares the daemon with the build on disk, and after
+          // an upgrade-and-restart those two agree; it is THIS PAGE that is
+          // behind. It is not cosmetic: a stale bundle keeps posting the old
+          // payloads, and an "ASAP" task booked from a pre-0.10 window still
+          // saved as the unfireable `queue` kind long after the daemon could
+          // handle it. The page cannot fix itself, so it says so.
+          setStalePage((was) => was || (loadedDaemonVersion.current ?? h.daemonVersion) !== h.daemonVersion);
+          loadedDaemonVersion.current ??= h.daemonVersion;
           setHealth(h);
           setUnauthorized(false);
         }
@@ -185,11 +198,13 @@ export default function App(): JSX.Element {
                 {TABS.map((t) => (
                   <button
                     key={t}
+                    // aria-current is the selector the active styling hangs off
+                    // (see .tabs button[aria-current] in styles.css), so the
+                    // visual state and the announced state cannot drift apart.
+                    aria-current={tab === t ? 'page' : undefined}
                     className={
                       'rounded-lg px-3 py-1.5 text-compact transition-colors ' +
-                      (tab === t
-                        ? 'bg-surface-active font-medium text-fg'
-                        : 'text-muted hover:bg-surface-hover hover:text-fg')
+                      (tab === t ? '' : 'text-muted hover:bg-surface-hover hover:text-fg')
                     }
                     onClick={() => setTab(t)}
                   >
@@ -233,6 +248,7 @@ export default function App(): JSX.Element {
                   onboarding gate skips. A stale daemon breaks whatever the user
                   is doing, so it cannot be a per-section concern. */}
               <VersionSkewNotice health={health} />
+              <StalePageNotice stale={stalePage} health={health} />
               {tab !== 'new' && <OnboardingGate version={dataVersion} onBook={() => setTab('new')} />}
               {tab === 'calendar' && (
                 <CalendarView
@@ -338,6 +354,48 @@ export function VersionSkewNotice({ health }: { health: Health | null }): JSX.El
         That stops the running daemon, which may be executing agent runs right now — pick a moment
         when nothing important is in flight.
       </p>
+    </div>
+  );
+}
+
+/**
+ * The mirror image of VersionSkewNotice, and the half that was missing.
+ *
+ * That banner covers a NEW window against an OLD daemon. This one covers an
+ * OLD window against a NEW daemon: the daemon was upgraded and restarted while
+ * this page stayed open, so the page is still running the bundle it loaded
+ * before. `versionSkew` is blind to it — after an upgrade the daemon and the
+ * build on disk agree, and only the page is behind.
+ *
+ * It reached a user: the daemon was upgraded to a build where the composer's
+ * "ASAP" saves a runnable one-off, but their open window still ran the older
+ * bundle, so ASAP kept writing the `queue` kind the scheduler cannot fire. The
+ * app looked broken and the fix was a reload nobody knew to do.
+ *
+ * Reload is offered rather than forced: a reload throws away whatever is typed
+ * into the composer, and this window still works for everything the old bundle
+ * already did.
+ */
+export function StalePageNotice({
+  stale,
+  health,
+}: {
+  stale: boolean;
+  health: Health | null;
+}): JSX.Element | null {
+  if (!stale) return null;
+  return (
+    <div className="error-banner" role="alert" data-testid="stale-page">
+      <strong>Reload this window — the daemon was upgraded under it.</strong>
+      <p style={{ margin: '6px 0' }}>
+        clockworkd is now serving version {health?.daemonVersion ?? 'a newer build'}, but this page
+        is still running the interface it loaded earlier. Until you reload, buttons here behave the
+        way the OLD build did — anything fixed in the new one is not fixed in this window. Your data
+        in ~/.clockwork is fine.
+      </p>
+      <button className="btn primary" onClick={() => window.location.reload()}>
+        Reload now
+      </button>
     </div>
   );
 }

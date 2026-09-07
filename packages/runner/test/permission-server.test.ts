@@ -404,13 +404,21 @@ describe('permission bridge — chunked body with no Content-Length (memory-DoS 
     });
   }
 
+  // Both tests below stream OVER 4 MiB through a chunked POST, so they are
+  // I/O-bound rather than logic-bound and their wall time is a property of the
+  // machine. Under vitest's 5s default one went red at 5,008ms on a loaded
+  // laptop while passing in isolation three times running — a red build that
+  // meant "your machine was busy". The bound is explicit and generous; what is
+  // asserted is unchanged.
+  const OVERFLOW_TEST_TIMEOUT_MS = 30_000;
+
   it('/mcp refuses a chunked body once it crosses 4 MiB with a JSON-RPC -32600, and the server stays healthy for a following normal request', async () => {
     const { status, body } = await chunkedPost(url, OVER_CAP_BYTES);
     expect(status).toBe(200);
     expect(JSON.parse(body).error.code).toBe(-32600);
     const { json } = await rpc({ jsonrpc: '2.0', id: 950, method: 'ping' });
     expect(json).toEqual({ jsonrpc: '2.0', id: 950, result: {} });
-  });
+  }, OVERFLOW_TEST_TIMEOUT_MS);
 
   it('/floor refuses the same chunked overflow with a plain deny, and the server stays healthy for a following normal request', async () => {
     const floorUrl = url.replace(/\/mcp$/, '/floor');
@@ -420,7 +428,7 @@ describe('permission bridge — chunked body with no Content-Length (memory-DoS 
     const res = await fetch(floorUrl, {
       method: 'POST',
       body: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'ls' } }),
-    });
+  }, OVERFLOW_TEST_TIMEOUT_MS);
     const json = await res.json();
     expect(res.status).toBe(200);
     expect(json).toEqual({ decision: 'deny', reason: 'no policy floor configured' });

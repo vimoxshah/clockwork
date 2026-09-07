@@ -131,6 +131,12 @@ const planApproval = {
   fallback: 'deny-and-continue',
 };
 
+/**
+ * The chip bar used to render the raw enum value, so it read
+ * "all completed failed active" — internal identifiers shown to a person.
+ * `FILTER_LABELS` in InboxView.tsx names them properly, so these lookups match
+ * on the LABEL ("Needs you"), not the key ("needsyou").
+ */
 function findChip(container: HTMLDivElement, label: string): HTMLButtonElement {
   const btn = Array.from(container.querySelectorAll('.filter-chips button')).find(
     (b) => b.textContent === label,
@@ -170,7 +176,7 @@ describe('Inbox "needs you" filter (behaviour)', () => {
     expect(container.textContent).toContain('Nightly deps sweep');
     expect(container.textContent).toContain('Docs freshness pass');
 
-    findChip(container, 'needs you').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    findChip(container, 'Needs you').dispatchEvent(new MouseEvent('click', { bubbles: true }));
     // The discriminating change is the row DISAPPEARING. 'awaiting your
     // decision' would be the wrong anchor: InboxView draws that chip under the
     // 'all' filter too (InboxView.tsx:281), so waiting for it would return
@@ -191,7 +197,7 @@ describe('Inbox "needs you" filter (behaviour)', () => {
     await waitForText(container, 'Docs freshness pass');
     expect(container.textContent).toContain('Docs freshness pass');
 
-    findChip(container, 'failed').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    findChip(container, 'Failed').dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await waitForText(container, 'No failed runs');
 
     expect(container.textContent).not.toContain('No runs yet');

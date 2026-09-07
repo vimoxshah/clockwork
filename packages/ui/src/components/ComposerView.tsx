@@ -672,8 +672,14 @@ export default function ComposerView({
                 {form.kind === 'asap' && (
                   <div className="flex items-start gap-2 text-xs text-muted">
                     <Badge variant="info">ASAP</Badge>
-                    Books a one-off for the next scheduler sweep (within 30s), then starts as soon as a
-                    concurrency slot <em>and</em> its repo are free — position shown in the Tasks queue lane.
+                    {/* One <span>, not loose text: every child of a flex row is
+                        its own flex ITEM, so bare prose either side of the
+                        <em> became three side-by-side columns and the sentence
+                        rendered as three narrow stacks. */}
+                    <span className="leading-relaxed">
+                      Books a one-off for the next scheduler sweep (within 30s), then starts as soon as a
+                      concurrency slot <em>and</em> its repo are free — position shown in the Tasks queue lane.
+                    </span>
                   </div>
                 )}
               </div>
