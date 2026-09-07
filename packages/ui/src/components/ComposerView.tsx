@@ -47,6 +47,15 @@ export const BUDGET_GUARDS_SURFACE = registerFeatureSurface({
 });
 
 
+/**
+ * How far ahead an ASAP booking is placed. `POST /tasks` refuses a `once`
+ * schedule whose `runAt` is already behind `Date.now()` at validation time, and
+ * the clock moves while the request is in flight, so "now" cannot be sent
+ * literally. Small enough that ASAP still means ASAP: the 30s scheduler sweep
+ * dominates the wait either way.
+ */
+const ASAP_LEAD_MS = 15_000;
+
 function defaultSlot(): Date {
   const d = new Date(Date.now() + 60 * 60_000);
   d.setMinutes(0, 0, 0);
@@ -172,7 +181,12 @@ export default function ComposerView({
     maxUsd: '2',
     maxTurns: '50',
     timeoutSec: '3600',
-    kind: 'once' as 'once' | 'rrule' | 'queue',
+    // 'asap' is a COMPOSER kind, not a daemon one. It saves as a `once`
+    // schedule a few seconds out; see `submit`. The daemon's own 'queue' kind
+    // is a different thing — the review gate for imported tasks, plan-execute
+    // and repo-jobs — and this option used to reuse it, which is why an "ASAP"
+    // task never ran.
+    kind: 'once' as 'once' | 'rrule' | 'asap',
     runAt: prefill ? new Date(prefill.runAtLocal) : defaultSlot(),
     rruleFreq: 'WEEKLY' as 'DAILY' | 'WEEKLY' | 'MONTHLY',
     rruleByDay: 'MO',
@@ -234,8 +248,17 @@ export default function ComposerView({
     let schedule: Record<string, unknown>;
     if (form.kind === 'once') {
       schedule = { kind: 'once', runAt: form.runAt.getTime(), tz: form.tz };
-    } else if (form.kind === 'queue') {
-      schedule = { kind: 'queue', tz: form.tz };
+    } else if (form.kind === 'asap') {
+      // A `queue`-kind row is stored `enabled=0, next_fire=NULL` (repo.ts), so
+      // `Scheduler.tick` — which needs `enabled=1 AND next_fire IS NOT NULL` —
+      // could never fire it, and the calendar skips the kind outright. "ASAP"
+      // therefore sat on the tray forever and only ran when a human pressed
+      // run. A near-future `once` fires on the next 30s sweep, joins the
+      // run-manager's slot queue, and shows up on the calendar.
+      //
+      // The lead is not slack: /tasks rejects `runAt` already in the past, and
+      // the clock moves between building this payload and validating it.
+      schedule = { kind: 'once', runAt: Date.now() + ASAP_LEAD_MS, tz: form.tz };
     } else {
       const [hh, mm] = form.rruleTime.split(':').map(Number);
       if (!Number.isInteger(hh) || !Number.isInteger(mm)) return setError('Pick a valid recurrence time.');
@@ -564,7 +587,7 @@ export default function ComposerView({
                 options={[
                   { value: 'once', label: 'One-off' },
                   { value: 'rrule', label: 'Recurring' },
-                  { value: 'queue', label: 'ASAP', title: 'Work the queue as soon as a slot is free' },
+                  { value: 'asap', label: 'ASAP', title: 'Start on the next sweep, then wait only for a free slot' },
                 ]}
               />
 
@@ -646,11 +669,11 @@ export default function ComposerView({
                     </div>
                   </div>
                 )}
-                {form.kind === 'queue' && (
+                {form.kind === 'asap' && (
                   <div className="flex items-start gap-2 text-xs text-muted">
                     <Badge variant="info">ASAP</Badge>
-                    Starts as soon as a concurrency slot <em>and</em> its repo are free — position shown
-                    in the Tasks queue lane.
+                    Books a one-off for the next scheduler sweep (within 30s), then starts as soon as a
+                    concurrency slot <em>and</em> its repo are free — position shown in the Tasks queue lane.
                   </div>
                 )}
               </div>

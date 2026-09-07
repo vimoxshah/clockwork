@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { homedir } from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 
 const LABEL = 'com.clockwork.daemon';
 const PLIST_DIR = `${homedir()}/Library/LaunchAgents`;
@@ -138,7 +139,72 @@ export async function doctor(apiPort = 4747): Promise<DoctorFinding[]> {
     fix: 'Run `clockworkd install`.',
   });
 
+  // 7. the LaunchAgent's Node can actually load the native module.
+  //
+  // `install` bakes an absolute `process.execPath` into the plist while
+  // `pnpm install` compiles better-sqlite3 for whichever Node ran it, and
+  // nothing keeps the two in step. Change Node afterwards — a Homebrew upgrade
+  // is enough — and the service crash-loops on
+  // `NODE_MODULE_VERSION 137 … requires 147` while a hand-started daemon under
+  // the other Node works, so the symptom is an app that is silently dead at
+  // login and healthy when you debug it. Loading the real module with the real
+  // pinned binary is the only check that settles it.
+  if (plistExists) {
+    const abi = nativeModuleAbiCheck();
+    findings.push({
+      check: 'service Node ABI',
+      ok: abi.ok,
+      detail: abi.detail,
+      fix: abi.ok
+        ? undefined
+        : 'Re-run `pnpm install` with the Node in the LaunchAgent, or `clockworkd install` again to pin the current one.',
+    });
+  }
+
   return findings;
+}
+
+/**
+ * Does the Node pinned in the LaunchAgent load the daemon's `better-sqlite3`?
+ * Unproven cases report `ok` — doctor must never invent a failure it cannot
+ * demonstrate.
+ */
+function nativeModuleAbiCheck(): { ok: boolean; detail: string } {
+  let pinned: string;
+  try {
+    const plist = readFileSync(PLIST_PATH, 'utf8');
+    pinned = plist.match(/<string>([^<]*\/node)<\/string>/)?.[1] ?? '';
+  } catch {
+    return { ok: true, detail: 'LaunchAgent unreadable — not checked' };
+  }
+  if (pinned === '') return { ok: true, detail: 'no Node path in LaunchAgent — not checked' };
+  if (!existsSync(pinned)) {
+    return { ok: false, detail: `LaunchAgent points at a Node that no longer exists: ${pinned}` };
+  }
+
+  let modulePath: string;
+  try {
+    modulePath = createRequire(import.meta.url).resolve('better-sqlite3');
+  } catch {
+    return { ok: true, detail: 'better-sqlite3 not resolvable from here — not checked' };
+  }
+
+  // Opening a database, not merely requiring the package: better-sqlite3 loads
+  // its binding lazily, so `require` alone exits 0 under a Node whose ABI the
+  // compiled .node cannot satisfy. Verified — a `require`-only probe reported
+  // this machine's Node 26 as healthy while `new Database` returned the
+  // NODE_MODULE_VERSION 137/147 mismatch.
+  const probe = spawnSync(pinned, ['-e', `new (require(${JSON.stringify(modulePath)}))(':memory:')`], {
+    encoding: 'utf8',
+  });
+  if (probe.status === 0) return { ok: true, detail: `${pinned} loads better-sqlite3` };
+  const why = `${probe.stderr ?? ''}`.match(/NODE_MODULE_VERSION \d+[\s\S]*?requires\s*NODE_MODULE_VERSION \d+/)?.[0];
+  return {
+    ok: false,
+    detail: why
+      ? `${pinned} cannot open a database — ${why.replace(/\s+/g, ' ')}`
+      : `${pinned} cannot open a database with better-sqlite3`,
+  };
 }
 
 function uid(): number {

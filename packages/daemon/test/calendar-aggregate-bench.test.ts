@@ -2,14 +2,15 @@
  * S-64 measured: what the per-day fold actually buys, on a 5,000-run corpus.
  *
  * WHY A SECOND BENCH FILE. `workforce-bench.test.ts` measures the DETAIL year
- * view and records the T-307 finding: the year view's median moved between
- * 349.59ms and 684.26ms on one machine at one commit, decided by machine load,
- * and an 8.8x payload cut (`jobspec_json` → `task_name`) did not move latency
- * at all, because the cost is CPU inside RRULE expansion rather than
- * serialization. This file measures the aggregate against the detail view on
- * ONE corpus in ONE process, so the comparison is not exposed to that spread —
- * a before/after pair taken minutes apart on a laptop would tell you about the
- * laptop.
+ * view and records the T-307 finding. When this file was written that finding
+ * was: the year view's median moved between 349.59ms and 684.26ms on one
+ * machine at one commit, decided by machine load, and an 8.8x payload cut
+ * (`jobspec_json` → `task_name`) did not move latency at all, because the cost
+ * was CPU inside RRULE expansion rather than serialization. This file measures
+ * the aggregate against the detail view on ONE corpus in ONE process, so the
+ * comparison is not exposed to that spread — a before/after pair taken minutes
+ * apart on a laptop would tell you about the laptop. That reasoning is why the
+ * file survives the fix below unchanged in structure.
  *
  * WHAT IS AND IS NOT CLAIMED
  *   - Rows and BYTES are properties of the code. They are asserted, always.
@@ -17,11 +18,18 @@
  *     wall-clock bound here goes through `helpers/bench-gate.ts` exactly as in
  *     `workforce-bench.test.ts`: measured and printed by default, asserted only
  *     under `CLOCKWORK_BENCH_ASSERT=1`.
- *   - The fold is expected NOT to move the total materially, and the numbers
- *     printed below say whether it did. Both modes must decide which days hold
- *     bookings, so both pay the same RRULE replay; only the runs half differs.
- *     The `runs half only` cases isolate that half so the handback can name
- *     where the time went instead of guessing.
+ *   - WHAT THE FOLD MOVES, AND WHEN. Both modes must decide which days hold
+ *     bookings, so both pay the same booking expansion; only the runs half
+ *     differs. While `recurrence.ts` anchored a DTSTART-less rule at 1970, that
+ *     shared half was a 56-year replay that swamped the request, and the fold —
+ *     which really does make the runs half ~2.6x cheaper — was invisible end to
+ *     end. The replay is gone (`advancedAnchorMs`), so the same fold now shows:
+ *     measured 2026-09-07 on an Apple M4 across three full runs, 27.11-29.29ms
+ *     as events against 8.15-13.21ms as counts, with the runs half alone
+ *     18.11-19.27ms against 4.68-7.52ms. The fold did not change; what it was
+ *     hidden behind did. The `runs half only` cases isolate
+ *     that half so the handback can name where the time went instead of
+ *     guessing.
  *
  * CORPUS. Deliberately leaner than `workforce-bench.test.ts`: no FTS index and
  * no `run_outcomes`, because `GET /calendar` reads neither. The dimensions it
@@ -133,8 +141,11 @@ async function timeOnce(fn: () => Promise<unknown>): Promise<number> {
  *
  * Alternating removes the confound instead of arguing about it: neither
  * candidate systematically follows the other, so drift and GC land on both.
- * Five samples and one warmup pair, because each sample costs ~350ms of wall
- * clock and this file runs inside the default suite.
+ * Five samples and one warmup pair: that was chosen when each sample cost
+ * ~350ms of wall clock and this file runs inside the default suite. A sample is
+ * ~29ms now that the RRULE replay is gone, so the sample count is left where it
+ * is — raising it would change what the numbers below can be compared against,
+ * for no measurement benefit.
  */
 async function benchPaired(
   labelA: string,
@@ -405,17 +416,22 @@ describe('S-64 — a year view over 5,000 runs, as events vs as counts per day',
 
     // NFR-3's 500ms median. Gated, and T-307 records why: at one commit on one
     // machine this bound held in six runs of ten and missed in four, decided by
-    // `uptime` load. A red here means "this machine is busy, or this code got
-    // slower", and the bench cannot tell you which.
+    // `uptime` load. Both modes are an order of magnitude under it now, and the
+    // gate still stands — a wall-clock assertion inside the default suite makes
+    // the build's colour a property of the machine at any margin. A red here
+    // means "this machine is busy, or this code got slower", and the bench
+    // cannot tell you which.
     assertLatency('S-64 /calendar year view DETAIL (median, NFR-3: 500ms)', detail.median, 500);
     assertLatency('S-64 /calendar year view AGGREGATE (median, NFR-3: 500ms)', agg.median, 500);
   });
 
   it('the RUNS HALF alone, both modes — where the fold actually saves work', () => {
-    // Isolates SQL + serialization from the RRULE expansion. This is the only
+    // Isolates SQL + serialization from the booking expansion. This is the only
     // part of the handler the fold changes, so it is the only part where a
     // saving can exist; the total above says whether that saving is visible
-    // next to everything else the route has to do.
+    // next to everything else the route has to do. It was not visible while the
+    // expansion replayed from 1970 and this half was ~3% of the request; it is
+    // visible now that the replay is gone and this half is most of it.
     const windowArgs = [YEAR_FROM, YEAR_TO, YEAR_FROM, YEAR_TO, YEAR_FROM, YEAR_TO] as const;
     const WHERE = `(scheduled_for BETWEEN ? AND ?)
           OR (started_at BETWEEN ? AND ?)

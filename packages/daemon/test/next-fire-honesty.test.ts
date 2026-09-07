@@ -39,7 +39,7 @@ let app: FastifyInstance;
 let token: string;
 let realHome: string | undefined;
 
-const auth = (json: Record<string, unknown>): any => ({
+const auth = (json: Record<string, unknown>): Record<string, unknown> => ({
   ...json,
   headers: { authorization: `Bearer ${token}` },
 });

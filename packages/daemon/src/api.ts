@@ -1527,13 +1527,25 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
   // they applied in `limits`, so a caller can always tell a complete answer
   // from a capped one.
   //
-  // HONEST NOTE ON COST. The fold is a payload and row-count win, not a
-  // latency win. `GET /calendar`'s latency is dominated by RRULE expansion —
-  // `recurrence.ts` anchors a DTSTART-less rule at 1970, so `RRule.between()`
-  // replays every occurrence since then before it reaches the window (~26ms
-  // per enabled daily schedule). Both modes pay that identically, because both
-  // have to know which days hold bookings. Measured both ways in
-  // `packages/daemon/test/calendar-aggregate-bench.test.ts`.
+  // HONEST NOTE ON COST, REVISED 2026-09-07. This used to read "the fold is a
+  // payload win, not a latency win", and that was a true description of the
+  // code as it then stood: `recurrence.ts` anchored a DTSTART-less rule at
+  // 1970, so `RRule.between()` replayed 56 years of occurrences per schedule
+  // (~26ms per enabled daily one) and swamped everything else in the handler.
+  // Both modes paid that identically, because both have to know which days hold
+  // bookings — so folding the runs half changed nothing a caller could feel.
+  //
+  // That replay is gone (`advancedAnchorMs` in `recurrence.ts`), and the fold is
+  // a latency win as well as a payload one now. It is not that the fold got
+  // better; the saving it always made is simply no longer hidden behind the
+  // replay. Measured 2026-09-07 on an Apple M4, three full runs of
+  // `packages/daemon/test/calendar-aggregate-bench.test.ts` over 5,000 runs in a
+  // 396-day window: 1.130MB of events against 51.4KB of day rows (22.5x, byte
+  // identical in all three), and 27.11-29.29ms end to end against 8.15-13.21ms
+  // — interleaved, so neither mode systematically follows the other and pays
+  // for its GC. The runs half on its own is 18.11-19.27ms against 4.68-7.52ms;
+  // that half is the only part the fold touches, and it is now most of the
+  // request rather than ~3% of it.
   app.get('/calendar', async (req, reply) => {
     const q = req.query as Record<string, unknown>;
     const to = q.to ? parseInt(String(q.to), 10) : Date.now() + 31 * 86_400_000;
@@ -1601,11 +1613,13 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     let runsTruncated = false;
 
     if (group === 'day') {
-      // The fold happens in SQLite. Not because the SQL is the expensive part
-      // (it is ~12ms of a ~355ms year view) but because it is the part that
-      // scales with history: this never materializes 5,000 rows in JS, never
-      // parses 5,000 jobspec blobs for a name the aggregate does not use, and
-      // never serializes them.
+      // The fold happens in SQLite because that is the part that scales with
+      // history: this never materializes 5,000 rows in JS, never parses 5,000
+      // jobspec blobs for a name the aggregate does not use, and never
+      // serializes them. It is no longer a rounding error either — with the
+      // 1970 RRULE replay gone, the runs query is more than half of the year
+      // view's 40.82-42.17ms median (three runs, 2026-09-07, Apple M4), where
+      // it used to be ~12ms of ~355ms.
       //
       // `GROUP BY` emits a row only for a day that HAS runs, so the result is
       // bounded by the number of non-empty days — never by the window's span.
@@ -1652,9 +1666,11 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       // (prompt, profile, skills, paths) made the year view a 10.16MB
       // response; projecting the one field it reads makes it 1.15MB. Measured
       // on the 5k corpus in packages/daemon/test/workforce-bench.test.ts. This
-      // is a payload/memory win, NOT a latency win — request latency is
-      // dominated by the RRULE expansion, see that file's notes on
-      // recurrence.ts.
+      // is a payload/memory win, and it was measured as one: when it landed it
+      // moved no latency at all, because the request was dominated by the RRULE
+      // replay. That replay is gone (see the HONEST NOTE above) and this is
+      // still a payload win — dropping the blob is what keeps a 5,000-row
+      // answer near 1.1MB instead of 10MB.
       // json_extract, NOT a join to tasks.name: the calendar must keep showing
       // the name the run was booked under, not the task's current name.
       //

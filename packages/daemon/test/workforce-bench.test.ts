@@ -13,7 +13,10 @@
  *          (NFR-3, plan/01-product-spec.md:91 — "calendar renders 5,000
  *          historical runs <500ms"; S-64 is the year view). Exercised through
  *          `app.inject('/calendar')`, i.e. the SQL, the RRULE expansion and
- *          the JSON serialization the daemon really pays.
+ *          the JSON serialization the daemon really pays. This was the bound
+ *          that decided whether a gated run went red; since the RRULE
+ *          epoch-anchor replay was removed from recurrence.ts it is not close.
+ *          The gate stays anyway — see below.
  *   S-9    the 500-task / 50-due tick fixture must not regress behind the
  *          twelve workforce features. Same shape as scheduler.test.ts:317,
  *          measured here on its own DB so that fixture is untouched, and
@@ -32,10 +35,17 @@
  *   suite's colour a property of the machine rather than of the code. On
  *   2026-09-06, on one Apple M4 at one commit inside 90 minutes, six runs of
  *   THIS FILE under `CLOCKWORK_BENCH_ASSERT=1` split three red and three
- *   green: the S-64 bound below measured 623.17 / 684.26 / 579.59ms at
+ *   green: the year-view bound below measured 623.17 / 684.26 / 579.59ms at
  *   `uptime` load 12.5-27.1 and 383.93 / 376.56 / 349.59ms at load 7.4-7.9,
  *   against 500ms. The default `pnpm test` was green in both conditions. Two
  *   verdicts for one commit, decided by machine load.
+ *
+ *   That same measurement reads 40.82-42.17ms on 2026-09-07, on the same
+ *   machine, after the anchor fix in recurrence.ts — so a busy laptop is less
+ *   to decide the verdict now. The gate does not move with the margin. The
+ *   reason a bound is opt-in is that a wall-clock assertion inside the default
+ *   suite makes the build's colour a property of the machine, and that holds at
+ *   any margin.
  *
  *   So every wall-clock bound in this file goes through `assertLatency`
  *   (`test/helpers/bench-gate.ts`):
@@ -99,12 +109,17 @@ import { assertLatency } from './helpers/bench-gate.js';
 // Gating the ASSERTIONS (`helpers/bench-gate.ts`) shut one door and left the
 // second one open. These tests inherit `testTimeout: 30_000` from
 // `packages/daemon/vitest.config.ts`, and the T-307 year view spends 1 probe +
-// 2 warmups + 15 samples inside ONE `it()`: ~11s of that 30s budget at the
-// 585ms median measured on an Apple M4, with a single sample already at
-// 1196ms. A machine ~2.7x slower, or a loaded CI runner, blows the budget and
-// the default suite goes red as a TIMEOUT instead of as an assertion — the
-// same "your laptop was busy" verdict the gate exists to prevent, wearing a
-// different hat.
+// 2 warmups + 15 samples inside ONE `it()`. When that view cost a 585ms median
+// on an Apple M4 — with a single sample already at 1196ms — those 18 requests
+// were ~11s of the 30s budget, so a machine ~2.7x slower or a loaded CI runner
+// blew it and the default suite went red as a TIMEOUT instead of as an
+// assertion: the same "your laptop was busy" verdict the gate exists to
+// prevent, wearing a different hat.
+//
+// The year view is 40.82-42.17ms as of 2026-09-07, so the same 18 requests are
+// under a second and the budget is no longer tight. The headroom stays: it costs a
+// hung test thirty seconds of extra patience and nothing else, and the corpus
+// seed in `beforeAll` still needs a wider hook budget than the default 10s.
 //
 // So this file buys its own budget. `vi.setConfig` is file-scoped (verified
 // against vitest 2.1.9: a 50ms setting really did time a 400ms test out), and
@@ -606,16 +621,27 @@ describe('T-307 — calendar windowing over 5,000 historical runs (NFR-3 <500ms)
       expect(res.statusCode).toBe(200);
     });
 
-    // MEASURED, and the breakdown matters more than the total:
-    //   353.55ms median / 10.16MB payload  — before the task_name projection
-    //   358.69ms median /  1.15MB payload  — after it
-    // The projection is a payload win (8.8x), NOT a latency win. Latency is
-    // ~320ms of RRULE expansion: recurrence.ts:70-72 anchors a DTSTART-less
-    // rule at 19700101, so RRule.between() replays every occurrence since 1970
-    // before it reaches the window — 25.76ms for one FREQ=DAILY rule, 6.18ms
-    // for one FREQ=WEEKLY, against 0.11ms for the same daily rule anchored near
-    // the window. This corpus holds 10 daily + 10 weekly => ~319ms. The runs
-    // SQL is 12.43ms of the total (measured separately below).
+    // MEASURED. Two separate findings live here and they must not be merged.
+    //
+    // 1. THE PAYLOAD PROJECTION (task_name instead of the whole jobspec blob):
+    //      353.55ms median / 10.16MB payload  — before
+    //      358.69ms median /  1.15MB payload  — after
+    //    An 8.8x payload win and no latency movement, because the request was
+    //    not serialization-bound.
+    // 2. WHAT IT WAS BOUND BY, and what removed it: recurrence.ts anchored a
+    //    DTSTART-less rule at 19700101, so RRule.between() replayed every
+    //    occurrence since 1970 before reaching the window — 25.76ms for one
+    //    FREQ=DAILY rule, 6.18ms for one FREQ=WEEKLY, against 0.11ms for the
+    //    same daily rule anchored near the window. This corpus holds 10 daily +
+    //    10 weekly, so ~319ms of a ~355ms request was replay. advancedAnchorMs()
+    //    now moves the synthetic anchor forward by whole INTERVAL periods and
+    //    that cost is gone: this case measured 40.82-42.17ms median and
+    //    52.90-67.14ms p95 across three full runs on 2026-09-07, and the same
+    //    daily rule 0.092-0.167ms in isolation (recurrence-anchor.test.ts). The
+    //    runs SQL — 22.54-23.80ms, measured separately below — is now more than
+    //    half of the total rather than 3% of it, which is what "the SQL was
+    //    never the problem" looks like once the problem is gone.
+    //
     // The bound holds on this machine (Apple M4). T-307's acceptance surface is
     // "a base M1 Air" (plan/05-execution-plan.md:100), which was NOT measured.
     assertLatency('T-307 /calendar year view (median, NFR-3: 500ms)', st.median, 500);
@@ -638,16 +664,24 @@ describe('T-307 — calendar windowing over 5,000 historical runs (NFR-3 <500ms)
       5,
       1,
     );
-    // Barely cheaper than the year view (325.78ms vs 358.69ms) even though it
-    // returns ~1/6th the rows: more evidence that the cost is the per-schedule
-    // RRULE replay from 1970, not the window size.
+    // This case was the clearest evidence of where the cost was: it returns
+    // ~1/6th the rows and used to be barely cheaper than the year view
+    // (325.78ms vs 358.69ms), because both paid the same per-schedule RRULE
+    // replay from 1970 regardless of window size. With the replay gone the two
+    // separate again by roughly what they return: 13.80-16.62ms median and
+    // 18.14-23.62ms p95 here against 40.82-42.17ms and 52.90-67.14ms for the
+    // year view (three full runs, 2026-09-07).
     assertLatency('T-307 /calendar default window (median, NFR-3: 500ms)', st.median, 500);
     assertLatency('T-307 /calendar default window (p95, headroom: 1500ms)', st.p95, 1_500);
   });
 
   it('the runs SQL alone (no serialization, no RRULE expansion) over the full history', () => {
     // Isolates the storage half of the handler from the JSON half, so the
-    // handback can say which one dominates instead of guessing.
+    // handback can say which one dominates instead of guessing. Its own number
+    // has barely moved across this whole line of work — 12.43ms when the
+    // replay dominated, 22.54-23.80ms across three full runs on 2026-09-07 —
+    // but its SHARE went from ~3% of the request to more than half, which is
+    // the finding.
     const from = ANCHOR - 365 * DAY_MS;
     const to = ANCHOR + 31 * DAY_MS;
     const stmt = corpus.db.prepare(
@@ -854,12 +888,16 @@ describe('S-9 — tick loop at scale, with the twelve workforce features present
     // nextOccurrenceAfter -> occurrencesBetween over a 732-day horizon.
     //
     // PRE-EXISTING COST, NOT A WORKFORCE REGRESSION: recurrence.ts is T-103
-    // code and none of the twelve workforce features touch it. Measured in
-    // isolation, one nextOccurrenceAfter call costs 26.89ms for FREQ=DAILY and
-    // 4.65ms for FREQ=WEEKLY, against 0.10ms for the equivalent cron — because
-    // a DTSTART-less rule is anchored at 19700101 (recurrence.ts:70-72) and
-    // RRule.between() replays every occurrence since then. 50 daily fires
-    // therefore cost ~1.3s of a tick that has a 30s budget.
+    // code and none of the twelve workforce features touch it. It used to cost
+    // 26.89ms per nextOccurrenceAfter call for FREQ=DAILY and 4.65ms for
+    // FREQ=WEEKLY, against 0.10ms for the equivalent cron, because a
+    // DTSTART-less rule was anchored at 19700101 and RRule.between() replayed
+    // every occurrence since then — so 50 daily fires cost ~1.3s of a tick with
+    // a 30s budget, and this case measured 1439.55-1581.01ms. The synthetic
+    // anchor is advanced now (advancedAnchorMs in recurrence.ts) and the same
+    // case measured 104.86-183.72ms across three full runs on 2026-09-07. It
+    // was inside the 5s bound before and it still is; what changed is the
+    // margin.
     const h = freshSchedulerDb();
     try {
       seed500Rrule(h.db, h.clock);
