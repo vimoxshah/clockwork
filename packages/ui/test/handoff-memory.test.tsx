@@ -12,8 +12,32 @@ async function render(node: JSX.Element): Promise<HTMLDivElement> {
   const container = document.createElement('div');
   document.body.appendChild(container);
   createRoot(container).render(node);
-  await new Promise((r) => setTimeout(r, 30));
+  await settle(container);
   return container;
+}
+
+/**
+ * Waits for the panel's initial fetch AND its re-render, instead of sleeping a
+ * fixed 30ms. The fixed sleep passed locally and lost the race on CI's loaded
+ * runner, where the container was still empty when the assertions ran — the
+ * failure read `expected '' to contain 'nothing carried over yet'`, which is
+ * the shape of a test that measured nothing rather than a component that broke.
+ *
+ * Settled means two consecutive reads agree and the panel has rendered
+ * something, so it holds for both the populated and the empty-state cases.
+ */
+async function settle(container: HTMLElement, timeoutMs = 5_000): Promise<void> {
+  const startedAt = Date.now();
+  let previous: string | null = null;
+  for (;;) {
+    const current = container.textContent ?? '';
+    if (current.length > 0 && current === previous) return;
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error(`panel never settled in ${timeoutMs}ms; last render was ${JSON.stringify(current.slice(0, 120))}`);
+    }
+    previous = current;
+    await new Promise((r) => setTimeout(r, 10));
+  }
 }
 
 const now = 1_700_000_000_000;

@@ -12,6 +12,7 @@ import { RetentionAudit } from './retention-audit.js';
 import { SystemClock } from './clock.js';
 import { Scheduler, buildJobSpec } from './scheduler.js';
 import { RunManager } from './run-manager.js';
+import { KeepAwake } from './keep-awake.js';
 import { SafetyJournal } from '@clockwork/runner';
 import { buildServer } from './api.js';
 import { TaskRepo, ProfileRepo } from './repo.js';
@@ -251,10 +252,20 @@ export async function main(argv: string[] = process.argv): Promise<number> {
   const taskRepo = new TaskRepo(db);
   void taskRepo;
 
+  // FR-25/S-15. This class shipped written, tested and CONSTRUCTED BY NOTHING:
+  // `run-manager` took it as an optional dep and every scheduled run therefore
+  // armed no power assertion at all, while the docs said one was armed. Same
+  // defect shape as `single-instance.ts` being imported by no file. It is safe
+  // to arm unconditionally here — `arm()` is a no-op off macOS, declines on
+  // battery unless opted in, is idempotent per run, and swallows a spawn
+  // failure.
+  const keepAwake = new KeepAwake({ allowOnBattery: process.env.CLOCKWORK_KEEP_AWAKE_ON_BATTERY === '1' });
+
   const runManager = new RunManager({
     db,
     clock,
     dataDir,
+    keepAwake,
     runnerChildModule: resolve(dirname(fileURLToPath(import.meta.url)), './runner-child.js'),
     maxParallel: parseInt(process.env.CLOCKWORK_MAX_PARALLEL ?? '2', 10),
     notify: (kind, title, body) => {
@@ -349,6 +360,7 @@ export async function main(argv: string[] = process.argv): Promise<number> {
   telegramPoller?.start();
 
   const shutdown = (): void => {
+    keepAwake.releaseAll(); // never leave a caffeinate child holding the Mac awake
     scheduler.stop();
     retention.stop();
     driftWatch.stop();

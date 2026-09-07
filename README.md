@@ -10,7 +10,7 @@ Schedule recurring AI agent jobs on a real calendar. Clockwork executes them
 unattended in isolated, sandboxed worktrees — and files a report you can
 actually read.
 
-[Website](https://clockwork.vmoksh-shah179.workers.dev/) · [Download](#-installation) · [Contact](mailto:vmoksh.shah179@gmail.com) · [Agent Library](#-agent-profile-library) · [Providers](#-providers) · [Security](#%EF%B8%8F-security-model)
+[Website](https://clockwork.vmoksh-shah179.workers.dev/) · [Download](#-installation) · [Contact](mailto:vmoksh.shah179@gmail.com) · [Agent Library](#-agent-profile-library) · [Agent Workforce](#-agent-workforce) · [Providers](#-providers) · [Security](#%EF%B8%8F-security-model)
 
 ![platform](https://img.shields.io/badge/platform-macOS-black) ![license](https://img.shields.io/badge/license-proprietary-red) ![tests](https://img.shields.io/badge/tests-passing-brightgreen) [![pages](https://img.shields.io/badge/docs-GitHub%20Pages-orange)](https://vimoxshah.github.io/clockwork/)
 
@@ -32,6 +32,7 @@ sticky notes. Clockwork gives that work a home on a **real calendar**:
 | Unbounded token spend | USD soft cap, plus hard turn / wall-clock caps |
 | Agent has your whole disk | Per-run OS-sandboxed git worktree |
 | Find last Tuesday's run: scrollback | Full-text search across retained history |
+| The agent's work is never graded | An explicit verdict per run — accept, reject, or accept with a note the next occurrence reads |
 
 ## Screenshots
 
@@ -52,7 +53,7 @@ RUN     Your own CLI engine executes unattended inside an OS-sandboxed
         git worktree. Never touches main. SSH keys unreadable.
   ↓
 REVIEW  A human-readable report lands in your inbox — what it did,
-        what it skipped and why, what it cost.
+        what it skipped and why, what it cost. You record a verdict.
   ↓
 REPEAT  Make it weekly. Search your retained run history.
 ```
@@ -61,17 +62,24 @@ REPEAT  Make it weekly. Search your retained run history.
 
 - 🗓 **A real calendar** — month/week views, recurrence (RRULE + cron),
   missed-run policies, per-repo mutex, queue with reasons
-- 👤 **Human + agent time** — subscribe your personal calendar via read-only
-  ICS; see meetings next to scheduled agent work
+- 👤 **Human + agent time** — subscribe your personal calendar via a read-only
+  ICS URL, or import a local `.ics` file as a dated snapshot you re-import
+  yourself. Recurring external events render as a single `(recurring)` base
+  occurrence — Clockwork does not expand an external RRULE
+  (`packages/daemon/src/ics.ts`)
 - 🔀 **Provider freedom** — Claude Code, Codex CLI, OpenCode, and Hermes Agent;
   switch per task without rebuilding anything
 - 🤖 **13 production-grade agent profiles** — Dependency Surgeon, Test Doctor,
   Security Auditor, Code Reviewer and more, each with mission, constraints,
   safety rails, and an output contract
 - 🛡 **Human-in-the-loop approvals** — risky actions pause the run and ask you;
-  unanswered asks fail safe (never silently approved), and pings your configured
-  channels (macOS notification, Telegram, webhook) when a run is waiting —
-  approve or deny from Telegram itself, no need to open the app
+  unanswered asks fail safe (never silently approved), and notify you when a run
+  is waiting. The macOS notification is unconditional — no per-task setting gates
+  it. Telegram is the one channel you configure from the app (Settings, plus a
+  chat id per task), and you can approve or deny from the Telegram message itself
+  (`packages/daemon/src/telegram-approvals.ts`) without opening Clockwork. A
+  third channel, an HMAC-signed outbound webhook, exists in the daemon and its URL
+  is set through the API only; there is no screen for it
 - 🧱 **Policy floor in every mode** — force-pushes to protected branches and
   package publishing are refused before they run on the Claude engine, even when
   the CLI would not have asked (a `PreToolUse` hook, fail-closed, ~60 ms per call)
@@ -85,24 +93,33 @@ REPEAT  Make it weekly. Search your retained run history.
   OpenAI, Google, OpenRouter, xAI, Mistral, DeepSeek, Ollama, custom gateways)
   with keys sealed in the macOS Keychain, connection validation, and clear
   separation from CLI-subscription billing
-- 🏛 **Governance built-in** — policy engine (engine allow-lists, per-run cost
-  ceilings, approval thresholds), append-only audit log, retention sweeps
+- 🏛 **Governance, with the seams shown** — the policy engine really does run on
+  every task create, task edit and webhook fire (engine allow-lists and a per-run
+  cost ceiling, `packages/daemon/src/policy-engine.ts`), and control-plane
+  mutations really are appended to the audit log. But *reading* either back is a
+  paid route: `GET /policies` and `GET /audit` answer **402** on the free tier,
+  which is the tier every install runs at today, and neither has a screen. The
+  retention sweep runs on a cadence and at startup (default 90 days / 1000 runs
+  per task, `packages/daemon/src/retention-audit.ts`) and has no screen either.
+  `requireApprovalOverUsd` is stored and validated but nothing consumes it yet
 - 📊 **Cost & reliability analytics** — spend by task/provider/day with
-  optimization suggestions that surface money-burning failures
+  optimization suggestions that surface money-burning failures. Runs still in
+  flight count as runs and as spend, are reported separately, and are excluded
+  from every rate denominator and from average duration
+  (`packages/daemon/test/analytics.test.ts`)
 - 🏠 **Local-first** — SQLite in `~/.clockwork`, loopback-only API, no account,
-  no cloud, no telemetry
-- 🧑‍💼 **Agent workforce (12 features)** — a plan-then-execute approval gate,
-  shift-handoff memory across occurrences, an opt-in office-hours approval
-  deferral that fails open (and applies only to autonomy-enrolled profiles),
-  sentinel→worker trigger pairs, repo-shipped job
-  offers that can never inherit a repo's own choice of permissions or budget,
-  accept/reject-with-a-note, an earned-autonomy ladder that only ever
-  *offers* the next rung (never auto-grants it), self-healing diagnostics
-  that *propose* a prompt/profile fix for a human to apply (never
-  self-apply), agent-proposed calendar events as a download-only `.ics`
-  (never written to your real calendar), agent timesheets, agent
-  performance scorecards, and a portable proof-of-work export — full guide:
-  [docs/agent-workforce.md](docs/agent-workforce.md)
+  no cloud, no telemetry. The other side of that: **runs happen only while your
+  Mac is awake**. Clockwork holds it awake across a run's window when you are on
+  mains power, but it cannot wake a sleeping machine — see
+  [Known limits](#-known-limits). There is no *Clockwork-hosted* runner and none
+  is planned: it would need your provider key, which would negate the Keychain
+  promise
+- 🧑‍💼 **Agent workforce (12 features)** — plan-then-execute approval gates,
+  shift-handoff memory, office hours, sentinel→worker pairs, repo-shipped job
+  offers, run verdicts, an earned-autonomy ladder, self-healing diagnostics,
+  agent-proposed calendar events, timesheets, scorecards, and a portable
+  proof-of-work export. All twelve have a screen; three of them actually gate
+  something. [Full table below](#-agent-workforce)
 
 Event triggers — webhooks and GitHub events start tasks; see
 [docs/triggers.md](docs/triggers.md).
@@ -151,12 +168,82 @@ defines mission, constraints, hard safety rules, and an output contract.
 | **Security Auditor** — report-only defensive scan; secrets masked | |
 | **Release Engineer** — version/changelog/build readiness checks | |
 
+Twelve specialists, plus a **Generalist** for work that does not fit one — thirteen
+seeded profiles in all (`packages/daemon/src/profiles.ts` +
+`packages/daemon/src/profile-library.ts`).
+
 Create your own in-app (**Agents → New profile**): pick skills, permission
 mode, budget defaults, and system prompt — bookable a minute later.
+
+## 🧑‍💼 Agent Workforce
+
+Twelve features that turn a calendar of scheduled runs into something closer to
+a team you manage. Every one of them has a screen in this build, and each screen
+declares its own location at the module scope of the file that mounts it
+(`packages/ui/src/components/featureSurfaces.ts`) — so the capability matrix
+behind **Settings → "What does each plan include?"** can tick a capability only
+when a mounted component actually registered one, and the tick doubles as a link
+that takes you there. Forgetting to register under-claims; it cannot over-claim.
+
+**Read the status column literally.** It is the word `packages/daemon/src/features.ts`
+carries, and that file defines the two values narrowly:
+
+- **enforced** — daemon code *outside* the `/workforce/*` routes refuses or
+  defers a user action because of this feature.
+- **available** — you can reach it today, and it gates nothing.
+
+Three qualify as enforced. The other nine are real features you can use; they
+just do not stand in anything's way.
+
+| Feature | Where it lives | Status | What it does, and what it refuses |
+|---|---|---|---|
+| **Plan → execute** | `Tasks › Plan → execute` | **enforced** | One booking becomes two runs: a `plan`-mode run at an hour you pick, then an execute half created `enabled=0` that stays that way. Approving the plan books the execute run directly rather than re-enabling the task. **Refuses:** while the pair is unapproved, `POST /tasks/:id/run-now` and a webhook fire on the execute half both return **409**; `PATCH /tasks/:id {"enabled":true}` on an execute half returns 409 at *any* pair status, because re-enabling it would let a later plan run fire it through the chain with a plan nobody read (`planExecuteGate`, `packages/daemon/src/api.ts`). |
+| **Shift handoff** | `Inbox › a run’s report` | available | A recurring task carries a memory across occurrences — what it tried, what blocked it, what to check next. **One setup step is yours:** the memory is injected only if the prompt contains the literal `{{handoff.previous}}`. A task that does not ask never gets it. |
+| **Office hours** | `Settings › Office hours` | **enforced** | You declare the windows in which you can answer an approval. **Defers, never cancels:** a due fire is pushed to the next window and the occurrence is recorded `deferred`. It applies only to tasks whose *profile* carries `may_require_approval`, and no profile route sets that column — autonomy enrolment is the only writer, which makes it a **three**-step setup, not two. Off by default, and it fails open: a broken config, no matching window, or an unflagged profile all mean "fire on schedule". |
+| **Sentinel → worker** | `Tasks › Sentinels` | available | A cheap, frequent check books the expensive run when it trips, through the same policy and trigger path a webhook fire uses. Every evaluation is written down — a non-trip, a cooldown, a disabled sentinel, and a policy refusal each leave a row with its reason. **Refuses (422):** a sentinel bound to a trigger that books the sentinel itself, which is an infinite loop. |
+| **Repo-shipped jobs** | `Tasks › Repo jobs` | available | A repo can declare recommended jobs in `.clockwork/jobs.json` (or `.yaml`, through a restricted parser that adds no new dependency). Clockwork **offers** them and imports nothing on its own; import creates the task **disabled**, behind a security preview computed at discovery time. **The job file cannot choose its own power or budget:** import hardcodes `acceptEdits`, $2 / 50 turns / 1h and no profile, whatever the file asks for. The red-flag 422 on import is real but unreachable from discovery — see the F5 note in the guide before treating it as a defence. |
+| **Accept with a note** | `Inbox › a run’s report` | available | The per-run verdict: accept, reject, or accept-with-a-note. Re-deciding updates the verdict instead of stacking a second one. A note is appended to that task's handoff memory as a human-authored entry, so your correction is what the next occurrence's agent reads. This is the acceptance signal the autonomy ladder, timesheets and scorecards all read. |
+| **Earned autonomy** | `Settings › Earned autonomy` | **enforced** | Opt-in, and a rung is **offered, never granted** — a streak of accepted runs writes an offer row and nothing else; only your acceptance writes the new rung. **Refuses (403 `autonomy_rung_exceeded`)** at task create, task patch and the webhook fire path — in practice only when the profile sits at the bottom `plan` rung and the task asks for another mode. The top two rungs share the permission mode `acceptEdits`, so neither refuses anything; the `acceptEdits → unattended` step's whole effect is to clear the office-hours flag. Enrolling **overwrites** the profile's permission mode, and the app warns before it does. An unenrolled profile is unconstrained, on purpose. |
+| **Self-healing** | `Inbox › Approvals (remediation proposals)` | available | After N consecutive failures (default 3) Clockwork books one diagnostic run with the failed transcripts as context, whose instruction is "propose exactly one change, change nothing". The output is an approval item. **The agent never edits its own prompt or profile:** inside this feature, `apply()` is the only writer of `tasks.prompt` / `tasks.profile_id`, and it runs only from your click on *Apply change* — never from inside the diagnostic run (`packages/daemon/src/self-healing.ts`). Elsewhere in the product, `PATCH /tasks/:id` can still write both columns; that is your edit, not the agent's. At most one diagnostic per failure streak; a failed diagnostic books no second one. |
+| **Proposed events** | `Inbox › a run’s report (when it proposes events)` | available | A report may suggest calendar events, offered as a download. **Clockwork never writes to your calendar** — there is no write path in the module, and the ICS overlay stays read-only. Model output is untrusted, so the parse is bounded: ≤20 suggestions, ≤8 KB block, first block only, Clockwork assigns the `.ics` UID, control characters stripped, credentials masked, and a bad block costs the suggestions rather than the run (`packages/runner/src/proposed-events-parse.ts`). Nothing is injected into your prompts, so an agent that is never asked proposes nothing. |
+| **Timesheets** | `Analytics › Timesheets` | available | Hours worked, dollars spent, outcomes accepted, and an effective hourly rate per profile over any range — against an optional rate for your own time. **The accuracy caveat is shown unconditionally,** because a run that was still active when the daemon restarted is closed out at the restart time and so counts the downtime as work; the per-row flag on top of that is best-effort. The rate is `null`, never `Infinity` or `0`, when no hours were worked. |
+| **Performance reviews** | `Analytics › Performance reviews` | available | Acceptance rate, failure rate and cost trend against the prior window — **plain SQL, no model call**. An unreviewed agent reads as "not yet reviewed", never as a 0% failure. `/review-prompt` returns the *text* of a prompt; writing the prose review means scheduling a task with it. No seeded reviewer profile does that for you. |
+| **Proof-of-work export** | `Inbox › a run’s report` | available | One run's report as a single self-contained HTML file you host yourself — no script tags, no stylesheet links, no remote images, no telemetry pixel. Secrets are masked with no flag to turn it off, every interpolation is escaped, `redactPaths` strips repo/worktree/branch, the transcript is **off by default**, and every export is audited. |
+
+Routes, refusal paths, per-feature tests and the measured numbers:
+[docs/agent-workforce.md](docs/agent-workforce.md).
 
 ## 📦 Installation
 
 > macOS 14+ (Apple silicon). Free during beta.
+
+### Download the app
+
+```bash
+# 1. Verify the bytes BEFORE you trust them
+shasum -a 256 ~/Downloads/Clockwork_0.8.0_aarch64.dmg
+curl -s https://clockwork.vmoksh-shah179.workers.dev/downloads/checksums-sha256.txt
+# if the two do not match: stop, do not install, report it
+
+# 2. Open the DMG, drag Clockwork to Applications, then clear quarantine
+xattr -dr com.apple.quarantine /Applications/Clockwork.app
+
+# 3. Launch
+open -a Clockwork
+```
+
+**Releases are unsigned.** There is no Apple Developer certificate on this
+project, so the release workflow ad-hoc signs the bundle
+(`.github/workflows/release.yml` exports `APPLE_SIGNING_IDENTITY="-"` when no
+certificate is configured) and nothing is notarized. macOS Gatekeeper will
+refuse the app — often with a misleading "damaged" message — until you clear the
+quarantine flag by hand. Clearing it tells your Mac you trust that specific
+binary, which is exactly why the hash check comes first. Homebrew
+(`brew install --cask clockwork`) verifies the SHA-256 for you but cannot skip
+quarantine either. Full detail, including the Homebrew tap:
+[docs/install.md](docs/install.md).
+
+### Or build it from this source
 
 ```bash
 # 1. Clone and install
@@ -190,8 +277,9 @@ Prerequisites:
 pnpm tauri build          # unsigned .app + DMG in src-tauri/target/release/bundle/
 ```
 
-The Tauri shell loads the local daemon URL; signing/notarization is left to
-your Apple Developer setup.
+The Tauri shell loads the local daemon URL. This build is unsigned and
+un-notarized; the release workflow only signs when Apple Developer credentials
+are present in CI, and they are not.
 
 </details>
 
@@ -204,6 +292,10 @@ npx tsx packages/daemon/src/cli.ts install
 clockworkd doctor        # verifies PATH, providers, data dir
 ```
 
+Only one daemon may hold the port; a second one exits with a diagnostic naming
+the version skew instead of crash-looping behind an older build. The app shows a
+restart banner when the running daemon and the one on disk disagree.
+
 </details>
 
 ## 🚀 First run in 60 seconds
@@ -212,7 +304,8 @@ clockworkd doctor        # verifies PATH, providers, data dir
 2. Name it "Nightly dependency triage", pick the **Dep Surgeon** profile
 3. Choose your repo, set a $1 cap, leave provider = Claude Code
 4. Schedule: weekly, Monday 07:00 — or just hit **ASAP**
-5. Come back later: the report is in your **Inbox** — branch, diffstat, cost
+5. Come back later: the report is in your **Inbox** — branch, diffstat, cost.
+   Record a verdict while you are there; several features read it.
 
 ## ⌨️ Keyboard shortcuts
 
@@ -224,7 +317,8 @@ clockworkd doctor        # verifies PATH, providers, data dir
 | `⌘,` | Settings |
 | `/` | Focus inbox search |
 
-Full list: [docs/SHORTCUTS.md](docs/SHORTCUTS.md)
+Analytics sits between Tasks and **+ New task** in the tab bar and has no
+shortcut of its own. Full list: [docs/SHORTCUTS.md](docs/SHORTCUTS.md)
 
 ## 🏗 Architecture
 
@@ -252,6 +346,12 @@ Full list: [docs/SHORTCUTS.md](docs/SHORTCUTS.md)
   `packages/ui` (React + Tailwind design system)
 - **Deterministic tests:** `CW_MOCK_STEP_MS` makes full-loop integration tests
   sample intermediate states without sleeps
+- **A screen declares itself:** a capability is ticked as reachable only when the
+  component that mounts it registers a surface at module scope
+  (`packages/ui/src/components/featureSurfaces.ts`,
+  `packages/ui/src/components/LicenseCard.tsx`). A feature that ships a daemon
+  route with no screen, or an orphan component nobody imports, registers nothing
+  — so the failure mode is a missing tick, not a false one
 
 ## ⚖️ Security Model
 
@@ -280,13 +380,66 @@ are the security boundary, dual-licensed under Apache-2.0 (LICENSE §12), and
 writes a fake secret into `~/.ssh` and `~/.aws`, then runs `cat` inside the
 sandbox and asserts it fails.
 
-What that does **not** prove: that the DMG you downloaded was built from this
-source. Releases are built by GitHub Actions from this repository and the
-checksums are published, but reproducing the binary yourself is not yet
-supported. The Seatbelt profile also permits `system-socket` — the ssh-agent
-claim holds because of the run-env allowlist, not the sandbox.
+What that does **not** prove:
+
+- That the DMG you downloaded was built from this source. Releases are built by
+  GitHub Actions from this repository and the checksums are published, but
+  reproducing the binary yourself is not yet supported.
+- That Apple has checked anything. The build is **not signed with an Apple
+  Developer identity and not notarized** — see [Installation](#-installation).
+- That the sandbox alone stops ssh-agent forwarding. The Seatbelt profile permits
+  `system-socket`; that claim holds because of the run-env allowlist, not the
+  sandbox.
 
 Details: [docs/security.md](docs/security.md) · [docs/privacy.md](docs/privacy.md)
+
+## 🔍 Known limits
+
+Open, reproducible, and written down here rather than discovered by you:
+
+- **A refused execute booking strands its pair.** When you approve a plan, the
+  verdict commits first and the booking is attempted second. If the booking is
+  refused — the policy engine rejects the execute half, the execute task was
+  deleted between the plan run and your decision, or the booker throws — the pair
+  stays at status `approved` with no execute run, and a second resolve answers
+  `already_resolved`, so nothing re-books it
+  (`packages/daemon/src/plan-execute.ts:327`, `:349`). A policy refusal is
+  audited (`plan_execute.book_rejected`) rather than silent. *Run now* on that
+  half is allowed once the pair reads `approved`, but that path does not bind the
+  approved plan into the prompt, so it is not an equivalent recovery. (A **paused**
+  daemon is not one of these cases: the run is queued and the pair reaches
+  `executed` normally.)
+- **The calendar latency ceiling is unproven on the acceptance machine.** Every
+  number was measured on an Apple M4; the acceptance criterion names a base M1
+  Air, which has never been measured at all. On the M4 the year-view median met
+  the 500 ms bound in six of ten runs and missed it in four, decided by machine
+  load rather than by code, so the bench measures by default and only asserts
+  under `CLOCKWORK_BENCH_ASSERT=1`. Root cause found and not fixed: a synthetic
+  1970 `DTSTART` makes RRULE expansion replay every occurrence since 1970.
+  Full record: `plan/STATUS.md` (T-307) and
+  `docs/architecture/scalability.md`.
+- **Per-day calendar aggregation is not implemented.** `GET /calendar` still
+  returns one row per run rather than counts per day, and it has no `LIMIT`, so
+  the payload grows with the window.
+- **Four older capabilities have no screen, and two of them have no setter
+  either.** Retention is API-only (`PUT /retention`), and an outbound webhook's
+  URL is API-only (a task's or profile's delivery config). **Quiet hours has no
+  reachable setter at all:** the scheduler honours `delivery_json.quietHours`,
+  but `DeliveryConfig` in `packages/shared/src/schemas.ts` carries no
+  `quietHours` key, and zod strips unknown keys — so the field is dropped on the
+  way in, and only a direct write to SQLite can set it. **Container execution is
+  a probe, not a target:** `GET /targets` reports whether Docker is available and
+  nothing dispatches a run to it. None of the four registers a surface, which is
+  why the capability matrix does not tick them.
+- **Keep-awake holds the Mac awake, but cannot wake it.** The daemon arms a
+  macOS power assertion (`caffeinate`) for a run's budgeted window and releases
+  it afterwards. It declines on battery unless you set
+  `CLOCKWORK_KEEP_AWAKE_ON_BATTERY=1`, and the OS still wins if you shut the lid.
+  Nothing schedules a *wake*, so a machine already asleep at the fire time stays
+  asleep and the run is handled by the missed-window policy. The report's
+  `sleptThroughKeepAwake` field is still hardcoded `false` and does not yet
+  detect that case. For genuinely unattended overnight work, use a machine that
+  stays on.
 
 ## 📚 Guides
 
@@ -316,19 +469,28 @@ The e2e scripts under `packages/ui/e2e/` are Playwright harnesses used during
 development to verify the real served application end-to-end (calendar,
 themes, palette, providers, ICS overlay, 1000-task benchmarks).
 
+**The docs are on the build.** `packages/daemon/test/claims-honesty.test.ts`,
+`feature-honesty.test.ts` and `landing-honesty.test.ts` read this README, the
+landing page and the design docs, and fail the suite when the prose claims more
+than the code delivers — a permanence claim retention would contradict, a cited
+path that does not exist, an upgrade modal selling a feature that was deleted.
+An overclaim here is a red build, not a marketing choice.
+
 ## 🗺 Roadmap
 
 - [x] Multi-provider execution (Claude/Codex/OpenCode/Hermes)
 - [x] BYOK API providers (8 kinds, Keychain-stored, validated)
 - [x] Command palette + shortcut registry
-- [x] Human calendar overlay (ICS)
+- [x] Human calendar overlay — ICS by subscription URL *and* by local file import
 - [x] 1000-task scale verification
 - [x] Agent chains (chain-after + trigger states + `{{previous.report}}` hand-off)
-- [ ] Docker execution target — runner module (`runInDocker`) and an
-      availability probe (`GET /targets`) exist, but nothing wires a task run
-      to it yet: no task-level target field, no run-manager dispatch, no UI
-      selector
+- [ ] Docker execution target — runner module (`runInDocker`,
+      `packages/runner/src/docker-runner.ts`) and an availability probe
+      (`GET /targets`) exist, but nothing wires a task run to it yet: no
+      task-level target field, no run-manager dispatch, no UI selector
 - [x] Governance: policy engine, audit log, retention, capability matrix
+      (evaluation and audit-writing run on every install; reading policies or the
+      audit log is a paid route and neither has a screen — see Highlights)
 - [x] Event triggers: webhook + GitHub sources fire tasks (HMAC-verified)
 - [x] Plan-then-execute approval gate + sentinel→worker trigger pairs +
       repo-shipped job offers (`docs/agent-workforce.md`)
@@ -339,9 +501,22 @@ themes, palette, providers, ICS overlay, 1000-task benchmarks).
 - [x] Workforce analytics: shift-handoff memory, accept/reject-with-a-note,
       agent timesheets, performance scorecards, portable proof-of-work
       export, download-only agent-proposed calendar events
+- [x] A screen for all twelve agent-workforce features — Settings gains office
+      hours and the autonomy ladder, Tasks gains plan→execute pairs, sentinels
+      and repo-job import, Analytics gains timesheets and scorecards, the Inbox
+      gains handoff memory, proposed events and proof-of-work export
+- [x] Self-declaring capability surfaces — a feature is ticked as reachable only
+      when the component that mounts it registers itself, so the plan matrix
+      cannot claim a screen that does not exist
+      (`packages/ui/src/components/featureSurfaces.ts`)
+- [x] Telegram delivery: bot credentials in Settings, chat id per task in the
+      composer, and approve or deny a waiting run from the chat message
+- [ ] Slack delivery target (the generic HMAC-signed webhook can front one
+      today, but only over the API — no screen, no Slack-specific formatting)
 - [ ] Chaining v2 (fan-in/out DAGs)
-- [ ] RRULE expansion for external calendars
-- [ ] Team delivery targets (Slack/Telegram webhooks GA)
+- [ ] RRULE expansion for external calendars — `packages/daemon/src/ics.ts`
+      emits one `(recurring)` base occurrence per recurring event instead
+- [ ] Per-day calendar aggregation and a bounded `/calendar` payload
 - [ ] Signed & notarized desktop builds
 - [ ] Kubernetes / cloud execution targets beyond Docker
 - [ ] SSO / SCIM for enterprise deployments
