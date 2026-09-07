@@ -6,39 +6,16 @@
  * lets a human append to it.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-
-async function render(node: JSX.Element): Promise<HTMLDivElement> {
-  const { createRoot } = await import('react-dom/client');
-  const container = document.createElement('div');
-  document.body.appendChild(container);
-  createRoot(container).render(node);
-  await settle(container);
-  return container;
-}
+import { renderComponent, waitFor, waitForElement, waitForText } from './helpers/dom';
 
 /**
- * Waits for the panel's initial fetch AND its re-render, instead of sleeping a
- * fixed 30ms. The fixed sleep passed locally and lost the race on CI's loaded
- * runner, where the container was still empty when the assertions ran — the
- * failure read `expected '' to contain 'nothing carried over yet'`, which is
- * the shape of a test that measured nothing rather than a component that broke.
- *
- * Settled means two consecutive reads agree and the panel has rendered
- * something, so it holds for both the populated and the empty-state cases.
+ * This file is where the flake was first seen: the CI failure read
+ * `expected '' to contain 'nothing carried over yet'`, i.e. an EMPTY container.
+ * A local two-reads-agree `settle()` was the first patch; it lived here only,
+ * and "two reads agree" can still agree on the pre-fetch state. Every case now
+ * waits for the specific thing it goes on to assert, using the shared helpers.
  */
-async function settle(container: HTMLElement, timeoutMs = 5_000): Promise<void> {
-  const startedAt = Date.now();
-  let previous: string | null = null;
-  for (;;) {
-    const current = container.textContent ?? '';
-    if (current.length > 0 && current === previous) return;
-    if (Date.now() - startedAt > timeoutMs) {
-      throw new Error(`panel never settled in ${timeoutMs}ms; last render was ${JSON.stringify(current.slice(0, 120))}`);
-    }
-    previous = current;
-    await new Promise((r) => setTimeout(r, 10));
-  }
-}
+const render = renderComponent;
 
 const now = 1_700_000_000_000;
 
@@ -116,6 +93,11 @@ describe('TaskMemoryPanel (F2)', () => {
     stubHandoffFetch({ memories: [humanNote, agentMemory] });
     const { TaskMemoryPanel } = await import('../src/components/TaskMemoryPanel');
     const container = await render(<TaskMemoryPanel taskId="task_1" runId="run_1" version={0} />);
+    await waitFor(
+      () => container.querySelectorAll('[data-testid="memory-entry"]').length === 2,
+      'both memory entries the daemon returned',
+      { describe: () => `entries = ${container.querySelectorAll('[data-testid="memory-entry"]').length}` },
+    );
     const text = container.textContent ?? '';
     expect(text).toContain('Please stop touching the lockfile directly');
     expect(text).toContain('Bumped lodash to 4.17.21');
@@ -128,6 +110,8 @@ describe('TaskMemoryPanel (F2)', () => {
     stubHandoffFetch({ memories: [] });
     const { TaskMemoryPanel } = await import('../src/components/TaskMemoryPanel');
     const container = await render(<TaskMemoryPanel taskId="task_1" runId="run_1" version={0} />);
+    // The exact assertion that broke CI, now waited for instead of slept past.
+    await waitForText(container, 'Nothing carried over yet');
     const text = container.textContent ?? '';
     expect(text.toLowerCase()).toContain('nothing carried over yet');
     expect(container.querySelector('[data-testid="memory-note-input"]')).not.toBeNull();
@@ -137,6 +121,7 @@ describe('TaskMemoryPanel (F2)', () => {
     const fetchMock = stubHandoffFetch({ memories: [] });
     const { TaskMemoryPanel } = await import('../src/components/TaskMemoryPanel');
     const container = await render(<TaskMemoryPanel taskId="task_1" runId="run_1" version={0} />);
+    await waitForElement(container, '[data-testid="memory-note-input"]');
 
     const input = container.querySelector('[data-testid="memory-note-input"]') as HTMLTextAreaElement;
     const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')!.set!;
@@ -146,7 +131,13 @@ describe('TaskMemoryPanel (F2)', () => {
     const submit = container.querySelector('[data-testid="memory-note-submit"]') as HTMLButtonElement;
     expect(submit.disabled).toBe(false);
     submit.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 30));
+    // The reload GET is issued only after the POST resolves, so a second GET is
+    // the last event in the chain this test asserts on.
+    await waitFor(
+      () => fetchMock.mock.calls.filter((c) => (c[1] as RequestInit | undefined)?.method !== 'POST').length >= 2,
+      'the POST and the reload GET that follows it',
+      { describe: () => `fetch calls = ${JSON.stringify(fetchMock.mock.calls.map((c) => [String(c[0]), (c[1] as RequestInit | undefined)?.method ?? 'GET']))}` },
+    );
 
     const postCall = fetchMock.mock.calls.find((c) => (c[1] as RequestInit | undefined)?.method === 'POST');
     expect(postCall, 'Add note must POST to /workforce/handoff/:taskId').toBeDefined();
@@ -166,6 +157,7 @@ describe('TaskMemoryPanel (F2)', () => {
     stubHandoffFetch({ memories: [] });
     const { TaskMemoryPanel } = await import('../src/components/TaskMemoryPanel');
     const container = await render(<TaskMemoryPanel taskId="task_1" runId="run_1" version={0} />);
+    await waitForElement(container, '[data-testid="memory-note-submit"]');
     const submit = container.querySelector('[data-testid="memory-note-submit"]') as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
   });
@@ -174,6 +166,7 @@ describe('TaskMemoryPanel (F2)', () => {
     stubHandoffFetch({ memories: [agentMemory], appendStatus: 422, appendError: 'unknown task' });
     const { TaskMemoryPanel } = await import('../src/components/TaskMemoryPanel');
     const container = await render(<TaskMemoryPanel taskId="task_deleted" runId="run_1" version={0} />);
+    await waitForElement(container, '[data-testid="memory-note-input"]');
 
     const input = container.querySelector('[data-testid="memory-note-input"]') as HTMLTextAreaElement;
     const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')!.set!;
@@ -182,7 +175,7 @@ describe('TaskMemoryPanel (F2)', () => {
     (container.querySelector('[data-testid="memory-note-submit"]') as HTMLButtonElement).dispatchEvent(
       new MouseEvent('click', { bubbles: true }),
     );
-    await new Promise((r) => setTimeout(r, 30));
+    await waitForText(container, 'This task was deleted');
 
     expect(container.textContent).toContain('This task was deleted');
     expect(container.querySelector('[data-testid="memory-note-input"]'), 'the write form must close, not error-loop').toBeNull();
@@ -194,6 +187,7 @@ describe('TaskMemoryPanel (F2)', () => {
     stubHandoffFetch({ getStatus: 500 });
     const { TaskMemoryPanel } = await import('../src/components/TaskMemoryPanel');
     const container = await render(<TaskMemoryPanel taskId="task_1" runId="run_1" version={0} />);
+    await waitForElement(container, '.error-banner');
     expect(container.querySelector('.error-banner')).not.toBeNull();
     expect(container.textContent).toContain('boom');
   });

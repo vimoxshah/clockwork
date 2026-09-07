@@ -28,6 +28,7 @@ import { describe, expect, it, afterEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { renderComponent, waitFor, waitForElement, waitForText } from './helpers/dom';
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const INBOX = readFileSync(resolve(SRC, 'components/InboxView.tsx'), 'utf8');
@@ -64,19 +65,10 @@ describe('the Inbox mounts the workforce components (F6, F9)', () => {
   });
 });
 
-async function render(node: JSX.Element): Promise<HTMLDivElement> {
-  const { createRoot } = await import('react-dom/client');
-  const container = document.createElement('div');
-  document.body.appendChild(container);
-  createRoot(container).render(node);
-  await new Promise((r) => setTimeout(r, 30));
-  return container;
-}
-
 describe('ProposedEvents (F9)', () => {
   it('lists every suggestion and offers the .ics download', async () => {
     const { ProposedEvents } = await import('../src/components/ProposedEvents');
-    const container = await render(
+    const container = await renderComponent(
       <ProposedEvents
         runId="run_1"
         events={[
@@ -85,6 +77,7 @@ describe('ProposedEvents (F9)', () => {
         ]}
       />,
     );
+    await waitForText(container, 'Review PR 42');
     expect(container.textContent).toContain('Review PR 42');
     expect(container.textContent).toContain('Retro');
     expect(container.querySelectorAll('li')).toHaveLength(2);
@@ -93,7 +86,11 @@ describe('ProposedEvents (F9)', () => {
 
   it('renders nothing at all when the run proposed nothing', async () => {
     const { ProposedEvents } = await import('../src/components/ProposedEvents');
-    const container = await render(<ProposedEvents runId="run_1" events={[]} />);
+    // The only assertion here is an absence, so it used to pass whether the
+    // component rendered nothing or had simply not rendered yet — a 30ms sleep
+    // could not tell those apart. `renderComponent` returns only after React
+    // has committed, which is what makes the empty container mean something.
+    const container = await renderComponent(<ProposedEvents runId="run_1" events={[]} />);
     expect(container.textContent).toBe('');
   });
 
@@ -102,12 +99,13 @@ describe('ProposedEvents (F9)', () => {
     // A time chosen to land on :26 seconds, matching the bug report's capture
     // ('9/8/2026, 2:13:26 PM') — if seconds ever crept back in, this ':26' would show.
     const suggestedAt = new Date(2026, 8, 8, 14, 13, 26).getTime();
-    const container = await render(
+    const container = await renderComponent(
       <ProposedEvents
         runId="run_1"
         events={[{ key: 'a', title: 'Add a linter to the fixture repo', notes: null, durationMin: 60, suggestedAt }]}
       />,
     );
+    await waitForText(container, 'Add a linter to the fixture repo');
     expect(container.textContent).not.toMatch(/:\d{2}:\d{2}\s*(AM|PM)?/i); // no hh:mm:ss anywhere
     expect(container.textContent).toContain('2:13');
   });
@@ -126,7 +124,8 @@ describe('OutcomeControls (F6)', () => {
       vi.fn(async () => new Response(JSON.stringify({ error: 'not_found' }), { status: 404 })),
     );
     const { OutcomeControls } = await import('../src/components/OutcomeControls');
-    const container = await render(<OutcomeControls runId="run_1" />);
+    const container = await renderComponent(<OutcomeControls runId="run_1" />);
+    await waitForElement(container, '[data-testid="outcome-accept"]');
     expect(container.querySelector('[data-testid="outcome-accept"]')).not.toBeNull();
     expect(container.querySelector('[data-testid="outcome-reject"]')).not.toBeNull();
     expect(container.querySelector('[data-testid="outcome-note-toggle"]')).not.toBeNull();
@@ -142,7 +141,8 @@ describe('OutcomeControls (F6)', () => {
       ),
     );
     const { OutcomeControls } = await import('../src/components/OutcomeControls');
-    const container = await render(<OutcomeControls runId="run_2" />);
+    const container = await renderComponent(<OutcomeControls runId="run_2" />);
+    await waitForElement(container, '[data-testid="outcome-current"]');
     const current = container.querySelector('[data-testid="outcome-current"]');
     expect(current).not.toBeNull();
     expect(current!.textContent).toContain('accepted with note');
@@ -251,7 +251,8 @@ describe('ApprovalCard renders what the human is actually deciding (§2.4)', () 
   it('a plan approval shows the plan and says approving books the execute run (F1)', async () => {
     stubApprovalFetch();
     const { ApprovalCard } = await import('../src/components/ApprovalCard');
-    const container = await render(<ApprovalCard approval={planApproval} onChanged={() => {}} />);
+    const container = await renderComponent(<ApprovalCard approval={planApproval} onChanged={() => {}} />);
+    await waitForText(container, 'rename the --force flag');
     const text = container.textContent ?? '';
     expect(text, 'the plan the human is approving must be on screen').toContain('rename the --force flag');
     expect(text).toContain('update the README');
@@ -262,7 +263,10 @@ describe('ApprovalCard renders what the human is actually deciding (§2.4)', () 
   it('a remediation proposal shows target, current value and proposed value (F8)', async () => {
     stubApprovalFetch({ proposal: () => new Response(JSON.stringify(PROPOSAL_BODY), { status: 200 }) });
     const { ApprovalCard } = await import('../src/components/ApprovalCard');
-    const container = await render(<ApprovalCard approval={remediationApproval} onChanged={() => {}} />);
+    const container = await renderComponent(<ApprovalCard approval={remediationApproval} onChanged={() => {}} />);
+    // The current value arrives from GET /workforce/remediations/:id, so this
+    // waits for the fetched half rather than for a fixed 30ms.
+    await waitForText(container, CURRENT_PROMPT);
     const text = container.textContent ?? '';
     expect(text, 'which field of the task would be rewritten').toContain('prompt');
     expect(text, 'what the task says today').toContain(CURRENT_PROMPT);
@@ -277,7 +281,9 @@ describe('ApprovalCard renders what the human is actually deciding (§2.4)', () 
     // blank the second — a blank card is the defect being fixed.
     stubApprovalFetch({ proposal: () => new Response(JSON.stringify({ error: 'not_found' }), { status: 404 }) });
     const { ApprovalCard } = await import('../src/components/ApprovalCard');
-    const container = await render(<ApprovalCard approval={remediationApproval} onChanged={() => {}} />);
+    const container = await renderComponent(<ApprovalCard approval={remediationApproval} onChanged={() => {}} />);
+    // The 404 has to have landed before "Current value unavailable" can show.
+    await waitForText(container, 'Current value unavailable');
     const text = container.textContent ?? '';
     expect(text).toContain(PROPOSED_PROMPT);
     expect(text).toContain('prompt');
@@ -290,7 +296,8 @@ describe('ApprovalCard renders what the human is actually deciding (§2.4)', () 
   it('a live permission prompt keeps its tool line and its decision window (unchanged)', async () => {
     stubApprovalFetch();
     const { ApprovalCard } = await import('../src/components/ApprovalCard');
-    const container = await render(<ApprovalCard approval={permissionApproval} onChanged={() => {}} />);
+    const container = await renderComponent(<ApprovalCard approval={permissionApproval} onChanged={() => {}} />);
+    await waitForText(container, 'Permission request');
     const text = container.textContent ?? '';
     expect(text).toContain('Permission request');
     expect(text, 'the tool the live run is asking to use').toContain('Bash(rm -rf /tmp/scratch)');
@@ -301,12 +308,15 @@ describe('ApprovalCard renders what the human is actually deciding (§2.4)', () 
   it('an unrecognised row is shown honestly rather than dressed as a permission prompt', async () => {
     stubApprovalFetch();
     const { ApprovalCard } = await import('../src/components/ApprovalCard');
-    const container = await render(
+    const container = await renderComponent(
       <ApprovalCard
         approval={{ id: 'ap_x', run_id: 'run_x', kind: 'question', payload_json: '{}' }}
         onChanged={() => {}}
       />,
     );
+    // expectNoAutoDenyClaim is all negatives; anchor on the card's own control
+    // first so "no auto-deny claim" is read off a card that actually rendered.
+    await waitForElement(container, '[data-testid="approval-approve"]');
     expectNoAutoDenyClaim(container);
     expect(container.querySelector('[data-testid="approval-approve"]'), 'the decision is still the human\'s').not.toBeNull();
   });
@@ -315,11 +325,16 @@ describe('ApprovalCard renders what the human is actually deciding (§2.4)', () 
     const fetchMock = stubApprovalFetch();
     const { ApprovalCard } = await import('../src/components/ApprovalCard');
     let changed = 0;
-    const container = await render(<ApprovalCard approval={planApproval} onChanged={() => { changed += 1; }} />);
+    const container = await renderComponent(<ApprovalCard approval={planApproval} onChanged={() => { changed += 1; }} />);
+    await waitForElement(container, '[data-testid="approval-approve"]');
     const approve = container.querySelector('[data-testid="approval-approve"]') as HTMLButtonElement | null;
     expect(approve).not.toBeNull();
     approve!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 30));
+    // The POST is awaited before onChanged fires, so the callback landing is
+    // the last event in the chain — wait for that, not for 30ms.
+    await waitFor(() => changed === 1, 'the onChanged callback after a successful POST', {
+      describe: () => `changed = ${changed}; fetches = ${JSON.stringify(fetchMock.mock.calls.map((c) => String(c[0])))}`,
+    });
     const call = fetchMock.mock.calls.find((c) => String(c[0]).startsWith('/approvals/'));
     expect(call, 'Approve must reach POST /approvals/:id/respond').toBeDefined();
     expect(String(call![0])).toBe('/approvals/ap_plan/respond');

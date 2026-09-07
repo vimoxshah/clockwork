@@ -24,6 +24,7 @@ import type { Health } from '../src/api';
 // transform, and on a cold cache that blows the 5s per-test timeout. At module
 // scope the cost lands in collection, where no timeout applies.
 import { VersionSkewNotice } from '../src/App';
+import { renderComponent, waitForElement, waitForText } from './helpers/dom';
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const APP = readFileSync(resolve(SRC, 'App.tsx'), 'utf8');
@@ -40,15 +41,6 @@ const HEALTH: Health = {
   queuedRuns: 0,
   nextFire: null,
 };
-
-async function render(node: JSX.Element): Promise<HTMLDivElement> {
-  const { createRoot } = await import('react-dom/client');
-  const container = document.createElement('div');
-  document.body.appendChild(container);
-  createRoot(container).render(node);
-  await new Promise((r) => setTimeout(r, 30));
-  return container;
-}
 
 describe('the shell surfaces daemon version skew', () => {
   it('types both fields the daemon /health handshake now returns', () => {
@@ -73,7 +65,9 @@ describe('the shell surfaces daemon version skew', () => {
 
 describe('VersionSkewNotice', () => {
   it('names both versions, what broke and the command that fixes it', async () => {
-    const container = await render(<VersionSkewNotice health={HEALTH} />);
+    const container = await renderComponent(<VersionSkewNotice health={HEALTH} />);
+    // The banner is what this test reads, so wait for the banner — not for 30ms.
+    await waitForText(container, 'Restart your daemon');
     const text = container.textContent ?? '';
 
     expect(text).toContain('Restart your daemon');
@@ -88,17 +82,26 @@ describe('VersionSkewNotice', () => {
   });
 
   it('offers no way to dismiss it — a hidden banner is the silent failure again', async () => {
-    const container = await render(<VersionSkewNotice health={HEALTH} />);
+    const container = await renderComponent(<VersionSkewNotice health={HEALTH} />);
+    // "No buttons" is trivially true of a container that has not rendered, so
+    // this waits for the notice itself before counting: zero buttons is only
+    // evidence once there is a banner to count them in.
+    await waitForElement(container, '[data-testid="version-skew"]');
     expect(container.querySelectorAll('button')).toHaveLength(0);
   });
 
+  // These two assert an ABSENCE, and the component renders `null`, so there is
+  // no content to wait for. `renderComponent` returns only after React has
+  // committed the tree, which is what makes the absence real: before this fix
+  // the 30ms sleep could return with nothing rendered at all and the assertion
+  // would still pass.
   it('says nothing when the daemon reports no skew', async () => {
-    const container = await render(<VersionSkewNotice health={{ ...HEALTH, versionSkew: false }} />);
+    const container = await renderComponent(<VersionSkewNotice health={{ ...HEALTH, versionSkew: false }} />);
     expect(container.querySelector('[data-testid="version-skew"]')).toBeNull();
   });
 
   it('says nothing while the daemon is unreachable', async () => {
-    const container = await render(<VersionSkewNotice health={null} />);
+    const container = await renderComponent(<VersionSkewNotice health={null} />);
     expect(container.querySelector('[data-testid="version-skew"]')).toBeNull();
   });
 });

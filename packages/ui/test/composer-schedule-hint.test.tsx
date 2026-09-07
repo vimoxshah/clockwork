@@ -10,15 +10,18 @@
  * 'Sun, Dec 20, 02:00 PM', hint read 'Fires Sun 02:00 PM (America/New_York)'.
  */
 import { describe, expect, it, afterEach, vi } from 'vitest';
-
-async function render(node: JSX.Element): Promise<HTMLDivElement> {
-  const { createRoot } = await import('react-dom/client');
-  const container = document.createElement('div');
-  document.body.appendChild(container);
-  createRoot(container).render(node);
-  await new Promise((r) => setTimeout(r, 40));
-  return container;
-}
+import { renderComponent, waitFor, waitForElement } from './helpers/dom';
+// Statically imported, not with `await import()` inside the test — the pattern
+// version-skew.test.tsx:22-25 and screen-honesty.test.tsx:25-27 already record.
+// ComposerView drags Radix Select/Switch/Dialog, react-day-picker and the
+// lucide barrel through the transform, and this file has ONE test, so nothing
+// warms that cache first. Under load the dynamic import alone blew the
+// per-test timeout: three of four runs at 14x CPU oversubscription died on
+// `Test timed out in 30000ms` with `collect 1.47s, tests 46.97s` — the cost was
+// inside the test body. At module scope it lands in collection, where no
+// timeout applies. Safe here: ComposerView touches no network at module scope,
+// only two registerFeatureSurface() registry writes.
+import ComposerView from '../src/components/ComposerView';
 
 const json = (body: unknown): Response =>
   new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
@@ -43,11 +46,18 @@ afterEach(() => {
 describe('ComposerView one-off schedule hint carries the same date as the button', () => {
   it('names the month and day in the "Fires …" hint, matching the "Run at" button', async () => {
     stubComposerFetch();
-    const { default: ComposerView } = await import('../src/components/ComposerView');
     // Far-future date, same construction the bug report used (20 Dec, a Sunday).
     const target = new Date(2026, 11, 20, 14, 0, 0);
-    const container = await render(
+    const container = await renderComponent(
       <ComposerView onDone={() => {}} prefill={{ runAtLocal: target.toISOString() }} />,
+    );
+    // ComposerView loads /profiles and /providers before it draws the form, so
+    // this waits for the two nodes the test reads rather than for 40ms.
+    await waitForElement(container, '#c-when');
+    await waitFor(
+      () => [...container.querySelectorAll('p')].some((p) => (p.textContent ?? '').startsWith('Fires')),
+      'the "Fires …" hint paragraph',
+      { describe: () => `paragraphs = ${JSON.stringify([...container.querySelectorAll('p')].map((p) => p.textContent))}` },
     );
 
     const button = container.querySelector('#c-when');

@@ -16,6 +16,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { TimesheetT, RunRowT } from '../src/api';
+import { renderComponent, waitFor, waitForElement, waitForText } from './helpers/dom';
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const ANALYTICS = readFileSync(resolve(SRC, 'components/AnalyticsView.tsx'), 'utf8');
@@ -32,12 +33,19 @@ describe('AnalyticsView mounts F10/F11 (the only reachable path, App.tsx is froz
   });
 });
 
-async function render(node: JSX.Element): Promise<HTMLDivElement> {
-  const { createRoot } = await import('react-dom/client');
-  const container = document.createElement('div');
-  document.body.appendChild(container);
-  createRoot(container).render(node);
-  await new Promise((r) => setTimeout(r, 30));
+const render = renderComponent;
+
+/**
+ * TimesheetsPanel awaits `Promise.allSettled([timesheet, runs])` and then sets
+ * BOTH pieces of state in one continuation (TimesheetsPanel.tsx:105-133), so a
+ * rendered timesheet row is proof the orphan cross-reference has also been
+ * applied — or has failed and been given up on. That makes the row the correct
+ * anchor for the orphan-chip cases too, including the one that asserts the
+ * chip is absent.
+ */
+async function renderTimesheets(node: JSX.Element): Promise<HTMLDivElement> {
+  const container = await renderComponent(node);
+  await waitForText(container, 'Code Reviewer');
   return container;
 }
 
@@ -119,7 +127,7 @@ describe('TimesheetsPanel (F10)', () => {
   it('shows the hours-worked caveat unconditionally, even when the orphan cross-reference fails', async () => {
     stubTimesheetFetch({ runsStatus: 500 });
     const { default: TimesheetsPanel } = await import('../src/components/TimesheetsPanel');
-    const container = await render(<TimesheetsPanel version={1} days={30} />);
+    const container = await renderTimesheets(<TimesheetsPanel version={1} days={30} />);
     const caveat = container.querySelector('[data-testid="hours-caveat"]');
     expect(caveat, 'the caveat must not depend on the runs cross-reference succeeding').not.toBeNull();
     expect(caveat!.textContent).toContain('daemon restart');
@@ -130,23 +138,25 @@ describe('TimesheetsPanel (F10)', () => {
   it('flags a row with a run interrupted by a daemon restart in this window', async () => {
     stubTimesheetFetch({ runs: [orphanedRun('prof_1')] });
     const { default: TimesheetsPanel } = await import('../src/components/TimesheetsPanel');
-    const container = await render(<TimesheetsPanel version={2} days={30} />);
+    const container = await renderTimesheets(<TimesheetsPanel version={2} days={30} />);
     const chip = container.querySelector('[data-testid="orphaned-chip"]');
     expect(chip, 'a run with outcome_reason=orphaned in-window must be flagged').not.toBeNull();
     expect(chip!.textContent).toContain('1 interrupted');
   });
 
+  // The only assertion is an absence, so it used to pass against a panel that
+  // had not rendered yet. `renderTimesheets` waits for the row first.
   it('does not flag a row when the interrupted run belongs to a different profile', async () => {
     stubTimesheetFetch({ runs: [orphanedRun('prof_other')] });
     const { default: TimesheetsPanel } = await import('../src/components/TimesheetsPanel');
-    const container = await render(<TimesheetsPanel version={3} days={30} />);
+    const container = await renderTimesheets(<TimesheetsPanel version={3} days={30} />);
     expect(container.querySelector('[data-testid="orphaned-chip"]')).toBeNull();
   });
 
   it('nudges the user to set their own rate when none is on record, instead of hiding the comparison silently', async () => {
     stubTimesheetFetch();
     const { default: TimesheetsPanel } = await import('../src/components/TimesheetsPanel');
-    const container = await render(<TimesheetsPanel version={4} days={30} />);
+    const container = await renderTimesheets(<TimesheetsPanel version={4} days={30} />);
     expect(container.textContent).toContain('Set your rate to see whether each agent is actually cheaper');
     // the effective rate itself must still be shown even with no human rate to compare against
     expect(container.textContent).toContain('$0.34/hr');
@@ -155,34 +165,48 @@ describe('TimesheetsPanel (F10)', () => {
   it('disables Save on an empty or negative rate — a control guaranteed to 422 must not be offered', async () => {
     stubTimesheetFetch();
     const { default: TimesheetsPanel } = await import('../src/components/TimesheetsPanel');
-    const container = await render(<TimesheetsPanel version={5} days={30} />);
+    const container = await renderTimesheets(<TimesheetsPanel version={5} days={30} />);
     const input = container.querySelector('[data-testid="human-rate-input"]') as HTMLInputElement;
     const save = container.querySelector('[data-testid="human-rate-save"]') as HTMLButtonElement;
 
+    // React 18 flushes a discrete `input` event's update before dispatchEvent
+    // returns, so these wait on the button state itself rather than on a clock.
     typeInto(input, '-1');
-    await new Promise((r) => setTimeout(r, 10));
+    await waitFor(() => save.disabled === true, 'Save to be disabled for a negative rate', {
+      describe: () => `input.value = ${JSON.stringify(input.value)}, save.disabled = ${save.disabled}`,
+    });
     expect(save.disabled, 'a negative rate must not be saveable').toBe(true);
 
     typeInto(input, '');
-    await new Promise((r) => setTimeout(r, 10));
+    await waitFor(() => save.disabled === true, 'Save to be disabled for a blank rate', {
+      describe: () => `input.value = ${JSON.stringify(input.value)}, save.disabled = ${save.disabled}`,
+    });
     expect(save.disabled, 'a blank rate must not be saveable').toBe(true);
 
     typeInto(input, '75');
-    await new Promise((r) => setTimeout(r, 10));
+    await waitFor(() => save.disabled === false, 'Save to be enabled for a valid rate', {
+      describe: () => `input.value = ${JSON.stringify(input.value)}, save.disabled = ${save.disabled}`,
+    });
     expect(save.disabled, 'a valid non-negative rate must be saveable').toBe(false);
   });
 
   it('Save posts the human hourly rate the user typed, as the numbers the effective rate is judged against', async () => {
     const fetchMock = stubTimesheetFetch();
     const { default: TimesheetsPanel } = await import('../src/components/TimesheetsPanel');
-    const container = await render(<TimesheetsPanel version={6} days={30} />);
+    const container = await renderTimesheets(<TimesheetsPanel version={6} days={30} />);
     const input = container.querySelector('[data-testid="human-rate-input"]') as HTMLInputElement;
     const save = container.querySelector('[data-testid="human-rate-save"]') as HTMLButtonElement;
 
     typeInto(input, '85');
-    await new Promise((r) => setTimeout(r, 10));
+    await waitFor(() => save.disabled === false, 'Save to be enabled for the typed rate', {
+      describe: () => `input.value = ${JSON.stringify(input.value)}, save.disabled = ${save.disabled}`,
+    });
     save.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 30));
+    await waitFor(
+      () => fetchMock.mock.calls.some((c) => String(c[0]) === '/workforce/prefs/hourly-rate'),
+      'the PUT to /workforce/prefs/hourly-rate',
+      { describe: () => `fetch calls = ${JSON.stringify(fetchMock.mock.calls.map((c) => String(c[0])))}` },
+    );
 
     const call = fetchMock.mock.calls.find((c) => String(c[0]) === '/workforce/prefs/hourly-rate');
     expect(call, 'Save must PUT /workforce/prefs/hourly-rate').toBeDefined();
@@ -197,6 +221,7 @@ describe('TimesheetsPanel (F10)', () => {
     );
     const { default: TimesheetsPanel } = await import('../src/components/TimesheetsPanel');
     const container = await render(<TimesheetsPanel version={7} days={30} />);
+    await waitForElement(container, '[role="alert"]');
     const alert = container.querySelector('[role="alert"]');
     expect(alert).not.toBeNull();
     expect(alert!.textContent).toContain('daemon exploded');
@@ -216,7 +241,7 @@ describe('TimesheetsPanel (F10)', () => {
     });
     vi.stubGlobal('fetch', fn);
     const { default: TimesheetsPanel } = await import('../src/components/TimesheetsPanel');
-    const container = await render(<TimesheetsPanel version={8} days={30} />);
+    const container = await renderTimesheets(<TimesheetsPanel version={8} days={30} />);
     expect(container.textContent).toContain('cheaper than you');
     // neither ASCII hyphen-minus nor U+2212 MINUS SIGN in front of the dollar amount
     expect(container.textContent).not.toMatch(/[-−]\$\d/);
@@ -285,6 +310,7 @@ describe('PerformanceReviewsPanel (F11)', () => {
     stubPerformanceFetch();
     const { default: PerformanceReviewsPanel } = await import('../src/components/PerformanceReviewsPanel');
     const container = await render(<PerformanceReviewsPanel version={1} days={30} />);
+    await waitForText(container, 'not yet reviewed (0 decided)');
     expect(container.textContent).toContain('not yet reviewed (0 decided)');
   });
 
@@ -292,6 +318,7 @@ describe('PerformanceReviewsPanel (F11)', () => {
     stubPerformanceFetch();
     const { default: PerformanceReviewsPanel } = await import('../src/components/PerformanceReviewsPanel');
     const container = await render(<PerformanceReviewsPanel version={2} days={30} />);
+    await waitForElement(container, '[data-testid="scorecard-__unassigned__"]');
     const unassignedCard = container.querySelector('[data-testid="scorecard-__unassigned__"]');
     expect(unassignedCard).not.toBeNull();
     expect(unassignedCard!.querySelector('[data-testid^="review-prompt-toggle-"]'), 'no profile id to call the route with').toBeNull();
@@ -302,10 +329,11 @@ describe('PerformanceReviewsPanel (F11)', () => {
     stubPerformanceFetch({ promptText: 'Runs in period: 4\nWrite the verdict.' });
     const { default: PerformanceReviewsPanel } = await import('../src/components/PerformanceReviewsPanel');
     const container = await render(<PerformanceReviewsPanel version={3} days={30} />);
+    await waitForElement(container, '[data-testid="review-prompt-toggle-prof_1"]');
     const button = container.querySelector('[data-testid="review-prompt-toggle-prof_1"]') as HTMLButtonElement;
     expect(button).not.toBeNull();
     button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 30));
+    await waitForElement(container, '[data-testid="review-prompt-text-prof_1"]');
 
     const textarea = container.querySelector('[data-testid="review-prompt-text-prof_1"]') as HTMLTextAreaElement;
     expect(textarea, 'the prompt must actually render, not just fetch').not.toBeNull();
@@ -317,9 +345,10 @@ describe('PerformanceReviewsPanel (F11)', () => {
     stubPerformanceFetch({ promptStatus: 404 });
     const { default: PerformanceReviewsPanel } = await import('../src/components/PerformanceReviewsPanel');
     const container = await render(<PerformanceReviewsPanel version={4} days={30} />);
+    await waitForElement(container, '[data-testid="review-prompt-toggle-prof_1"]');
     const button = container.querySelector('[data-testid="review-prompt-toggle-prof_1"]') as HTMLButtonElement;
     button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 30));
+    await waitForElement(container, '[role="alert"]');
 
     const alert = container.querySelector('[role="alert"]');
     expect(alert).not.toBeNull();
@@ -337,6 +366,7 @@ describe('PerformanceReviewsPanel (F11)', () => {
     vi.stubGlobal('fetch', fn);
     const { default: PerformanceReviewsPanel } = await import('../src/components/PerformanceReviewsPanel');
     const container = await render(<PerformanceReviewsPanel version={5} days={30} />);
+    await waitForText(container, '1 run');
     expect(container.textContent).toContain('1 run');
     expect(container.textContent).not.toContain('1 runs');
   });
@@ -345,6 +375,7 @@ describe('PerformanceReviewsPanel (F11)', () => {
     stubPerformanceFetch(); // CARDS_MOCK.cards[0].runs === 4
     const { default: PerformanceReviewsPanel } = await import('../src/components/PerformanceReviewsPanel');
     const container = await render(<PerformanceReviewsPanel version={6} days={30} />);
+    await waitForText(container, '4 runs');
     expect(container.textContent).toContain('4 runs');
   });
 });

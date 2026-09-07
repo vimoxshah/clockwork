@@ -19,6 +19,7 @@ import { describe, expect, it, afterEach, beforeEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { neverHappens, renderComponent, waitFor, waitForElement, waitForText } from './helpers/dom';
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const SETTINGS = readFileSync(resolve(SRC, 'components/SettingsView.tsx'), 'utf8');
@@ -27,16 +28,13 @@ const SETTINGS = readFileSync(resolve(SRC, 'components/SettingsView.tsx'), 'utf8
 // harness
 // ---------------------------------------------------------------------------
 
-async function render(node: JSX.Element): Promise<HTMLDivElement> {
-  const { createRoot } = await import('react-dom/client');
-  const container = document.createElement('div');
-  document.body.appendChild(container);
-  createRoot(container).render(node);
-  await settle();
-  return container;
-}
+const render = renderComponent;
 
-const settle = (ms = 40): Promise<void> => new Promise((r) => setTimeout(r, ms));
+/** Waits for a route to appear in the recorded calls, printing them if it does not. */
+const sawCall = (calls: Call[], what: string, match: (c: Call) => boolean): Promise<true> =>
+  waitFor(() => calls.some(match) || undefined, what, {
+    describe: () => `calls = ${JSON.stringify(calls.map((c) => `${c.method} ${c.url}`))}`,
+  });
 
 function click(el: Element | null): void {
   expect(el, 'control missing from the DOM').not.toBeNull();
@@ -181,11 +179,16 @@ describe('OfficeHoursCard (F3)', () => {
     const { calls } = stubFetch([...extra, ...officeHoursRoutes(payload, profiles)]);
     const { OfficeHoursCard } = await import('../src/components/OfficeHoursCard');
     const container = await render(<OfficeHoursCard version={1} />);
+    // The card renders `Reading office hours…` and nothing else until the GET
+    // answers (OfficeHoursCard.tsx:167), so the prerequisite row appearing is
+    // the moment the body exists at all.
+    await waitForElement(container, '[data-testid="office-hours-prerequisite"]');
     return { container, calls };
   };
 
   it('shows each stored window with its day, hours and zone', async () => {
     const { container } = await mount({ enabled: true, windows: [WINDOW_ROW] });
+    await waitForElement(container, '[data-testid="office-hours-window"]');
     const text = container.textContent ?? '';
     expect(text).toContain('Tuesday 09:00–17:00');
     expect(text).toContain('America/New_York');
@@ -196,7 +199,16 @@ describe('OfficeHoursCard (F3)', () => {
   it('states the prerequisite and says plainly that nothing defers today', async () => {
     // The whole point: office hours ON with no flagged profile defers nothing,
     // and looks identical to a correct install. It must not look identical here.
+    // The "Earned autonomy" button renders only if the F7 surface is in the
+    // registry (OfficeHoursCard.tsx:388), and AutonomyCard registers it at
+    // module scope. In the app SettingsView imports both; here that only
+    // happened as a side effect of an EARLIER test's `import(SettingsView)`.
+    // Under load that test hit the 5s timeout, its import never finished, and
+    // this one failed with `a way through to F7: expected null not to be null`
+    // — a cascade, not a defect in this card. Register it explicitly.
+    await import('../src/components/AutonomyCard');
     const { container } = await mount({ enabled: true, windows: [WINDOW_ROW] }, [PROFILE_UNFLAGGED]);
+    await waitForElement(container, '[data-testid="office-hours-none-flagged"]');
     const text = container.textContent ?? '';
     expect(text, 'the flag is the prerequisite').toContain('flagged');
     expect(text, 'and F7 enrolment is the only thing that sets it').toContain('autonomy ladder');
@@ -211,6 +223,8 @@ describe('OfficeHoursCard (F3)', () => {
       PROFILE_UNFLAGGED,
       PROFILE_ENROLLED,
     ]);
+    // Needs GET /profiles, not just GET /workforce/office-hours.
+    await waitForElement(container, '[data-testid="office-hours-flagged"]');
     const flagged = container.querySelector('[data-testid="office-hours-flagged"]');
     expect(flagged).not.toBeNull();
     expect(flagged!.textContent).toContain('Test Doctor');
@@ -220,7 +234,7 @@ describe('OfficeHoursCard (F3)', () => {
   it('turning the switch on reaches PUT /workforce/office-hours/enabled', async () => {
     const { container, calls } = await mount({ enabled: false, windows: [] });
     click(container.querySelector('[data-testid="office-hours-enabled"]'));
-    await settle();
+    await sawCall(calls, 'PUT /workforce/office-hours/enabled', (c) => c.url === '/workforce/office-hours/enabled');
     const put = calls.find((c) => c.url === '/workforce/office-hours/enabled');
     expect(put, 'the master switch must reach the daemon').toBeDefined();
     expect(put!.method).toBe('PUT');
@@ -233,9 +247,10 @@ describe('OfficeHoursCard (F3)', () => {
     type(container.querySelector('#oh-end'), '12:00');
     type(container.querySelector('#oh-tz'), 'Europe/Berlin');
     type(container.querySelector('#oh-label'), 'Mornings');
-    await settle(10);
+    // `type` dispatches a discrete `input` event, which React 18 flushes before
+    // dispatchEvent returns — the form state is already committed here.
     click(container.querySelector('[data-testid="office-hours-add"]'));
-    await settle();
+    await sawCall(calls, 'POST /workforce/office-hours', (c) => c.url === '/workforce/office-hours' && c.method === 'POST');
     const post = calls.find((c) => c.url === '/workforce/office-hours' && c.method === 'POST');
     expect(post, 'Add window must POST').toBeDefined();
     expect(post!.body).toEqual({ dow: 1, startMin: 510, endMin: 720, tz: 'Europe/Berlin', label: 'Mornings' });
@@ -253,14 +268,25 @@ describe('OfficeHoursCard (F3)', () => {
   it('refuses to offer a window the daemon would 422 — and says why', async () => {
     const { container, calls } = await mount({ enabled: true, windows: [] });
     type(container.querySelector('#oh-end'), '08:00'); // before the 09:00 default start
-    await settle(10);
+    // The explanation appearing is the state change the typing caused, so it is
+    // the anchor for reading the button beside it.
+    await waitForElement(container, '[data-testid="office-hours-problem"]');
     const add = container.querySelector('[data-testid="office-hours-add"]') as HTMLButtonElement;
     expect(add.disabled, 'a control that is guaranteed to fail must not be live').toBe(true);
     expect(container.querySelector('[data-testid="office-hours-problem"]')!.textContent).toContain(
       'cannot cross midnight',
     );
     click(add);
-    await settle();
+    // THE ONE DELIBERATE DELAY IN THIS SUITE. Everything else waits for
+    // something to happen; here the whole claim is that nothing does, and no
+    // condition can become true to end the wait. `neverHappens` watches for a
+    // bounded window and fails the instant a POST appears — which is strictly
+    // more than a sleep did, because a sleep only ever looked once, at the end.
+    await neverHappens(
+      () => calls.some((c) => c.method === 'POST'),
+      'a POST from the disabled Add button',
+      { describe: () => `calls = ${JSON.stringify(calls.map((c) => `${c.method} ${c.url}`))}` },
+    );
     expect(calls.filter((c) => c.method === 'POST'), 'nothing may be sent').toEqual([]);
   });
 
@@ -277,18 +303,25 @@ describe('OfficeHoursCard (F3)', () => {
     ]);
     const { OfficeHoursCard } = await import('../src/components/OfficeHoursCard');
     const container = await render(<OfficeHoursCard version={1} />);
+    await waitForElement(container, '[data-testid="office-hours-prerequisite"]');
     type(container.querySelector('#oh-tz'), 'Mars/Olympus');
-    await settle(10);
     click(container.querySelector('[data-testid="office-hours-add"]'));
-    await settle();
+    await waitForElement(container, '[data-testid="office-hours-error"]');
     expect(calls.some((c) => c.method === 'POST')).toBe(true);
     expect(container.querySelector('[data-testid="office-hours-error"]')!.textContent).toContain('Mars/Olympus');
   });
 
   it('removes a window through DELETE and reloads the list', async () => {
     const { container, calls } = await mount({ enabled: true, windows: [WINDOW_ROW] });
+    await waitForElement(container, '[data-testid="office-hours-window"]');
     click(container.querySelector('[data-testid="office-hours-remove"]'));
-    await settle();
+    // The reload GET is issued only after the DELETE resolves, so waiting for
+    // the second GET covers both assertions below.
+    await waitFor(
+      () => calls.filter((c) => c.url === '/workforce/office-hours' && c.method === 'GET').length > 1,
+      'the DELETE and the reload GET that follows it',
+      { describe: () => `calls = ${JSON.stringify(calls.map((c) => `${c.method} ${c.url}`))}` },
+    );
     const del = calls.find((c) => c.method === 'DELETE');
     expect(del?.url).toBe('/workforce/office-hours/oh_1');
     // 204 has no body; a reload that never happens is the bug api.ts's 204
@@ -303,6 +336,7 @@ describe('OfficeHoursCard (F3)', () => {
     ]);
     const { OfficeHoursCard } = await import('../src/components/OfficeHoursCard');
     const container = await render(<OfficeHoursCard version={1} />);
+    await waitForText(container, 'Couldn’t load office hours');
     expect(container.querySelector('[data-testid="office-hours-empty"]'), '“no windows yet” is a claim we cannot make').toBeNull();
     expect(container.textContent).toContain('Couldn\u2019t load office hours');
     expect(container.textContent, 'nor may the switch report a state it never read').toContain('unknown');
@@ -310,6 +344,7 @@ describe('OfficeHoursCard (F3)', () => {
 
   it('says what a window IS when there are none, not just “nothing here”', async () => {
     const { container } = await mount({ enabled: false, windows: [] });
+    await waitForElement(container, '[data-testid="office-hours-empty"]');
     const empty = container.querySelector('[data-testid="office-hours-empty"]');
     expect(empty).not.toBeNull();
     expect(empty!.textContent).toContain('block of one weekday');
@@ -360,6 +395,8 @@ describe('AutonomyCard (F7)', () => {
 
   it('shows a pending offer with the profile, the rungs and what accepting changes', async () => {
     const { container } = await mount();
+    // The profile NAME comes from GET /profiles, the row from GET …/offers.
+    await waitForText(container, 'Test Doctor');
     const offer = container.querySelector('[data-testid="autonomy-offer"]');
     expect(offer).not.toBeNull();
     const text = offer!.textContent ?? '';
@@ -373,8 +410,9 @@ describe('AutonomyCard (F7)', () => {
 
   it('Accept posts the human decision for that offer', async () => {
     const { container, calls } = await mount();
+    await waitForElement(container, '[data-testid="autonomy-accept"]');
     click(container.querySelector('[data-testid="autonomy-accept"]'));
-    await settle();
+    await sawCall(calls, 'POST …/respond', (c) => c.url.endsWith('/respond'));
     const post = calls.find((c) => c.url.endsWith('/respond'));
     expect(post?.url).toBe('/workforce/autonomy/offers/off_1/respond');
     expect(post?.body).toEqual({ decision: 'accepted' });
@@ -382,16 +420,18 @@ describe('AutonomyCard (F7)', () => {
 
   it('Decline posts a decline, and says the streak has to grow before asking again', async () => {
     const { container, calls } = await mount({ respond: () => json({ ...OFFER, status: 'declined' }) });
+    await waitForElement(container, '[data-testid="autonomy-decline"]');
     click(container.querySelector('[data-testid="autonomy-decline"]'));
-    await settle();
+    await waitForElement(container, '[data-testid="autonomy-msg"]');
     expect(calls.find((c) => c.url.endsWith('/respond'))?.body).toEqual({ decision: 'declined' });
     expect(container.querySelector('[data-testid="autonomy-msg"]')!.textContent).toContain('grow past 5');
   });
 
   it('a second verdict on the same offer is explained, not swallowed (409)', async () => {
     const { container } = await mount({ respond: () => json({ error: 'already_resolved' }, 409) });
+    await waitForElement(container, '[data-testid="autonomy-accept"]');
     click(container.querySelector('[data-testid="autonomy-accept"]'));
-    await settle();
+    await waitForElement(container, '[data-testid="autonomy-error"]');
     expect(container.querySelector('[data-testid="autonomy-error"]')!.textContent).toContain(
       'already answered',
     );
@@ -399,6 +439,9 @@ describe('AutonomyCard (F7)', () => {
 
   it('lists enrolled profiles with the rung, the streak and the LIVE permission mode', async () => {
     const { container } = await mount({ offers: [] });
+    // `streak 5 of 5` needs the per-profile autonomy state, the last of the
+    // three requests this card makes.
+    await waitForText(container, 'streak 5 of 5');
     const row = container.querySelector('[data-testid="autonomy-enrolled-row"]');
     expect(row).not.toBeNull();
     const text = row!.textContent ?? '';
@@ -414,6 +457,7 @@ describe('AutonomyCard (F7)', () => {
   it('a profile whose autonomy state cannot be read still renders', async () => {
     // Promise.allSettled, not all: one failed lookup must not blank the table.
     const { container } = await mount({ offers: [], state: () => json({ error: 'not_found' }, 404) });
+    await waitForText(container, 'streak unavailable');
     const row = container.querySelector('[data-testid="autonomy-enrolled-row"]');
     expect(row).not.toBeNull();
     expect(row!.textContent).toContain('streak unavailable');
@@ -421,12 +465,24 @@ describe('AutonomyCard (F7)', () => {
 
   it('enrolling asks first, spells out the rewrite, and only then writes', async () => {
     const { container, calls } = await mount({ offers: [] });
-    click(container.querySelector('[data-testid="autonomy-enrol-open"]'));
-    await settle(10);
+    // The button is disabled until GET /profiles answers, so this is where the
+    // profile list actually arrives (AutonomyCard.tsx:254).
+    const open = await waitFor(
+      () => {
+        const b = container.querySelector('[data-testid="autonomy-enrol-open"]') as HTMLButtonElement | null;
+        return b && !b.disabled ? b : undefined;
+      },
+      'the enrol button to become live once profiles are known',
+      { describe: () => `button reads ${JSON.stringify(container.querySelector('[data-testid="autonomy-enrol-open"]')?.textContent)}` },
+    );
+    click(open);
+    await waitForElement(container, '[data-testid="autonomy-enrol-pick"]');
     const pick = container.querySelectorAll('[data-testid="autonomy-enrol-pick"]');
     expect(pick, 'only the profiles that are NOT enrolled can be enrolled').toHaveLength(1);
     click(pick[0]!);
-    await settle(10);
+    // The confirm panel appearing is what makes "nothing written yet" a real
+    // claim: the click HAS been processed and still nothing was sent.
+    await waitForElement(container, '[data-testid="autonomy-confirm"]');
 
     const confirm = container.querySelector('[data-testid="autonomy-confirm"]');
     expect(confirm, 'a one-way write must not happen on the first click').not.toBeNull();
@@ -439,7 +495,7 @@ describe('AutonomyCard (F7)', () => {
     );
 
     click(container.querySelector('[data-testid="autonomy-confirm-btn"]'));
-    await settle();
+    await sawCall(calls, 'POST …/enroll', (c) => c.url.includes('/enroll'));
     const post = calls.find((c) => c.url.includes('/enroll'));
     expect(post?.url).toBe('/workforce/autonomy/profiles/p_1/enroll');
     expect(post?.body).toEqual({ rung: 'plan' });
@@ -447,12 +503,20 @@ describe('AutonomyCard (F7)', () => {
 
   it('the chosen rung is the one that gets written, with its own consequences', async () => {
     const { container, calls } = await mount({ offers: [] });
-    click(container.querySelector('[data-testid="autonomy-enrol-open"]'));
-    await settle(10);
+    const open = await waitFor(
+      () => {
+        const b = container.querySelector('[data-testid="autonomy-enrol-open"]') as HTMLButtonElement | null;
+        return b && !b.disabled ? b : undefined;
+      },
+      'the enrol button to become live once profiles are known',
+      { describe: () => `button reads ${JSON.stringify(container.querySelector('[data-testid="autonomy-enrol-open"]')?.textContent)}` },
+    );
+    click(open);
+    await waitForElement(container, '[data-testid="autonomy-enrol-pick"]');
     click(container.querySelector('[data-testid="autonomy-enrol-pick"]'));
-    await settle(10);
+    await waitForElement(container, '[data-testid="autonomy-rung-unattended"]');
     click(container.querySelector('[data-testid="autonomy-rung-unattended"]'));
-    await settle(10);
+    await waitForText(container, 'blocks nothing extra');
     const confirm = container.querySelector('[data-testid="autonomy-confirm"]')!;
     expect(confirm.textContent, 'the top two rungs share a permission mode — do not imply otherwise').toContain(
       'blocks nothing extra',
@@ -461,7 +525,7 @@ describe('AutonomyCard (F7)', () => {
       'stops applying',
     );
     click(container.querySelector('[data-testid="autonomy-confirm-btn"]'));
-    await settle();
+    await sawCall(calls, 'POST …/enroll', (c) => c.url.includes('/enroll'));
     expect(calls.find((c) => c.url.includes('/enroll'))?.body).toEqual({ rung: 'unattended' });
   });
 
@@ -472,12 +536,15 @@ describe('AutonomyCard (F7)', () => {
     ]);
     const { AutonomyCard } = await import('../src/components/AutonomyCard');
     const container = await render(<AutonomyCard version={1} />);
+    await waitForText(container, 'Couldn\u2019t load autonomy state');
     expect(container.querySelector('[data-testid="autonomy-no-offers"]')).toBeNull();
     expect(container.textContent).toContain('Couldn\u2019t load autonomy state');
   });
 
   it('explains how offers appear instead of showing a bare empty list', async () => {
     const { container } = await mount({ offers: [], profiles: [PROFILE_UNFLAGGED] });
+    await waitForElement(container, '[data-testid="autonomy-no-offers"]');
+    await waitForElement(container, '[data-testid="autonomy-none-enrolled"]');
     expect(container.querySelector('[data-testid="autonomy-no-offers"]')!.textContent).toContain(
       'accepted outcomes',
     );
@@ -512,13 +579,15 @@ describe('capability matrix reflects what is reachable, not just what is license
   const openMatrix = async (): Promise<HTMLDivElement> => {
     const { LicenseCard } = await import('../src/components/LicenseCard');
     const container = await render(<LicenseCard version={1} />);
+    await waitForElement(container, '[data-testid="capability-matrix-toggle"]');
     click(container.querySelector('[data-testid="capability-matrix-toggle"]'));
-    await settle(10);
+    await waitForElement(container, '[data-testid="capability-matrix"]');
     return container;
   };
 
   it('withholds the tick from an entitled feature with no screen in this build', async () => {
     const container = await openMatrix();
+    await waitForElement(container, '[data-testid="capability-office_hours"]');
     expect(container.querySelector('[data-testid="capability-office_hours"]'), 'the row still lists it').not.toBeNull();
     expect(
       container.querySelector('[data-testid="capability-tick-office_hours"]'),
@@ -533,6 +602,7 @@ describe('capability matrix reflects what is reachable, not just what is license
   it('grants the tick and prints the location once a surface registers', async () => {
     await import('../src/components/OfficeHoursCard'); // registers at module scope
     const container = await openMatrix();
+    await waitForElement(container, '[data-testid="capability-tick-office_hours"]');
     expect(container.querySelector('[data-testid="capability-tick-office_hours"]')).not.toBeNull();
     const goto = container.querySelector('[data-testid="capability-goto-office_hours"]');
     expect(goto!.textContent).toBe('Settings › Office hours');
@@ -543,6 +613,7 @@ describe('capability matrix reflects what is reachable, not just what is license
   it('leaves an unlicensed feature exactly as it was — planned stays planned', async () => {
     await import('../src/components/OfficeHoursCard');
     const container = await openMatrix();
+    await waitForElement(container, '[data-testid="capability-sso_scim"]');
     const row = container.querySelector('[data-testid="capability-sso_scim"]');
     expect(row!.textContent).toContain('planned');
     expect(container.querySelector('[data-testid="capability-tick-sso_scim"]')).toBeNull();
@@ -561,7 +632,18 @@ describe('capability matrix reflects what is reachable, not just what is license
     const { registerFeatureSurface, revealFeatureSurface } = await import('../src/components/featureSurfaces');
     window.location.hash = '#/calendar';
     const surface = registerFeatureSurface({ key: 'x_feature', tab: 'analytics', where: 'Analytics › X', anchorId: 'x' });
-    revealFeatureSurface(surface);
+    // revealFeatureSurface defers its scroll by 60ms (featureSurfaces.ts:103).
+    // Left running, that timer fires after vitest tears the jsdom environment
+    // down and crashes the RUN with `ReferenceError: document is not defined` —
+    // reproduced under load, and present before this change. Fake timers run it
+    // here, while `document` still exists, instead of leaking it past teardown.
+    vi.useFakeTimers();
+    try {
+      revealFeatureSurface(surface);
+      vi.runAllTimers();
+    } finally {
+      vi.useRealTimers();
+    }
     expect(window.location.hash).toBe('#/analytics');
   });
 });

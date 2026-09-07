@@ -19,6 +19,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { matchesFilter, emptyMessageFor } from '../src/components/InboxView';
+import { renderComponent, waitForElement, waitForText, waitForTextGone } from './helpers/dom';
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const INBOX = readFileSync(resolve(SRC, 'components/InboxView.tsx'), 'utf8');
@@ -91,14 +92,7 @@ describe('InboxView mounts the new F2/F12 surfaces (source-level, same philosoph
 // Behaviour-level: a full InboxView render
 // ---------------------------------------------------------------------------
 
-async function render(node: JSX.Element): Promise<HTMLDivElement> {
-  const { createRoot } = await import('react-dom/client');
-  const container = document.createElement('div');
-  document.body.appendChild(container);
-  createRoot(container).render(node);
-  await new Promise((r) => setTimeout(r, 60));
-  return container;
-}
+const render = renderComponent;
 
 const now = 1_700_000_000_000;
 
@@ -168,13 +162,20 @@ describe('Inbox "needs you" filter (behaviour)', () => {
     stubInboxFetch([runWithApproval, runWithoutApproval], [planApproval]);
     const { default: InboxView } = await import('../src/components/InboxView');
     const container = await render(<InboxView version={0} />);
+    // Both /runs and /approvals must have landed: the second row only proves
+    // anything once the list it is filtered out of has been drawn.
+    await waitForText(container, 'Docs freshness pass');
 
     // Sanity: with the default 'all' filter both rows already show.
     expect(container.textContent).toContain('Nightly deps sweep');
     expect(container.textContent).toContain('Docs freshness pass');
 
     findChip(container, 'needs you').dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 30));
+    // The discriminating change is the row DISAPPEARING. 'awaiting your
+    // decision' would be the wrong anchor: InboxView draws that chip under the
+    // 'all' filter too (InboxView.tsx:281), so waiting for it would return
+    // before the filter applied and leave the assertion below racing again.
+    await waitForTextGone(container, 'Docs freshness pass');
 
     expect(container.textContent, 'the run behind the pending approval must show up').toContain('Nightly deps sweep');
     expect(container.textContent, 'a run with nothing pending must not').not.toContain('Docs freshness pass');
@@ -187,10 +188,11 @@ describe('Inbox "needs you" filter (behaviour)', () => {
     stubInboxFetch([runWithoutApproval], []);
     const { default: InboxView } = await import('../src/components/InboxView');
     const container = await render(<InboxView version={0} />);
+    await waitForText(container, 'Docs freshness pass');
     expect(container.textContent).toContain('Docs freshness pass');
 
     findChip(container, 'failed').dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 30));
+    await waitForText(container, 'No failed runs');
 
     expect(container.textContent).not.toContain('No runs yet');
     expect(container.textContent).toContain('No failed runs');
@@ -200,6 +202,7 @@ describe('Inbox "needs you" filter (behaviour)', () => {
     stubInboxFetch([], []);
     const { default: InboxView } = await import('../src/components/InboxView');
     const container = await render(<InboxView version={0} />);
+    await waitForText(container, 'No runs yet. Book one from the calendar.');
     expect(container.textContent).toContain('No runs yet. Book one from the calendar.');
   });
 
@@ -207,6 +210,7 @@ describe('Inbox "needs you" filter (behaviour)', () => {
     stubInboxFetch([runWithoutApproval], { status: 500, body: { error: 'daemon exploded' } });
     const { default: InboxView } = await import('../src/components/InboxView');
     const container = await render(<InboxView version={0} />);
+    await waitForElement(container, '.error-banner');
     expect(container.textContent).toContain('daemon exploded');
     expect(container.querySelector('.error-banner')).not.toBeNull();
   });

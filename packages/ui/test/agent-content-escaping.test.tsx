@@ -16,6 +16,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { waitFor, waitForText } from './helpers/dom';
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const TAURI_CONF = resolve(dirname(fileURLToPath(import.meta.url)), '../../../src-tauri/tauri.conf.json');
@@ -61,7 +62,10 @@ describe('agent-authored content cannot become HTML', () => {
     const container = document.createElement('div');
     document.body.appendChild(container);
     createRoot(container).render(<div className="summary-block">{payload}</div>);
-    await new Promise((r) => setTimeout(r, 30));
+    // The escaped payload is the positive anchor: "no <script> element" is
+    // trivially true of a container React has not committed into yet, so the
+    // three negatives below only mean something once the text is on screen.
+    await waitForText(container, '<script>');
 
     expect(container.querySelector('script'), 'a script element was created from agent text').toBeNull();
     expect(container.querySelector('img'), 'an img element was created from agent text').toBeNull();
@@ -75,7 +79,9 @@ describe('agent-authored content cannot become HTML', () => {
     const unsafe = document.createElement('div');
     document.body.appendChild(unsafe);
     createRoot(unsafe).render(<div dangerouslySetInnerHTML={{ __html: payload }} />);
-    await new Promise((r) => setTimeout(r, 30));
+    await waitFor(() => unsafe.querySelector('img'), 'the control render to build an <img> from the raw payload', {
+      describe: () => `unsafe html = ${unsafe.innerHTML}`,
+    });
     expect(unsafe.querySelector('img'), 'control failed: the unsafe path did not build an element, so this test proves nothing').not.toBeNull();
   });
 

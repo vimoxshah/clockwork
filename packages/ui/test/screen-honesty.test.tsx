@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url';
 // component graph, and paying that transform inside a 5s test timeout made
 // this file fail under a loaded full-suite run.
 import { formatNextFire } from '../src/App';
+import { renderComponent, waitFor, waitForElement, waitForText } from './helpers/dom';
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
@@ -33,16 +34,7 @@ const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 // harness
 // ---------------------------------------------------------------------------
 
-const settle = (ms = 40): Promise<void> => new Promise((r) => setTimeout(r, ms));
-
-async function render(node: JSX.Element): Promise<HTMLDivElement> {
-  const { createRoot } = await import('react-dom/client');
-  const container = document.createElement('div');
-  document.body.appendChild(container);
-  createRoot(container).render(node);
-  await settle();
-  return container;
-}
+const render = renderComponent;
 
 function click(el: Element | null): void {
   expect(el, 'control missing from the DOM').not.toBeNull();
@@ -135,6 +127,12 @@ describe('Calendar ▸ Week header names the week its own grid draws', () => {
     const container = await render(
       <CalendarView version={1} onBookOnDate={() => {}} onOpenTask={() => {}} />,
     );
+    // The seven columns are what every case below reads, so they are the wait.
+    await waitFor(
+      () => container.querySelectorAll('.week-col .daynum').length === 7,
+      'the seven week columns',
+      { describe: () => `columns = ${container.querySelectorAll('.week-col .daynum').length}` },
+    );
     return { container, calls };
   };
 
@@ -197,6 +195,9 @@ describe('Calendar ▸ Week header names the week its own grid draws', () => {
     const { container } = await mountWeek(new Date(2026, 8, 6, 12, 0), [
       { ts: mondayRun, name: 'Verify sweep' },
     ]);
+    // The columns draw before GET /calendar answers, so the booked run needs
+    // its own wait — the grid being there is not the run being there.
+    await waitForText(container, 'Verify sweep');
     const first = container.querySelectorAll('.week-col')[0]!;
     expect(first.textContent, 'the week that is drawn must be the week that is fetched').toContain(
       'Verify sweep',
@@ -280,8 +281,21 @@ describe('AutonomyCard states no enrolment fact while it is still loading', () =
   ): Promise<HTMLDivElement> => {
     stubFetch([...OFFERS, [/^\/profiles$/, profiles]]);
     const { AutonomyCard } = await import('../src/components/AutonomyCard');
-    return render(<AutonomyCard version={1} />);
+    const container = await render(<AutonomyCard version={1} />);
+    await waitForElement(container, '[data-testid="autonomy-enrol-open"]');
+    return container;
   };
+
+  /**
+   * The three cases below are about what the button says AFTER GET /profiles
+   * answers. Waiting for the label to stop being the loading one is the honest
+   * anchor: it does not wait for the answer the test asserts, so a wrong label
+   * still fails as a wrong label.
+   */
+  const profilesRead = (btn: Element): Promise<true> =>
+    waitFor(() => btn.textContent !== 'Reading profiles…' || undefined, 'GET /profiles to answer', {
+      describe: () => `button reads ${JSON.stringify(btn.textContent)}`,
+    });
 
   it('says it is still reading, instead of “Every profile is already enrolled”', async () => {
     // GET /profiles measured at 4.7-5.3s behind provider detection on a real
@@ -298,6 +312,7 @@ describe('AutonomyCard states no enrolment fact while it is still loading', () =
   it('says the read failed when it failed, which is also not a claim about enrolment', async () => {
     const container = await mount(() => json({ error: 'database is locked' }, 500));
     const btn = container.querySelector('[data-testid="autonomy-enrol-open"]')!;
+    await profilesRead(btn);
     expect(btn.textContent).toBe('Profiles couldn’t be read');
   });
 
@@ -306,6 +321,7 @@ describe('AutonomyCard states no enrolment fact while it is still loading', () =
       json([{ id: 'p_2', slug: 'test-doctor', name: 'Test Doctor', permission_mode: 'plan', autonomy_rung: 'plan' }]),
     );
     const btn = container.querySelector('[data-testid="autonomy-enrol-open"]')!;
+    await profilesRead(btn);
     expect(btn.textContent).toBe('Every profile is already enrolled');
   });
 
@@ -314,6 +330,7 @@ describe('AutonomyCard states no enrolment fact while it is still loading', () =
       json([{ id: 'p_1', slug: 'docs-scribe', name: 'Docs Scribe', permission_mode: 'acceptEdits', autonomy_rung: null }]),
     );
     const btn = container.querySelector('[data-testid="autonomy-enrol-open"]')!;
+    await profilesRead(btn);
     expect(btn.textContent).toBe('Choose a profile to enrol');
     expect((btn as HTMLButtonElement).disabled).toBe(false);
   });
@@ -341,8 +358,9 @@ describe('capability matrix is readable and its toggle is visibly a control', ()
     stubFetch([[/^\/capabilities$/, () => json(CAPS)]]);
     const { LicenseCard } = await import('../src/components/LicenseCard');
     const container = await render(<LicenseCard version={1} />);
+    await waitForElement(container, '[data-testid="capability-matrix-toggle"]');
     click(container.querySelector('[data-testid="capability-matrix-toggle"]'));
-    await settle(10);
+    await waitForElement(container, '[data-testid="capability-matrix"]');
     return container;
   };
 
@@ -361,13 +379,16 @@ describe('capability matrix is readable and its toggle is visibly a control', ()
     stubFetch([[/^\/capabilities$/, () => json(CAPS)]]);
     const { LicenseCard } = await import('../src/components/LicenseCard');
     const container = await render(<LicenseCard version={1} />);
+    await waitForElement(container, '[data-testid="capability-matrix-toggle"]');
     const toggle = container.querySelector('[data-testid="capability-matrix-toggle"]')!;
     const classes = toggle.className.split(/\s+/);
     expect(classes, 'a hover-only underline is invisible until you find it').toContain('underline');
     expect(toggle.querySelector('svg'), 'a chevron states which way the disclosure goes').not.toBeNull();
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     click(toggle);
-    await settle(10);
+    await waitFor(() => toggle.getAttribute('aria-expanded') === 'true', 'the disclosure to report itself open', {
+      describe: () => `aria-expanded = ${JSON.stringify(toggle.getAttribute('aria-expanded'))}`,
+    });
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
   });
 });

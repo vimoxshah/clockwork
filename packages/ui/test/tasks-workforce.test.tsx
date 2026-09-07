@@ -26,6 +26,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { PlanExecutePairT, RepoJobOfferT, TaskViewT } from '../src/api';
+import { renderComponent, waitFor, waitForElement, waitForText, waitForTextGone } from './helpers/dom';
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const TASKS_VIEW = readFileSync(resolve(SRC, 'components/TasksView.tsx'), 'utf8');
@@ -106,23 +107,20 @@ function stubRoutes(routes: Record<string, () => unknown>): void {
   );
 }
 
-async function render(node: JSX.Element): Promise<HTMLDivElement> {
-  const { createRoot } = await import('react-dom/client');
-  const container = document.createElement('div');
-  document.body.appendChild(container);
-  createRoot(container).render(node);
-  await new Promise((r) => setTimeout(r, 40));
-  return container;
-}
+const render = renderComponent;
 
 const textOf = (el: Element | null): string => el?.textContent ?? '';
 const labels = (el: Element): string[] => [...el.querySelectorAll('button')].map((b) => (b.textContent ?? '').trim());
 
-/** React 18 delegates from the root container, which is in the document — a real click reaches it. */
-async function click(el: Element | null | undefined): Promise<void> {
+/**
+ * React 18 delegates from the root container, which is in the document — a real
+ * click reaches it. No wait here: a click is a discrete event, so React has
+ * already flushed the state update by the time `click()` returns. Each caller
+ * waits for its own ASYNC consequence (a fetch, a portal) instead.
+ */
+function click(el: Element | null | undefined): void {
   if (!el) throw new Error('nothing to click');
   (el as HTMLElement).click();
-  await new Promise((r) => setTimeout(r, 20));
 }
 
 /** React tracks the value node-side, so the native setter is the only way in. */
@@ -176,6 +174,7 @@ describe('Tasks mounts the three workforce sections it owns (F1, F4, F5)', () =>
     });
     const { default: TasksView } = await import('../src/components/TasksView');
     const c = await render(<TasksView version={1} />);
+    await waitForElement(c, '[data-testid="section-tasks"]');
     for (const key of ['tasks', 'pairs', 'sentinels', 'repo']) {
       expect(c.querySelector(`[data-testid="section-${key}"]`), key).not.toBeNull();
     }
@@ -201,7 +200,24 @@ async function renderTasks(pairs: PlanExecutePairT[] | 'error' | 'pending'): Pro
           : { pairs },
   });
   const { default: TasksView } = await import('../src/components/TasksView');
-  return render(<TasksView version={1} />);
+  const c = await render(<TasksView version={1} />);
+  // The task-count chip sits OUTSIDE the rowsReady gate (TasksView.tsx:300-306)
+  // and reads tasks.data, so "2 tasks" is proof that GET /tasks has landed —
+  // independently of the pair lookup, which is what every case here turns on.
+  await waitForText(c, '2 tasks');
+  if (pairs === 'pending') {
+    // Deliberate "nothing should happen": the pairs promise never settles, so
+    // the assertions are absences. The wait above is what makes them mean
+    // something — the tasks HAVE arrived and the rows are still withheld,
+    // rather than the whole view simply not having rendered yet.
+    await waitForText(c, 'Loading tasks…');
+  } else {
+    // rowsReady = !tasks.loading && !tasks.error && !pairs.loading
+    // (TasksView.tsx:221), and the spinner is drawn on exactly that condition,
+    // so its disappearance is the moment the rows are decided.
+    await waitForTextGone(c, 'Loading tasks…');
+  }
+  return c;
 }
 
 describe('the execute half of a plan-then-execute pair (the 409 bug)', () => {
@@ -225,7 +241,10 @@ describe('the execute half of a plan-then-execute pair (the 409 bug)', () => {
     const onOpen = (e: Event): void => void seen.push((e as CustomEvent<string>).detail);
     window.addEventListener('clockwork:open-run', onOpen);
     const row = c.querySelector('[data-testid="task-row-execute-half"]')!;
-    await click(row.querySelector('[data-testid="execute-half-link"]'));
+    click(row.querySelector('[data-testid="execute-half-link"]'));
+    await waitFor(() => seen.length === 1, 'the clockwork:open-run handoff the Inbox listens for', {
+      describe: () => `events seen = ${JSON.stringify(seen)}, hash = ${window.location.hash}`,
+    });
     window.removeEventListener('clockwork:open-run', onOpen);
     expect(seen, 'the Inbox is told which run holds the plan').toEqual(['run_plan']);
     expect(window.location.hash, 'App routes on the whole hash, so it must be #/inbox').toBe('#/inbox');
@@ -298,6 +317,7 @@ describe('the execute half of a plan-then-execute pair (the 409 bug)', () => {
     });
     const { default: TasksView } = await import('../src/components/TasksView');
     const c = await render(<TasksView version={1} />);
+    await waitForElement(c, '[data-testid="task-row"]');
     const row = c.querySelector('[data-testid="task-row"]')!;
     expect(textOf(row)).toContain('plan half');
     expect(labels(row)).toContain('Run now'); // the plan half is an ordinary task
@@ -344,6 +364,7 @@ describe('PlanExecuteSection (F1)', () => {
         onFindInTasks={() => {}}
       />,
     );
+    await waitForElement(c, '[data-testid="pair-awaiting_approval"]');
     // one approve/reject pair of buttons, on the awaiting_approval row only
     expect(c.querySelectorAll('[data-testid="pair-approve"]')).toHaveLength(1);
     expect(c.querySelectorAll('[data-testid="pair-reject"]')).toHaveLength(1);
@@ -364,12 +385,16 @@ describe('PlanExecuteSection (F1)', () => {
         onFindInTasks={() => {}}
       />,
     );
+    await waitForElement(known, '[data-testid="pair-awaiting_plan"]');
     expect(labels(known)).toContain('Show both halves');
     document.body.innerHTML = '';
     // both halves deleted: the search would find nothing, so no button is drawn
     const gone = await render(
       <PlanExecuteSection pairs={asyncState({ pairs: rows })} tasks={[]} onChanged={() => {}} onFindInTasks={() => {}} />,
     );
+    // This half asserts only an absence, so it would also pass against a board
+    // that had not rendered. Wait for the pair row before counting buttons.
+    await waitForElement(gone, '[data-testid="pair-awaiting_plan"]');
     expect(labels(gone)).not.toContain('Show both halves');
   });
 
@@ -384,6 +409,7 @@ describe('PlanExecuteSection (F1)', () => {
     const c = await render(
       <PlanExecuteSection pairs={asyncState({ pairs: [] })} tasks={[]} onChanged={() => {}} onFindInTasks={() => {}} />,
     );
+    await waitForElement(c, '[data-testid="pe-empty"]');
     const empty = c.querySelector('[data-testid="pe-empty"]')!;
     expect(textOf(empty)).toContain('read the agent’s plan before it touches anything');
     expect(c.querySelector('[data-testid="pe-new"]')).not.toBeNull();
@@ -399,6 +425,7 @@ describe('PlanExecuteSection (F1)', () => {
         onFindInTasks={() => {}}
       />,
     );
+    await waitForElement(c, '[role="alert"]');
     expect(textOf(c.querySelector('[role="alert"]'))).toContain('daemon unreachable');
     expect(c.querySelector('[data-testid="pe-empty"]')).toBeNull();
   });
@@ -427,7 +454,11 @@ describe('PlanExecuteSection (F1)', () => {
         onFindInTasks={() => {}}
       />,
     );
-    await click(c.querySelector('[data-testid="pe-new"]'));
+    await waitForElement(c, '[data-testid="pe-new"]');
+    click(c.querySelector('[data-testid="pe-new"]'));
+    // Radix mounts its portal in an effect, so this waits for the portal rather
+    // than for 20ms.
+    await waitForElement(document.body, '[role="dialog"]');
 
     // Radix portals dialog content to <body>, as a sibling of the render container.
     const dialog = document.body.querySelector('[role="dialog"]');
@@ -463,6 +494,9 @@ describe('SentinelsSection (F4)', () => {
     stubRoutes({ '/workforce/sentinels': () => ({ sentinels: [] }), '/triggers': () => [] });
     const { default: SentinelsSection } = await import('../src/components/SentinelsSection');
     const c = await render(<SentinelsSection version={1} tasks={[PLAIN_TASK]} />);
+    // Drawn only on `!triggers.loading && !triggers.error && trgs.length === 0`
+    // (SentinelsSection.tsx:115), so it proves GET /triggers has answered.
+    await waitForElement(c, '[data-testid="sentinel-no-triggers"]');
     expect(c.querySelector('[data-testid="sentinel-no-triggers"]')).not.toBeNull();
     expect(c.querySelector('[data-testid="sentinel-create"]')).toBeNull();
     expect(textOf(c)).toContain('Settings → Event triggers');
@@ -475,6 +509,8 @@ describe('SentinelsSection (F4)', () => {
     });
     const { default: SentinelsSection } = await import('../src/components/SentinelsSection');
     const c = await render(<SentinelsSection version={1} tasks={[PLAIN_TASK]} />);
+    // `sentinel-empty` needs `!sentinels.loading`, so it is the load anchor here.
+    await waitForElement(c, '[data-testid="sentinel-empty"]');
     const create = c.querySelector('[data-testid="sentinel-create"]') as HTMLButtonElement;
     expect(create).not.toBeNull();
     expect(create.disabled, 'an empty form must not post a 422').toBe(true);
@@ -490,6 +526,10 @@ describe('SentinelsSection (F4)', () => {
     const c = await render(
       <SentinelsSection version={1} tasks={[task({ id: 'task_watch', name: 'Cheap CI peek' }), task({ id: 'task_worker', name: 'Full investigation' })]} />,
     );
+    await waitForElement(c, '[data-testid="sentinel-row"]');
+    // The "trigger is off" chip needs GET /triggers as well as the sentinel
+    // list, so it is the last of the two fetches to show up.
+    await waitForElement(c, '[data-testid="sentinel-trigger-off"]');
     const row = c.querySelector('[data-testid="sentinel-row"]')!;
     expect(textOf(row)).toContain('Cheap CI peek');
     expect(textOf(row)).toContain('Full investigation');
@@ -536,6 +576,7 @@ describe('RepoJobsSection (F5) — import is a decision, not a click', () => {
 
   it('shows the prompt, the flags and the terms before it shows the button', async () => {
     const c = await renderOffers([offer()]);
+    await waitForElement(c, '[data-testid="offer-prompt"]');
     expect(textOf(c.querySelector('[data-testid="offer-prompt"]'))).toContain('Update the lockfile');
     const terms = c.querySelector('[data-testid="offer-import-terms"]')!;
     expect(textOf(terms)).toContain('switched off');
@@ -547,6 +588,7 @@ describe('RepoJobsSection (F5) — import is a decision, not a click', () => {
 
   it('says the repo’s own schedule is not applied', async () => {
     const c = await renderOffers([offer()]);
+    await waitForText(c, '0 3 * * *');
     expect(textOf(c)).toContain('0 3 * * *');
     expect(textOf(c)).toContain('not applied');
   });
@@ -555,6 +597,7 @@ describe('RepoJobsSection (F5) — import is a decision, not a click', () => {
     const c = await renderOffers([
       offer({ id: 'off_red', preview: { flags: [{ level: 'red', text: 'bypassPermissions is banned in H1 — import will be rejected.' }], arrivesDisabled: true } }),
     ]);
+    await waitForElement(c, '[data-testid="offer-import"]');
     const btn = c.querySelector('[data-testid="offer-import"]') as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
     expect(textOf(c.querySelector('[data-testid="offer-blocked"]'))).toContain('the button would only fail');
@@ -562,6 +605,7 @@ describe('RepoJobsSection (F5) — import is a decision, not a click', () => {
 
   it('leaves import enabled for an ordinary offer', async () => {
     const c = await renderOffers([offer()]);
+    await waitForElement(c, '[data-testid="offer-import"]');
     expect((c.querySelector('[data-testid="offer-import"]') as HTMLButtonElement).disabled).toBe(false);
     expect(c.querySelector('[data-testid="offer-dismiss"]')).not.toBeNull();
   });
@@ -572,7 +616,13 @@ describe('RepoJobsSection (F5) — import is a decision, not a click', () => {
       offer({ id: 'off_gone', status: 'dismissed', decidedAt: 1_700_000_100_000 }),
     ]);
     // the board opens on the offers that still need a decision; these do not
-    await click(tabNamed(c, 'all'));
+    await waitForText(c, 'Nothing is waiting on your decision.');
+    click(tabNamed(c, 'all'));
+    await waitFor(
+      () => c.querySelectorAll('[data-testid^="offer-"]').length > 0,
+      'the decided offers to appear under the "all" filter',
+      { describe: () => `offer nodes = ${c.querySelectorAll('[data-testid^="offer-"]').length}` },
+    );
     expect(c.querySelectorAll('[data-testid^="offer-"]').length).toBeGreaterThan(0);
     // both routes CAS on status='offered' and 422 otherwise
     expect(c.querySelector('[data-testid="offer-import"]')).toBeNull();
@@ -583,11 +633,13 @@ describe('RepoJobsSection (F5) — import is a decision, not a click', () => {
 
   it('admits when an offer carries no security preview instead of implying it is clean', async () => {
     const c = await renderOffers([offer({ id: 'off_raw', preview: null })]);
+    await waitForElement(c, '[data-testid="offer-no-preview"]');
     expect(textOf(c.querySelector('[data-testid="offer-no-preview"]'))).toContain('Read the prompt above yourself');
   });
 
   it('explains what the feature is when no repo has been read yet', async () => {
     const c = await renderOffers([]);
+    await waitForElement(c, '[data-testid="rj-empty"]');
     expect(textOf(c.querySelector('[data-testid="rj-empty"]'))).toContain('.clockwork/jobs.json');
     expect((c.querySelector('[data-testid="rj-scan"]') as HTMLButtonElement).disabled, 'no path, no scan').toBe(true);
   });
@@ -596,6 +648,7 @@ describe('RepoJobsSection (F5) — import is a decision, not a click', () => {
     stubRoutes({ '/workforce/repo-jobs': () => new Response(JSON.stringify({ error: 'no such table' }), { status: 500 }) });
     const { default: RepoJobsSection } = await import('../src/components/RepoJobsSection');
     const c = await render(<RepoJobsSection version={1} onFindInTasks={() => {}} onTasksChanged={() => {}} />);
+    await waitForElement(c, '[role="alert"]');
     expect(textOf(c.querySelector('[role="alert"]'))).toContain('no such table');
     expect(c.querySelector('[data-testid="rj-empty"]')).toBeNull();
   });
@@ -607,8 +660,11 @@ describe('RepoJobsSection (F5) — import is a decision, not a click', () => {
     });
     const { default: RepoJobsSection } = await import('../src/components/RepoJobsSection');
     const c = await render(<RepoJobsSection version={1} onFindInTasks={() => {}} onTasksChanged={() => {}} />);
+    await waitForElement(c, '[data-testid="rj-scan"]');
     type(c.querySelector('#rj-path'), '/Users/me/dev/widget');
-    await click(c.querySelector('[data-testid="rj-scan"]'));
+    click(c.querySelector('[data-testid="rj-scan"]'));
+    // The scan is a POST; the banner is what it produces.
+    await waitForElement(c, '[data-testid="rj-scan-result"]');
     const banner = c.querySelector('[data-testid="rj-scan-result"]');
     expect(textOf(banner)).toContain('recommends 2 jobs');
     expect(textOf(banner)).not.toContain('Nothing was imported');
@@ -617,6 +673,7 @@ describe('RepoJobsSection (F5) — import is a decision, not a click', () => {
   it('does not stutter the empty state ("No offered offers.") when a filter has zero rows', async () => {
     const c = await renderOffers([offer({ status: 'imported', taskId: 'task_new', decidedAt: 1_700_000_100_000 })]);
     // default filter is 'offered'; the only offer is already imported, so the offered view is empty
+    await waitForText(c, 'Nothing is waiting on your decision.');
     expect(textOf(c)).not.toContain('No offered offers.');
     expect(textOf(c)).toContain('Nothing is waiting on your decision.');
   });

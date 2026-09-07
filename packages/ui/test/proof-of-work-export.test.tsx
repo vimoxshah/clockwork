@@ -8,13 +8,16 @@
  * rather than swallow it.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { renderComponent, waitFor, waitForElement, waitForText } from './helpers/dom';
 
+/**
+ * The component takes no props that make it fetch on mount, so its whole UI is
+ * in the first commit — waiting for the export button is waiting for the
+ * render, and nothing here waits on a clock.
+ */
 async function render(node: JSX.Element): Promise<HTMLDivElement> {
-  const { createRoot } = await import('react-dom/client');
-  const container = document.createElement('div');
-  document.body.appendChild(container);
-  createRoot(container).render(node);
-  await new Promise((r) => setTimeout(r, 30));
+  const container = await renderComponent(node);
+  await waitForElement(container, '[data-testid="proof-of-work-export"]');
   return container;
 }
 
@@ -51,7 +54,10 @@ describe('ProofOfWorkExport (F12)', () => {
 
     const button = container.querySelector('[data-testid="proof-of-work-export"]') as HTMLButtonElement;
     button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 30));
+    // `setDone(true)` is the LAST thing exportNow does — after createObjectURL,
+    // the anchor click and revokeObjectURL — so the banner appearing means
+    // every call asserted below has already been made (ProofOfWorkExport.tsx:57-65).
+    await waitForText(container, 'Downloaded');
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const url = String(fetchMock.mock.calls[0]![0]);
@@ -72,11 +78,15 @@ describe('ProofOfWorkExport (F12)', () => {
 
     const transcript = container.querySelector('[aria-label="Include transcript"]') as HTMLInputElement;
     transcript.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-    await new Promise((r) => setTimeout(r, 10));
+    await waitFor(() => transcript.checked, 'the transcript checkbox to be toggled on', {
+      describe: () => `transcript.checked = ${transcript.checked}`,
+    });
 
     const redact = container.querySelector('[aria-label="Also redact file paths and branch names"]') as HTMLInputElement;
     redact.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-    await new Promise((r) => setTimeout(r, 10));
+    await waitFor(() => redact.checked, 'the redact-paths checkbox to be toggled on', {
+      describe: () => `redact.checked = ${redact.checked}`,
+    });
 
     expect(transcript.checked, 'the click should have toggled the checkbox on').toBe(true);
     expect(redact.checked).toBe(true);
@@ -84,7 +94,9 @@ describe('ProofOfWorkExport (F12)', () => {
     (container.querySelector('[data-testid="proof-of-work-export"]') as HTMLButtonElement).dispatchEvent(
       new MouseEvent('click', { bubbles: true }),
     );
-    await new Promise((r) => setTimeout(r, 30));
+    await waitFor(() => fetchMock.mock.calls.length > 0, 'the export request to be issued', {
+      describe: () => `fetch was called ${fetchMock.mock.calls.length} times`,
+    });
 
     const url = String(fetchMock.mock.calls[0]![0]);
     expect(url).toBe('/workforce/runs/run_2/proof-of-work?includeTranscript=1&includeDiffStat=1&redactPaths=1');
@@ -101,7 +113,7 @@ describe('ProofOfWorkExport (F12)', () => {
     (container.querySelector('[data-testid="proof-of-work-export"]') as HTMLButtonElement).dispatchEvent(
       new MouseEvent('click', { bubbles: true }),
     );
-    await new Promise((r) => setTimeout(r, 30));
+    await waitForElement(container, '.error-banner');
     expect(container.querySelector('.error-banner')).not.toBeNull();
     expect(container.textContent).toContain('not_found');
   });
@@ -110,6 +122,9 @@ describe('ProofOfWorkExport (F12)', () => {
     stubBrowserDownload();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('<html/>', { status: 200 })));
     const { ProofOfWorkExport } = await import('../src/components/ProofOfWorkExport');
+    // The only assertion is an absence, so it would also pass against a
+    // container that never rendered. `render` above waits for the export button
+    // first, so "no link" is now read off a panel that is genuinely on screen.
     const container = await render(<ProofOfWorkExport runId="run_1" />);
     expect(container.querySelector('a[href*="proof-of-work"]')).toBeNull();
   });
