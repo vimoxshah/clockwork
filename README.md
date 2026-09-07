@@ -221,7 +221,7 @@ Routes, refusal paths, per-feature tests and the measured numbers:
 
 ```bash
 # 1. Verify the bytes BEFORE you trust them
-shasum -a 256 ~/Downloads/Clockwork_0.8.0_aarch64.dmg
+shasum -a 256 ~/Downloads/Clockwork_*_aarch64.dmg
 curl -s https://clockwork.vmoksh-shah179.workers.dev/downloads/checksums-sha256.txt
 # if the two do not match: stop, do not install, report it
 
