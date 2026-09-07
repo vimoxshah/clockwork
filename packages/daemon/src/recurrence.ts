@@ -90,6 +90,119 @@ function wallBoundFor(ms: number, tz: string): Date {
 }
 
 /**
+ * The anchor a DTSTART-less rule used to get, and still gets whenever the
+ * advance below cannot be proved set-preserving. It is a fake-UTC instant like
+ * every other date in the rrule branch, so its epoch ms is 0.
+ */
+const EPOCH_DTSTART_LINE = 'DTSTART:19700101T000000Z';
+const EPOCH_ANCHOR_MS = 0;
+
+type ParsedRule = InstanceType<typeof RRule>;
+
+/** `DTSTART:` line for a fake-UTC instant — the clock rrule generates in. */
+function dtstartLineFor(wallMs: number): string {
+  return `DTSTART:${DateTime.fromMillis(wallMs, { zone: 'utc' }).toFormat("yyyyLLdd'T'HHmmss")}Z`;
+}
+
+/**
+ * How far forward the synthetic epoch anchor may be moved, in fake-UTC ms, or
+ * `EPOCH_ANCHOR_MS` to leave it at 1970.
+ *
+ * WHY THIS EXISTS. `between()` is not a search, it is a replay: the iterator
+ * walks from DTSTART one period at a time and only then starts accepting dates
+ * (`rrule/dist/esm/iter/index.js`, `if (res >= dtstart)`). A 1970 anchor
+ * therefore replays 56 years of history to answer a 31-day question — measured
+ * 2026-09-07 on an Apple M4, one `occurrencesBetween` call per sample,
+ * median-of-9 in one process, one schedule over one `/calendar` month window:
+ * 29.66ms -> 0.108ms for a FREQ=DAILY rule and 6.58ms -> 0.037ms for a
+ * FREQ=WEEKLY one, same occurrences either way. It also grows by ~365
+ * iterations per schedule per calendar year on its own.
+ *
+ * WHY IT IS SAFE. Moving the anchor forward by a WHOLE number of INTERVAL
+ * periods in the rule's own FREQ unit yields exactly the old occurrence set
+ * intersected with `[newAnchor, ∞)`, and nothing else:
+ *
+ *  - the period grid is a suffix of the old one — the iterator steps by
+ *    INTERVAL from DTSTART, and WEEKLY snaps to WKST before stepping
+ *    (`DateTime.addWeekly`), so an anchor a whole number of INTERVAL weeks on
+ *    lands on the same week grid;
+ *  - every component `parseOptions` reads OFF DTSTART is unchanged, because a
+ *    whole-day step preserves the time of day, a whole-week step preserves the
+ *    weekday, and a whole-month step from the 1st preserves both the day of
+ *    the month and midnight;
+ *  - the anchor is kept a full period BELOW the padded lower `between()`
+ *    bound, so the part of the set that is intersected away is entirely below
+ *    the window being asked about.
+ *
+ * WHEN IT IS NOT. Two refusals, and they are not the same refusal:
+ *
+ *  - COUNT. It changes WHICH occurrences exist rather than where iteration
+ *    starts: dropping the early ones promotes later ones into the count, and
+ *    an exhausted rule stops being exhausted. Verified: forcing the advance on
+ *    `FREQ=DAILY;COUNT=5;BYHOUR=9;BYMINUTE=0` turns an empty 2026 window into
+ *    three occurrences. This refusal is load-bearing for S-24 auto-disable.
+ *  - AN IMPLICIT PHASE. Without BYHOUR+BYMINUTE (DAILY), BYDAY (WEEKLY) or
+ *    BYMONTHDAY (MONTHLY), DTSTART itself supplies the time of day, the
+ *    weekday or the day of the month, so the rule's identity is tangled up
+ *    with its anchor. A whole-period step does preserve those components — see
+ *    above — but the module refuses anyway: the phase-carrying parts being
+ *    explicit is the condition this fix was scoped and reviewed against, and
+ *    all it costs is that those shapes keep today's behaviour.
+ *
+ * Every other FREQ keeps the epoch anchor too. HOURLY and finer would need
+ * their own equivalence argument and are out of scope here.
+ *
+ * @param rule the rule as parsed WITH the epoch anchor
+ * @param notAfterWallMs the padded lower `between()` bound, in fake-UTC ms
+ * @returns the fake-UTC ms of the anchor to use; `EPOCH_ANCHOR_MS` for "don't"
+ */
+function advancedAnchorMs(rule: ParsedRule, notAfterWallMs: number): number {
+  const given = rule.origOptions; // ONLY the parts the rule text actually stated
+  const { freq, interval } = rule.options;
+  if (given.count != null) return EPOCH_ANCHOR_MS;
+  // A window at or before the epoch has nothing to advance past. An unparseable
+  // bound (NaN) reaches `between()` and throws there today; keeping the epoch
+  // anchor keeps that pre-existing contract, and keeps NaN out of the DTSTART.
+  if (!(notAfterWallMs > 0)) return EPOCH_ANCHOR_MS;
+  // INTERVAL=0 yields no occurrences at all and a negative one spins forever
+  // inside rrule 2.8.1 — both are the untouched path's problem, not this one's.
+  if (!Number.isInteger(interval) || interval <= 0) return EPOCH_ANCHOR_MS;
+
+  let periodMs: number;
+  switch (freq) {
+    case RRule.DAILY:
+      if (given.byhour == null || given.byminute == null) return EPOCH_ANCHOR_MS;
+      periodMs = interval * 86_400_000;
+      break;
+    case RRule.WEEKLY:
+      if (given.byweekday == null) return EPOCH_ANCHOR_MS;
+      periodMs = interval * 7 * 86_400_000;
+      break;
+    case RRule.MONTHLY: {
+      if (given.bymonthday == null) return EPOCH_ANCHOR_MS;
+      // Months are not a fixed number of milliseconds, so this rung counts
+      // calendar months off 1970-01 and lets Luxon do the arithmetic. The
+      // result is always day 1 at 00:00:00, which is what leaves an implicit
+      // BYHOUR/BYMINUTE/BYSECOND untouched.
+      const bound = DateTime.fromMillis(notAfterWallMs, { zone: 'utc' });
+      const wholeMonths = (bound.year - 1970) * 12 + (bound.month - 1);
+      const periods = Math.floor(wholeMonths / interval) - 1;
+      if (periods <= 0) return EPOCH_ANCHOR_MS;
+      return DateTime.fromMillis(0, { zone: 'utc' })
+        .plus({ months: periods * interval })
+        .toMillis();
+    }
+    default:
+      return EPOCH_ANCHOR_MS;
+  }
+  // One period short of the bound on purpose: `floor` alone would already land
+  // at or below it, and the extra period leaves the intersected-away part of
+  // the set a whole period clear of the window.
+  const periods = Math.floor(notAfterWallMs / periodMs) - 1;
+  return periods > 0 ? periods * periodMs : EPOCH_ANCHOR_MS;
+}
+
+/**
  * Enumerate occurrences in (fromMsExclusive, toMsInclusive] in UTC epoch ms.
  * Bounded work per call — the tick loop must stay O(due), never O(history).
  *
@@ -117,17 +230,28 @@ export function occurrencesBetween(s: ScheduleLike, fromMsExcl: number, toMsIncl
     // including an occurrence whose instant is exactly `toMsIncl`.
     let ruleText = s.rrule ?? '';
     // Without an explicit DTSTART the lib anchors at construction-time "now",
-    // which breaks historical/fake-clock expansion. Anchor at epoch instead:
-    // the between() window is the real boundary.
-    if (!/DTSTART/i.test(ruleText)) {
-      ruleText = `DTSTART:19700101T000000Z\n${ruleText}`;
+    // which breaks historical/fake-clock expansion. Synthesize one instead —
+    // the between() window is the real boundary — starting from the epoch and
+    // then moved forward as far as `advancedAnchorMs` can prove is free.
+    const synthetic = !/DTSTART/i.test(ruleText);
+    if (synthetic) {
+      ruleText = `${EPOCH_DTSTART_LINE}\n${ruleText}`;
     }
-    const rule = RRule.fromString(ruleText);
-    const between = rule.between(
-      new Date(wallBoundFor(fromMsExcl, s.tz).getTime() - WALL_WINDOW_PAD_MS),
-      new Date(wallBoundFor(toMsIncl, s.tz).getTime() + WALL_WINDOW_PAD_MS),
-      true,
-    );
+    let rule = RRule.fromString(ruleText);
+    const lowerBound = new Date(wallBoundFor(fromMsExcl, s.tz).getTime() - WALL_WINDOW_PAD_MS);
+    const upperBound = new Date(wallBoundFor(toMsIncl, s.tz).getTime() + WALL_WINDOW_PAD_MS);
+    if (synthetic) {
+      // A synthesized anchor is ours to move; a caller's DTSTART never is,
+      // because there the anchor is part of the schedule the user saved.
+      // `EPOCH_DTSTART_LINE` is the prefix just prepended above and `synthetic`
+      // means the text carried no DTSTART of its own, so this replaces exactly
+      // that line and re-parses down the same path.
+      const anchorMs = advancedAnchorMs(rule, lowerBound.getTime());
+      if (anchorMs > EPOCH_ANCHOR_MS) {
+        rule = RRule.fromString(ruleText.replace(EPOCH_DTSTART_LINE, dtstartLineFor(anchorMs)));
+      }
+    }
+    const between = rule.between(lowerBound, upperBound, true);
     // Map lazily and stop at `limit` KEPT occurrences. Mapping the whole array
     // first would be ~1M luxon conversions for a MINUTELY rule over the 732-day
     // horizon, and taking a suffix of it would answer the far end of the

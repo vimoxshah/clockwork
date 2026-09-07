@@ -1,16 +1,27 @@
 /**
  * Reachable approvals — outbound half (FR-18 sibling): a permission request
- * must reach every configured delivery channel (OS, Telegram, webhook), not
- * just sit in the `approvals` table waiting for someone to open the app.
+ * must reach EVERY configured delivery channel — OS, Telegram, webhook, Slack
+ * and email — not just sit in the `approvals` table waiting for someone to
+ * open the app.
+ *
+ * "Every" is the whole point of the suite. Slack and email shipped carrying
+ * run reports while `notifyApprovalRequest` kept a private telegram/webhook
+ * copy of the fan-out, so a task could be wired for Slack, watch its reports
+ * arrive, and never learn a run was waiting on it. The channel list here and
+ * the one `deliverReport` uses are now the same list (`deliverApproval` in
+ * delivery-dispatch.ts), and these tests are what holds them together.
  *
  * This drives the REAL RunManager.handleChildMessage('permission', ...) path
  * — real DB, real approvals row, real SSE broadcast — and stubs only the two
  * actual transports: node:child_process.spawn (so we can feed a fake child's
- * stdout) and global fetch (Telegram/webhook HTTP). OS notification is
+ * stdout) and global fetch (Telegram/webhook/Slack HTTP). Email is not stubbed
+ * at all: it speaks real SMTP to a real loopback socket, because the point of
+ * these two tests is that the bytes leave the daemon. OS notification is
  * observed via the injected `notify` dep, exactly as main.ts wires it.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { openDatabase, createMigrator, loadMigrationsFrom, type DB } from '../src/db.js';
@@ -62,6 +73,7 @@ let clock: FakeClock;
 let notifyMock: ReturnType<typeof vi.fn>;
 let broadcastMock: ReturnType<typeof vi.fn>;
 let fetchMock: ReturnType<typeof vi.fn>;
+let smtp: FakeSmtp | null = null;
 
 function seedTask(name: string, deliveryJson: string): { id: string } {
   const now = Date.now();
@@ -123,6 +135,111 @@ function sendPermission(child: FakeChild, reqId: string, tool: string, input: un
   child.stdout.write(JSON.stringify({ t: 'permission', reqId, tool, input }) + '\n');
 }
 
+// ---- a real, minimal loopback SMTP relay ----
+//
+// Just enough of the submission dialogue for one message. STARTTLS is NOT
+// advertised and the URL carries no credentials, so the client neither
+// upgrades nor authenticates — the protocol itself (split replies, STARTTLS,
+// AUTH PLAIN/LOGIN) is smtp-delivery.test.ts's job. Here the only question is
+// whether an approval request reaches the email channel at all, so the assert
+// is on the message the relay accepted.
+interface FakeSmtp {
+  port: number;
+  /** every command line the client sent, in order */
+  log: string[];
+  /** each accepted DATA payload, un-terminated */
+  mail: string[];
+  close: () => Promise<void>;
+}
+
+function startFakeSmtp(): Promise<FakeSmtp> {
+  const log: string[] = [];
+  const mail: string[] = [];
+  const sockets = new Set<net.Socket>();
+  const server = net.createServer((sock) => {
+    sockets.add(sock);
+    sock.on('error', () => {});
+    let buf = '';
+    let inData = false;
+    let dataBuf = '';
+    const write = (s: string): void => void sock.write(s + '\r\n');
+    write('220 fake.test ESMTP ready');
+    sock.on('data', (chunk) => {
+      buf += chunk.toString('utf8');
+      for (;;) {
+        const i = buf.indexOf('\r\n');
+        if (i < 0) break;
+        const line = buf.slice(0, i);
+        buf = buf.slice(i + 2);
+        if (inData) {
+          if (line === '.') {
+            inData = false;
+            mail.push(dataBuf);
+            dataBuf = '';
+            write('250 2.0.0 Ok: queued as FAKE1');
+          } else {
+            dataBuf += line + '\r\n';
+          }
+          continue;
+        }
+        log.push(line);
+        const upper = line.toUpperCase();
+        if (upper.startsWith('EHLO')) {
+          write('250-fake.test at your service');
+          write('250 SIZE 10240000');
+        } else if (upper.startsWith('DATA')) {
+          inData = true;
+          write('354 End data with <CR><LF>.<CR><LF>');
+        } else if (upper.startsWith('QUIT')) {
+          write('221 2.0.0 Bye');
+          sock.end();
+        } else {
+          write('250 2.0.0 Ok');
+        }
+      }
+    });
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address() as net.AddressInfo;
+      resolve({
+        port,
+        log,
+        mail,
+        close: () =>
+          new Promise((done) => {
+            for (const s of sockets) s.destroy();
+            server.close(() => done());
+          }),
+      });
+    });
+  });
+}
+
+/** Headers (unfolded, lowercased keys) + the decoded text body. */
+function parseMail(raw: string): { headers: Record<string, string>; body: string } {
+  const split = raw.indexOf('\r\n\r\n');
+  const unfolded: string[] = [];
+  for (const l of raw.slice(0, split).split('\r\n')) {
+    if (/^[ \t]/.test(l) && unfolded.length > 0) unfolded[unfolded.length - 1] += l.trimStart();
+    else unfolded.push(l);
+  }
+  const headers: Record<string, string> = {};
+  for (const l of unfolded) {
+    const c = l.indexOf(':');
+    if (c > 0) headers[l.slice(0, c).toLowerCase()] = l.slice(c + 1).trim();
+  }
+  return {
+    headers,
+    body: Buffer.from(raw.slice(split + 4).replace(/\r\n/g, ''), 'base64').toString('utf8'),
+  };
+}
+
+/** RFC 2047 B-encoded words back to text (the subject is always B-encoded). */
+function decodeHeader(v: string): string {
+  return v.replace(/=\?UTF-8\?B\?([^?]*)\?=/gi, (_, b64: string) => Buffer.from(b64, 'base64').toString('utf8'));
+}
+
 beforeAll(() => {
   dir = mkdtempSync(path.join(os.tmpdir(), 'cw-approval-notify-'));
   mkdirSync(path.join(dir, 'scratch'), { recursive: true });
@@ -154,11 +271,15 @@ beforeEach(() => {
   vi.stubGlobal('fetch', fetchMock);
 });
 
-afterEach(() => {
+afterEach(async () => {
   captured.calls.length = 0;
   notifyMock.mockClear();
   broadcastMock.mockClear();
   vi.unstubAllGlobals();
+  if (smtp) {
+    await smtp.close();
+    smtp = null;
+  }
 });
 
 afterAll(() => {
@@ -307,5 +428,139 @@ describe('reachable approvals: outbound notification on permission request', () 
     // outbound notification is deduped), but only one carried a live notification.
     const rows = db.prepare(`SELECT id FROM approvals WHERE run_id=?`).all(runId) as Array<{ id: string }>;
     expect(rows.length).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The two channels the private fan-out left out
+// ---------------------------------------------------------------------------
+
+const SLACK_HOOK = 'https://hooks.slack.com/services/T0000/B0000/approvalfanout';
+
+/** The one approvals row a run has, so the assert can name the real id. */
+function approvalIdOf(runId: string): string {
+  const row = db.prepare(`SELECT id FROM approvals WHERE run_id=?`).get(runId) as { id: string } | undefined;
+  expect(row, 'no approvals row was written for the run').toBeTruthy();
+  return row!.id;
+}
+
+/** The one note event a run has for a given key, or null while it has none. */
+function noteFor(runId: string, key: string): Record<string, unknown> | null {
+  const rows = db.prepare(`SELECT data_json FROM events WHERE run_id=? AND kind='note'`).all(runId) as Array<{
+    data_json: string;
+  }>;
+  for (const r of rows) {
+    const data = JSON.parse(r.data_json) as Record<string, unknown>;
+    if (key in data) return data;
+  }
+  return null;
+}
+
+describe('reachable approvals reach Slack and email, not only Telegram and the webhook', () => {
+  it('a Slack-configured task receives the approval request itself, not just its run report', async () => {
+    writeFileSync(path.join(dataDir, 'delivery-creds.json'), JSON.stringify({ slackWebhookUrl: SLACK_HOOK }));
+
+    const task = seedTask('slack-approval-task', JSON.stringify({ osNotify: true, slack: { enabled: true } }));
+    const runId = enqueueScratchRun(task.id, 'slack-approval-task');
+
+    rm.pump();
+    await waitFor(() => captured.calls.length > 0);
+    const { child } = captured.calls[0]!;
+
+    sendPermission(child, 'req-slack', 'Bash', { command: 'kubectl apply -f prod.yaml' });
+
+    // 20s, not the 5s default: S-43 retries each transport three times with
+    // a 1s+2s backoff, so a single transient miss under a loaded full-suite
+    // run needs more than 5s to produce the call this asserts on.
+    await waitFor(() => fetchMock.mock.calls.some((c) => String(c[0]) === SLACK_HOOK), 20_000);
+    const call = fetchMock.mock.calls.find((c) => String(c[0]) === SLACK_HOOK)!;
+    const body = JSON.parse(String((call[1] as RequestInit).body));
+
+    // Block Kit, the approval layout — not the run-report layout.
+    expect(body.blocks[0].text.text).toContain('Approval needed');
+    expect(body.blocks[0].text.text).toContain('slack-approval-task');
+    const rendered = JSON.stringify(body);
+    expect(rendered).toContain('Bash');
+    expect(rendered).toContain('kubectl apply -f prod.yaml');
+    expect(rendered).toContain(approvalIdOf(runId));
+    expect(rendered).toContain(runId);
+    // never the whole jobspec
+    expect(rendered).not.toContain('worktreePath');
+
+    // The OS path is untouched: one notification, same kind as before.
+    expect(notifyMock.mock.calls.length).toBe(1);
+    expect(notifyMock.mock.calls[0]![0]).toBe('approval_requested');
+  });
+
+  it('an email-configured task receives the approval request over real SMTP', async () => {
+    smtp = await startFakeSmtp();
+    writeFileSync(
+      path.join(dataDir, 'delivery-creds.json'),
+      JSON.stringify({ smtpUrl: `smtp://127.0.0.1:${smtp.port}`, smtpFrom: 'clockwork@example.test' }),
+    );
+
+    const task = seedTask(
+      'email-approval-task',
+      JSON.stringify({ osNotify: true, email: { to: ['dana@example.test'] } }),
+    );
+    const runId = enqueueScratchRun(task.id, 'email-approval-task');
+
+    rm.pump();
+    await waitFor(() => captured.calls.length > 0);
+    const { child } = captured.calls[0]!;
+
+    const secret = 'sk-ant-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    sendPermission(child, 'req-email', 'Bash', { command: `deploy --token=${secret}` });
+
+    // QUIT, not just an accepted DATA: the send is finished, so tearing the
+    // relay down in afterEach cannot race the client's last read.
+    const srv = smtp;
+    await waitFor(() => srv.mail.length === 1 && srv.log.includes('QUIT'), 20_000);
+
+    expect(srv.log.some((l) => l === 'RCPT TO:<dana@example.test>')).toBe(true);
+    const { headers, body } = parseMail(srv.mail[0]!);
+    expect(headers['x-clockwork-schema']).toBe('clockwork.approval-request.v1');
+    expect(headers['to']).toBe('dana@example.test');
+    expect(decodeHeader(headers['subject']!)).toBe('[Clockwork] Approval needed: email-approval-task');
+    expect(body).toContain('email-approval-task');
+    expect(body).toContain('Bash');
+    expect(body).toContain(approvalIdOf(runId));
+    // masked before the payload is built, so no channel can leak it
+    expect(srv.mail[0]!).not.toContain(secret);
+    expect(body).toContain('token=[MASKED]');
+
+    expect(notifyMock.mock.calls.length).toBe(1);
+  });
+
+  it('a Slack send that fails becomes a receipt on the run, and the run keeps going', async () => {
+    // Slack opted in, but no webhook URL is configured: the adapter refuses
+    // before any HTTP, which is the cheapest way to a genuine channel failure.
+    writeFileSync(path.join(dataDir, 'delivery-creds.json'), JSON.stringify({ telegramBotToken: 'bot-tok' }));
+
+    const task = seedTask('slack-receipt-task', JSON.stringify({ osNotify: true, slack: { enabled: true } }));
+    const runId = enqueueScratchRun(task.id, 'slack-receipt-task');
+
+    rm.pump();
+    await waitFor(() => captured.calls.length > 0);
+    const { child } = captured.calls[0]!;
+
+    sendPermission(child, 'req-slack-fail', 'Bash', { command: 'echo hi' });
+
+    // S-43: retried x3, then recorded as a receipt against the run.
+    await waitFor(() => noteFor(runId, 'approvalNotifyFailed') !== null, 20_000);
+    const failed = noteFor(runId, 'approvalNotifyFailed')!.approvalNotifyFailed as Array<{
+      channel: string;
+      ok: boolean;
+      error: string | null;
+      attempts: number;
+    }>;
+    expect(failed.map((f) => f.channel)).toEqual(['slack']);
+    expect(failed[0]!.ok).toBe(false);
+    expect(failed[0]!.attempts).toBe(3);
+    expect(failed[0]!.error).toMatch(/slack webhook url/i);
+
+    // The run never learned about it: state untouched, decision path live.
+    expect((db.prepare(`SELECT state FROM runs WHERE id=?`).get(runId) as { state: string }).state).toBe('running');
+    expect(rm.respondToChild(runId, 'req-slack-fail', false)).toBe(true);
   });
 });

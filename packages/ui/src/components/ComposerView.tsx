@@ -708,11 +708,15 @@ export default function ComposerView({
             </section>
 
             {/*
-              A separate section from Telegram approvals on purpose. These two
-              channels carry the run REPORT — what the agent did, what it cost,
-              the branch it left — and not the approval request: the daemon's
-              approval fan-out still has its own telegram/webhook-only copy in
-              run-manager.ts. Heading them "approvals" would be the overclaim.
+              A separate section from Telegram approvals on purpose — but the
+              reason inverted. Both sections now receive the approval REQUEST:
+              run-manager.ts fans it out through the shared deliverApproval, so
+              the channel list is the one the run REPORT already used. What
+              Telegram alone carries is the DECISION — approve/deny buttons
+              behind an inbound poller. Slack and email can only point at the
+              Inbox, so heading this section "approvals" is still the
+              overclaim, the other way round: it would promise an answer path
+              that is not there.
 
               Neither field takes a URL or a password. A Slack incoming-webhook
               URL and an SMTP relay password are credentials, so they live in
@@ -723,11 +727,17 @@ export default function ComposerView({
                 <span className="flex h-6 w-6 items-center justify-center rounded-md bg-surface-active text-dim [&_svg]:h-3.5 [&_svg]:w-3.5">
                   <Send />
                 </span>
-                <h3 className="text-compact font-semibold">Run reports (optional)</h3>
+                <h3 className="text-compact font-semibold">Slack and email (optional)</h3>
               </div>
+              {/* The decision sentence sits unwrapped on its own source line so
+                  the honesty guard in delivery-channels-ui.test.tsx can pin the
+                  whole sentence instead of a fragment. JSX joins two adjacent
+                  text lines with a single space, so the paragraph still reads
+                  as one — the test asserts that on the DOM as well. */}
               <p className="mb-2 text-xs text-dim">
-                Where the outcome goes when this task finishes. Approvals are not sent here — those
-                arrive by Telegram, by webhook, or in this app.
+                Where the outcome goes when this task finishes — and where a notice goes if the run
+                stops to ask for your OK.
+                Approving or denying still happens in this app or in Telegram.
               </p>
               <div className="flex items-center gap-2">
                 <Switch
@@ -736,7 +746,7 @@ export default function ComposerView({
                   onCheckedChange={(v) => setForm({ ...form, slackEnabled: v })}
                 />
                 <Label htmlFor="c-slack" className="mb-0">
-                  Post the report to Slack
+                  Post to Slack
                 </Label>
               </div>
               <p className="mt-1 text-xxs text-dim">
@@ -744,7 +754,7 @@ export default function ComposerView({
                 posts to one channel, so every task that opts in posts to that same channel.
               </p>
               <Label htmlFor="c-email-to" style={{ marginTop: 10 }}>
-                Email the report to (comma-separated)
+                Email to (comma-separated)
               </Label>
               <Input
                 id="c-email-to"

@@ -533,11 +533,14 @@ function IcsCard({ version }: { version: number }): JSX.Element {
  * full once saved. The daemon returns only the masked form
  * (`readDeliveryConfigStatus`), and the inputs here are write-only.
  *
- * One asymmetry is stated on screen rather than hidden: Telegram is the only
- * channel that receives the APPROVAL REQUEST itself, because the approval
- * fan-out in the daemon's run-manager still keeps its own telegram/webhook
- * copy. Slack and email receive run REPORTS. Naming that here is cheaper than
- * a user discovering it while a run waits.
+ * One asymmetry is stated on screen rather than hidden, and it is no longer
+ * about who gets told. Every channel here now receives the APPROVAL REQUEST:
+ * run-manager.ts routes it through the shared `deliverApproval` fan-out, the
+ * same channel list the run report uses, so a task wired for Slack learns that
+ * a run is waiting. What Telegram alone carries is the DECISION — its message
+ * has approve/deny buttons behind an inbound poller, while a Slack or email
+ * notice can only point at the Inbox. Naming that here is cheaper than a user
+ * replying to the mail and wondering why the run is still waiting.
  *
  * Exported only so `packages/ui/test/delivery-channels-ui.test.tsx` can drive
  * this card on its own — mounting the whole Settings page to click one Save
@@ -762,9 +765,11 @@ export function DeliveryCard({ version }: { version: number }): JSX.Element {
       </p>
       <p className="hint" style={{ marginTop: 0 }}>
         Slack and email carry the <strong>run report</strong> — what the agent did, what it cost, and
-        the branch it left behind. They do not carry the approval request itself: an approval still
-        reaches you through Telegram, the webhook, or this app. Every credential below is stored on
-        this Mac at file mode 0600 and is never handed to a running agent.
+        the branch it left behind — and a notice when a run is waiting for your OK. Reading that
+        notice is not answering it.{' '}
+        <strong>You answer in this app or from Telegram</strong> — those are the only two places a
+        decision is taken. Every credential below is stored on this Mac at file mode 0600 and is
+        never handed to a running agent.
       </p>
 
       <div className="tasklist-row">

@@ -379,7 +379,7 @@ describe('a pre-T-310 daemon still renders the card', () => {
 // 4. The composer's per-task fields, driven end to end
 // ---------------------------------------------------------------------------
 
-describe('New task ▸ Run reports — the per-task fields reach POST /tasks', () => {
+describe('New task ▸ Slack and email — the per-task fields reach POST /tasks', () => {
   /** Every route the composer touches before it can draw its form. */
   function composerRoutes(calls: Call[]): (url: unknown, init?: RequestInit) => Promise<Response> {
     return async (url: unknown, init?: RequestInit) => {
@@ -406,6 +406,16 @@ describe('New task ▸ Run reports — the per-task fields reach POST /tasks', (
     const emailTo = container.querySelector('#c-email-to');
     expect(slackSwitch, 'no per-task Slack control in the composer').not.toBeNull();
     expect(emailTo, 'no per-task email recipients field in the composer').not.toBeNull();
+
+    // What the reader actually sees. The source-level guard further down pins
+    // these strings in the file; this pins that they reach the DOM — and that
+    // the decision sentence arrives as one sentence, not as the two fragments
+    // its wrapped source line would produce if the JSX ever grew a tag between
+    // them.
+    expect(container.textContent).toContain('Slack and email (optional)');
+    expect(container.textContent).toContain(
+      'Approving or denying still happens in this app or in Telegram.',
+    );
 
     const prompt = container.querySelector<HTMLTextAreaElement>('#c-prompt')!;
     const textareaSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')!.set!;
@@ -467,18 +477,45 @@ describe('New task ▸ Run reports — the per-task fields reach POST /tasks', (
 // 5. What the copy is allowed to claim
 // ---------------------------------------------------------------------------
 
-describe('the copy does not promise approvals on a channel that cannot carry them', () => {
-  // The daemon's approval fan-out (run-manager.ts `notifyApprovalRequest`)
-  // still keeps its own telegram/webhook-only copy, so Slack and email receive
-  // run REPORTS only. Saying otherwise on screen would be the overclaim.
-  it('Settings tells the reader that approvals do not go to Slack or email', () => {
-    expect(SETTINGS).toContain('They do not carry the approval request itself');
+describe('the copy claims what these channels do — no more, and no less', () => {
+  // These three assertions were the mirror image until `notifyApprovalRequest`
+  // (run-manager.ts) gave up its private telegram/webhook-only fan-out for the
+  // shared `deliverApproval`. While it kept that copy, "approvals are not sent
+  // here" was the honest line and the guard held it. It is now the false one,
+  // so it is gone — a guard on a sentence the product has outgrown protects
+  // nothing.
+  //
+  // The overclaim to guard moved rather than disappeared, because the two
+  // halves of an approval split across the channels: the REQUEST now reaches
+  // Slack and email, the DECISION still does not. Nothing on these screens may
+  // suggest you can approve or deny from a Slack message or a mail client —
+  // `formatApprovalText` sends every reader to the Inbox, and only Telegram
+  // carries buttons wired to a poller.
+  it('Settings says Slack and email are told when a run is waiting', () => {
+    expect(SETTINGS).toContain('and a notice when a run is waiting for your OK');
+    // and no longer claims the opposite alongside it
+    expect(SETTINGS).not.toContain('They do not carry the approval request itself');
   });
 
-  it('the composer heads its Slack/email fields as reports, not approvals', () => {
-    expect(COMPOSER).toContain('Run reports (optional)');
-    expect(COMPOSER).toContain('Approvals are not sent here');
-    // The Telegram section keeps its own approvals heading.
+  it('Settings names the only two places a decision can be made', () => {
+    expect(SETTINGS).toContain('You answer in this app or from Telegram');
+  });
+
+  it('both Settings sentences reach the DOM whole, not as wrapped fragments', async () => {
+    const { container } = await mount(UNCONFIGURED);
+    const text = container.textContent ?? '';
+    expect(text).toContain('and a notice when a run is waiting for your OK');
+    expect(text).toContain('You answer in this app or from Telegram');
+    expect(text).not.toContain('They do not carry the approval request itself');
+  });
+
+  it('the composer heads its Slack/email fields for both message types, and promises no decision from them', () => {
+    expect(COMPOSER).toContain('Slack and email (optional)');
+    expect(COMPOSER).toContain('Approving or denying still happens in this app or in Telegram');
+    expect(COMPOSER).not.toContain('Run reports (optional)');
+    expect(COMPOSER).not.toContain('Approvals are not sent here');
+    // The Telegram section keeps its own approvals heading — it is still the
+    // only channel a decision can be made FROM.
     expect(COMPOSER).toContain('Telegram approvals (optional)');
   });
 
