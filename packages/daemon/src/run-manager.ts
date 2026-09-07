@@ -8,6 +8,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import os from 'node:os';
@@ -29,6 +30,7 @@ import {
   removeWorktree,
   runGit,
   maskSecrets,
+  extractProposedEvents,
 } from '@clockwork/runner';
 import { SafetyJournal, augmentedPath } from '@clockwork/runner';
 import { indexRun } from './repo.js';
@@ -71,6 +73,26 @@ export interface RunManagerDeps {
   keepAwake?: { arm(key: string, durationSec: number): boolean; release(key: string): void };
   /** bundled skill pack resolver (T-112) */
   resolveSkill?: (ref: { name: string; version: string }) => string | null;
+  /** F4 sentinel-worker (plan/AGENT-WORKFORCE-SPEC.md): called after every run
+   * finalize with the run's own id/taskId/report; optional so main.ts's
+   * existing `new RunManager({...})` call needs no edit — api.ts wires this
+   * in after construction, the same way it wires the SSE broadcast. */
+  onSentinelFinalize?: (runId: string, taskId: string, reportJson: string | null, now: number) => void;
+  /**
+   * F1 plan-then-execute (plan/AGENT-WORKFORCE-SPEC.md §F1). Registered by
+   * buildServer after construction, exactly like broadcast.
+   * Optional so a bare RunManager (api.test.ts, recovery.test.ts) still builds.
+   */
+  planExecute?: {
+    onPlanRunFinalized(runId: string, taskId: string, state: string, now?: number): { pairId: string; approvalId: string } | null;
+  };
+  /**
+   * F8 self-healing (spec §4 F8). Assigned by buildServer, absent in every
+   * existing test, so the finalize hook is a no-op unless the API wired it.
+   * Inline import type: erased at compile time, so no runtime import cycle and
+   * no edit to this file's import block.
+   */
+  selfHealing?: import('./self-healing.js').SelfHealing;
 }
 
 interface RunRow {
@@ -105,9 +127,55 @@ export class RunManager {
   private readonly notifiedApprovalKeys = new Map<string, Set<string>>();
   private pumping = false;
   private readonly maxParallel: number;
+  /**
+   * Daemon-wide pause. The MANAGER owns this flag, not the API: the API used
+   * to keep a `let paused` local inside buildServer that only /health and the
+   * widget snapshot ever read, so a "paused" daemon happily dequeued, started
+   * and billed runs. Only the thing that starts work can honour a pause, so
+   * the flag lives here and the API asks.
+   *
+   * Presence of the marker file IS the state (the body is diagnostics only),
+   * so a pause survives a daemon restart and there is no JSON to misparse.
+   */
+  private readonly pauseMarker: string;
+  private paused: boolean;
 
   constructor(private readonly deps: RunManagerDeps) {
     this.maxParallel = deps.maxParallel ?? 2;
+    this.pauseMarker = path.join(deps.dataDir, 'paused');
+    this.paused = existsSync(this.pauseMarker);
+  }
+
+  // ---------- pause (single source of truth, read by the API) ----------
+  isPaused(): boolean {
+    return this.paused;
+  }
+
+  /**
+   * Flip the daemon-wide pause and persist it.
+   *
+   * The in-memory flag is set BEFORE the disk write: a full disk must not be
+   * able to leave a user who asked for a pause still spending money. Resuming
+   * pumps, because nothing else would — the held rows are already 'queued', so
+   * without this they wait for some unrelated finalize to kick the queue.
+   */
+  setPaused(paused: boolean): void {
+    this.paused = paused;
+    try {
+      if (paused) {
+        mkdirSync(this.deps.dataDir, { recursive: true });
+        writeFileSync(this.pauseMarker, JSON.stringify({ pausedAt: this.deps.clock.now() }), { mode: 0o600 });
+      } else {
+        rmSync(this.pauseMarker, { force: true });
+      }
+    } catch (e) {
+      // Durability is best-effort; refusing to start work is not.
+      this.deps.safetyJournal.record(
+        'preflight_failure',
+        `pause flag not persisted (paused=${paused}); it will not survive a restart: ${String(e).slice(0, 200)}`,
+      );
+    }
+    if (!paused) this.pump();
   }
 
   // ---------- queue ----------
@@ -121,6 +189,15 @@ export class RunManager {
         return;
       }
       try {
+        // Pause gate. `pump` is the ONLY caller of `startRun`, and every path
+        // that books work — scheduler tick, run-now, webhook fire, chain
+        // firing, sentinel booking, self-healing, plan-execute — inserts a
+        // 'queued' row and then calls `pump`. So this one line holds all of
+        // them, and it holds them the way the UI promises: "Queued and future
+        // runs hold until resumed. Active runs finish." Nothing in flight is
+        // touched; the rows simply stay queued (the /queue lane reports them
+        // as 'paused') until setPaused(false) pumps again.
+        if (this.paused) return;
         const active = this.countActive();
         let slots = Math.max(0, this.maxParallel - active);
         while (slots > 0) {
@@ -179,6 +256,14 @@ export class RunManager {
       if (ev && spec.prompt.includes('{{event')) {
         const { renderEventPrompt } = await import('./templates.js');
         spec.prompt = renderEventPrompt(spec.prompt, ev);
+      }
+
+      // F2 shift-handoff: materialize {{handoff.previous}} from the prior
+      // occurrence's memory, before preflight, same as {{event.*}} above.
+      if (spec.prompt.includes('{{handoff')) {
+        const { HandoffMemory, renderHandoffPrompt } = await import('./handoff.js');
+        const block = new HandoffMemory(this.deps.db).renderBlock(spec.taskId);
+        spec.prompt = renderHandoffPrompt(spec.prompt, block);
       }
 
       // preflight (S-36/S-69/S-87)
@@ -318,7 +403,7 @@ export class RunManager {
           artifacts: [],
           costUsd: cur.cost_usd,
           turns: cur.turns,
-        });
+        }).catch((e) => this.onFinalizeError(runId, e));
       }
     });
 
@@ -333,14 +418,16 @@ export class RunManager {
       if (r.heartbeat_at && now2 - r.heartbeat_at > HEARTBEAT_GAP_MS) {
         clearInterval(watchdog);
         this.killGroupIdentityVerified(r); // S-32
-        this.finalize(runId, { state: 'failed', failureReason: 'runner_crashed', artifacts: [], costUsd: r.cost_usd, turns: r.turns });
+        this.finalize(runId, { state: 'failed', failureReason: 'runner_crashed', artifacts: [], costUsd: r.cost_usd, turns: r.turns })
+          .catch((e) => this.onFinalizeError(runId, e));
         return;
       }
       const specTimeoutSec = spec.budget.timeoutSec;
       if (r.started_at && now2 - r.started_at > specTimeoutSec * 1000) {
         clearInterval(watchdog);
         this.killGroupIdentityVerified(r); // S-13
-        this.finalize(runId, { state: 'timed_out', artifacts: [], costUsd: r.cost_usd, turns: r.turns });
+        this.finalize(runId, { state: 'timed_out', artifacts: [], costUsd: r.cost_usd, turns: r.turns })
+          .catch((e) => this.onFinalizeError(runId, e));
       }
     }, 15_000);
     watchdog.unref?.();
@@ -429,7 +516,7 @@ export class RunManager {
         break;
       }
       case 'outcome': {
-        this.finalize(runId, msg.outcome);
+        this.finalize(runId, msg.outcome).catch((e) => this.onFinalizeError(runId, e));
         break;
       }
     }
@@ -577,6 +664,17 @@ export class RunManager {
       }
     }
 
+    // F9 proposed-events (spec §F9): the agent's summary is the producer. A
+    // fenced ```clockwork-events block becomes report.proposedEvents, and the
+    // block leaves the prose — it is a machine channel, not something a human
+    // should read in their inbox or receive by email. The parse is bounded and
+    // total (packages/runner/src/proposed-events-parse.ts): it never throws, so
+    // a malformed or hostile block costs the suggestions and nothing else.
+    // Runs BEFORE maskSecrets, because masking can rewrite a credential-shaped
+    // substring inside the JSON and break the block's syntax; the parser masks
+    // each title/notes itself.
+    const proposals = extractProposedEvents(typeof outcome.summary === 'string' ? outcome.summary : '', now);
+
     const report: RunReport = {
       runId,
       taskId: spec.taskId,
@@ -587,7 +685,7 @@ export class RunManager {
       state: outcome.state,
       failureReason: ('failureReason' in outcome ? outcome.failureReason : undefined) ?? null,
       // S-68: best-effort credential masking — documented as such, transcripts stay local
-      summary: maskSecrets(typeof outcome.summary === 'string' ? outcome.summary : ''),
+      summary: maskSecrets(proposals.text),
       branch: spec.repoPath ? spec.branch : null,
       baseSha: null,
       basedOnLocalState: false,
@@ -613,10 +711,18 @@ export class RunManager {
         resolvedAt: null,
         resolution: null as 'approved' | 'denied' | 'timeout-deny-and-continue' | 'timeout-abort' | null,
       })),
-      timeline: [],
+      // A refused proposal block is disclosed, not swallowed: the agent tried
+      // to suggest something and the user gets to know it was dropped and why.
+      timeline: proposals.reason
+        ? [{ at: now, kind: 'note' as const, text: `Proposed calendar events: ${proposals.reason}.` }]
+        : [],
       deliveries: [],
       queueDelayMs: r.started_at && r.scheduled_for ? Math.max(0, r.started_at - r.scheduled_for) : 0,
       repoLockDelayMs: 0,
+      // Left `undefined` when the run proposed nothing, so `report_json` keeps
+      // the "no proposals" and "predates the field" cases indistinguishable —
+      // which is what every reader already assumes (`report?.proposedEvents ?? []`).
+      proposedEvents: proposals.events.length > 0 ? proposals.events : undefined,
     };
 
     const tx = this.deps.db.transaction(() => {
@@ -659,18 +765,93 @@ export class RunManager {
     this.notifiedApprovalKeys.delete(runId);
     this.deps.keepAwake?.release(runId);
 
+    // Everything below this line is ADVISORY and runs after the commit above,
+    // each hook behind an `await`. Shutdown — or a test's `afterAll` — can
+    // close the handle in any of those gaps. The run is already terminal and
+    // durable on disk at this point, so once the database is gone there is
+    // nothing left for the tail to read or write: stop, rather than throw into
+    // a promise nobody is holding. Mid-tail closes are covered per hook below.
+    if (!this.dbOpen) return;
+
+    // ---- workforce finalize hooks (plan/AGENT-WORKFORCE-SPEC.md §3) ----
+    // ORDER: F2 -> F1 -> F4 -> F8 (memory first, so the others can read it).
+    //
+    // All four sit AFTER tx() rather than at the spec's literal anchor inside
+    // it. Two reasons, both load-bearing:
+    //   1. The finalize transaction ends by auto-denying every still-open
+    //      approvals row for this run, so an approvals row inserted inside tx
+    //      (F1's pair gate, F8's proposal) would be denied the instant it was
+    //      written and no human would ever see it.
+    //   2. `await import(...)` cannot run inside a synchronous better-sqlite3
+    //      transaction at all.
+    // They also sit after `releaseMutex`, because F4 and F8 book runs through
+    // callbacks that call pump(); a same-repo run booked while the mutex still
+    // named this run would be skipped by that pump.
+
+    // F2 shift-handoff: append this occurrence's outcome to the task's
+    // memory, so the next occurrence's {{handoff.previous}} can read it.
+    // Best-effort — a memory-write failure must never fail an
+    // already-finalized run.
+    try {
+      const { HandoffMemory, handoffFromReport } = await import('./handoff.js');
+      const parsed = handoffFromReport(JSON.stringify(report));
+      if (parsed) new HandoffMemory(this.deps.db).append({ ...parsed, taskId: spec.taskId, runId }, now);
+    } catch (e) {
+      this.recordEvent(now, runId, 'note', { handoffError: String(e) });
+    }
+
+    // F1 plan-then-execute (spec §F1). See hazard (1) above: this MUST stay
+    // outside the transaction or the pair's approval is auto-denied at birth.
+    try {
+      const opened = this.deps.planExecute?.onPlanRunFinalized(runId, spec.taskId, String(outcome.state), now);
+      if (opened) this.deps.broadcast({ type: 'approval.requested', approvalId: opened.approvalId, runId, at: now });
+    } catch (e) {
+      this.recordEvent(now, runId, 'note', { planExecuteError: String(e) }); // never fail a finalized run
+    }
+
+    // F4 sentinel-worker: every finalize is an evaluation, tripped or not.
+    // Same boundary as F2/F1/F8 — this hook reads and writes the database from
+    // inside an already-finalized run's tail, so a fault here (including the
+    // handle closing mid-tail) is a note, never a rejection.
+    try {
+      this.deps.onSentinelFinalize?.(runId, spec.taskId, JSON.stringify(report), now);
+    } catch (e) {
+      this.recordEvent(now, runId, 'note', { sentinelError: String(e) }); // advisory; never fails the run
+    }
+
+    // F8 self-healing (spec §4 F8). Same hazard (1) as F1 — the proposal's
+    // inbox item would be killed before a human ever saw it. Also before
+    // clearFailureStreak below, so the streak row is still intact.
+    // proposeFrom runs first and self-guards on "was this a diagnostic run",
+    // so a diagnostic that timed out mid-write still yields its proposal;
+    // onRunFailed refuses to count a diagnostic against its own streak.
+    try {
+      this.deps.selfHealing?.proposeFrom(runId, spec.taskId, JSON.stringify(report), now);
+      if (outcome.state !== 'completed') this.deps.selfHealing?.onRunFailed(spec.taskId, runId, now);
+    } catch (e) {
+      this.recordEvent(now, runId, 'note', { selfHealingError: String(e) }); // advisory; never fails the run
+    }
+
     // S-40/S-41: consecutive auth failures auto-pause the task after 2
     const failureReason = ('failureReason' in outcome ? outcome.failureReason : undefined) ?? null;
-    if (failureReason === 'auth') {
-      const { recordAuthFailureAndMaybePause } = await import('./policies.js');
-      const res = recordAuthFailureAndMaybePause(this.deps.db, spec.taskId);
-      if (res.paused) {
-        this.deps.notify('auto_paused', `Clockwork paused "${spec.taskName}"`, 'Two consecutive auth failures. Re-login in Claude Code, then re-enable the task.');
-        this.deps.safetyJournal.record('preflight_failure', `auto-paused task ${spec.taskId} after ${res.consecutive} auth failures`, runId);
+    // The streak bookkeeping is two `await import`s away from the commit, so it
+    // carries the same boundary as the hooks above. The PAUSE DECISION itself
+    // is unchanged — only its failure mode is, from "reject out of a floating
+    // promise" to "record a note".
+    try {
+      if (failureReason === 'auth') {
+        const { recordAuthFailureAndMaybePause } = await import('./policies.js');
+        const res = recordAuthFailureAndMaybePause(this.deps.db, spec.taskId);
+        if (res.paused) {
+          this.deps.notify('auto_paused', `Clockwork paused "${spec.taskName}"`, 'Two consecutive auth failures. Re-login in Claude Code, then re-enable the task.');
+          this.deps.safetyJournal.record('preflight_failure', `auto-paused task ${spec.taskId} after ${res.consecutive} auth failures`, runId);
+        }
+      } else if (outcome.state === 'completed') {
+        const { clearFailureStreak } = await import('./policies.js');
+        clearFailureStreak(this.deps.db, spec.taskId);
       }
-    } else if (outcome.state === 'completed') {
-      const { clearFailureStreak } = await import('./policies.js');
-      clearFailureStreak(this.deps.db, spec.taskId);
+    } catch (e) {
+      this.recordEvent(now, runId, 'note', { failureStreakError: String(e) });
     }
 
     // FR-18/S-43: delivery after persistence; failures become receipts only
@@ -834,7 +1015,7 @@ export class RunManager {
     }
     if (['preparing','running','waiting_approval','finalizing'].includes(r.state)) {
       this.killGroupIdentityVerified(r);
-      this.finalize(runId, { state: 'cancelled' });
+      this.finalize(runId, { state: 'cancelled' }).catch((e) => this.onFinalizeError(runId, e));
       return true;
     }
     return false;
@@ -984,14 +1165,66 @@ export class RunManager {
 
   getRun(id: string): RunRow | undefined {
     // Child-exit events can race daemon shutdown (db closed first) on slow CI.
-    if ((this.deps.db as unknown as { open?: boolean }).open === false) return undefined;
+    if (!this.dbOpen) return undefined;
     return this.deps.db.prepare('SELECT * FROM runs WHERE id=?').get(id) as unknown as RunRow | undefined;
   }
 
+  /**
+   * Is the sqlite handle still usable?
+   *
+   * The daemon (and every test's `afterAll`) closes the database while work
+   * scheduled before shutdown can still be in flight — `pump()` above and
+   * `getRun()` have always had to ask this. `finalize()`'s post-commit tail
+   * asks it too, because every hook in that tail sits behind an `await`.
+   */
+  private get dbOpen(): boolean {
+    return (this.deps.db as unknown as { open?: boolean }).open !== false;
+  }
+
   private recordEvent(at: number, runId: string, kind: string, data: unknown): void {
+    // Most callers are `catch` blocks whose whole job is "record it and carry
+    // on", and several of them run after `finalize()` has already committed,
+    // behind an `await`. If the handle closed during that await there is
+    // nowhere for the row to go, and THROWING here converts a benign teardown
+    // race into an unhandled rejection with no caller left to catch it — the
+    // suite then exits non-zero with every test passing.
+    //
+    // Only the closed handle is silent. A write that fails for any other
+    // reason (constraint, disk, corruption) still throws, so a real fault
+    // surfaces instead of being swallowed.
+    if (!this.dbOpen) return;
     this.deps.db
       .prepare('INSERT INTO events (at, run_id, kind, data_json) VALUES (?, ?, ?, ?)')
       .run(at, runId, kind, JSON.stringify(data));
+  }
+
+  /**
+   * Last net under a FLOATING `finalize()`.
+   *
+   * `finalize()` is fired and forgotten from five places (child close, the
+   * heartbeat watchdog, the timeout watchdog, the child's outcome message and
+   * `cancel()`), so a rejection there has no caller and becomes an unhandled
+   * rejection that reddens the whole process. This handler is that caller.
+   *
+   * It must not be able to throw. The discrimination is on `db.open`, never on
+   * the error text: with the handle closed the run row is already terminal and
+   * durable, and there is no table left to write to. The text test below only
+   * chooses the CHANNEL for the residual case — an error that is not the
+   * closed-handle error still gets a voice on stderr, the one surface that
+   * outlives `db.close()`.
+   */
+  private onFinalizeError(runId: string, e: unknown): void {
+    if (!this.dbOpen) {
+      if (!/database connection is not open/i.test(String(e))) {
+        console.error(`[clockwork] finalize(${runId}) failed after the database closed:`, e);
+      }
+      return;
+    }
+    try {
+      this.recordEvent(this.deps.clock.now(), runId, 'finalize_error', { error: String(e) });
+    } catch (writeError) {
+      console.error(`[clockwork] finalize(${runId}) failed and the event write failed too:`, e, writeError);
+    }
   }
 
   coveredOccurrences(scheduleId: string | null): number[] {

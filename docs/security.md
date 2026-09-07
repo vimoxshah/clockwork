@@ -91,6 +91,29 @@ damage (sandbox + budgets + branch-isolation), surface intent (policy events in
 reports), never claim immunity. `plan` mode exists exactly for untrusted-source
 jobs. Imported templates/profiles arrive disabled with a security preview.
 
+## Repo-shipped job offers (F5)
+
+A `.clockwork/jobs.json`/`.yaml` file inside a target repository is untrusted
+input — it arrived with someone else's commit, not with your keyboard. The
+declared job type (`RepoJobSpec`) has **no `permissionMode`, `engine`,
+`byokId`, or `budget` field at all**; even a hostile file that includes one is
+ignored — the parser never reads those keys. An imported job always gets the
+same conservative defaults `/templates/import` already uses
+(`acceptEdits`, `$2 / 50 turns / 3600s`, queued schedule) and is created
+**disabled**, with a security preview computed at discovery time. See
+`docs/agent-workforce.md` (F5) and ADR-040.
+
+## Proof-of-work export (F12)
+
+`GET /workforce/runs/:runId/proof-of-work` produces a file meant to leave your
+machine and be published somewhere you don't control, so it gets its own,
+stricter rules on top of the report masking above: every interpolated string
+is escaped and passed through the same `maskSecrets` helper as the rest of the
+product (no flag disables it), the file has no external `<script>`/`<link>`/
+remote `<img>` reference of any kind, and the most sensitive artifact — the
+transcript — is excluded unless you explicitly ask for it per export. Every
+export is written to the audit log.
+
 ## Secrets & credentials
 
 - Clockwork stores **no Anthropic credentials** — runs ride your existing

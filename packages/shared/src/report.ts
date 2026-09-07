@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ProposedEvent } from './workforce.js';
 
 /**
  * Run Report — FR-15. The DB stores report_json (summary + pointers); big
@@ -96,5 +97,24 @@ export const RunReport = z.object({
   deliveries: z.array(DeliveryReceipt).default([]),
   queueDelayMs: z.number().nonnegative().default(0), // S-3/S-28 visibility
   repoLockDelayMs: z.number().nonnegative().default(0),
+  /**
+   * F9 proposed-events: calendar events the agent SUGGESTS from this run. The
+   * UI offers them as a downloadable .ics; Clockwork never writes to the
+   * user's real calendar.
+   *
+   * PRODUCER: the agent's own summary. `run-manager.finalize()` runs
+   * `extractProposedEvents()` (packages/runner/src/proposed-events-parse.ts)
+   * over it and sets this field from the fenced ```clockwork-events block, if
+   * there is one. The convention is documented in docs/agent-workforce.md §F9.
+   *
+   * Deliberately `.optional()` and not `.default([])`. RunReport is the zod
+   * OUTPUT type, so a default would make the key REQUIRED on every report
+   * literal — and, worse, would print `"proposedEvents": []` into the stored
+   * report_json for the overwhelming majority of runs that propose nothing,
+   * which reads as "the agent was asked and declined". undefined = the run
+   * proposed nothing, OR the report predates the field; the two are
+   * deliberately indistinguishable. Read it with `?.`.
+   */
+  proposedEvents: z.array(ProposedEvent).optional(),
 });
 export type RunReport = z.infer<typeof RunReport>;

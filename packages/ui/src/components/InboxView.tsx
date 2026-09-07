@@ -1,11 +1,21 @@
 /**
  * Inbox (T-124): run reports with FTS-backed search, outcome filters,
- * unread tracking, approvals with REAL respond actions (within the child's
- * decision window), report detail with transcript viewer.
+ * unread tracking, approvals with REAL respond actions, report detail with
+ * transcript viewer.
+ *
+ * The approvals list is mixed: a live permission prompt (answer inside the
+ * child's decision window) sits beside F1 plan approvals and F8 remediation
+ * proposals, which have no window at all. ApprovalCard tells them apart.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, type RunRowT } from '../api';
 import { useAsync } from '../useAsync';
+import { ProposedEvents } from './ProposedEvents';
+import { OutcomeControls } from './OutcomeControls';
+import { ApprovalCard } from './ApprovalCard';
+import { APPROVALS_SURFACE } from './ApprovalCard';
+import { ProofOfWorkExport } from './ProofOfWorkExport';
+import { TaskMemoryPanel } from './TaskMemoryPanel';
 
 type OutcomeFilter = 'all' | 'completed' | 'failed' | 'active' | 'needsyou';
 
@@ -19,13 +29,44 @@ function chipFor(state: string): string {
   return '';
 }
 
-function matchesFilter(state: string, f: OutcomeFilter): boolean {
+/**
+ * "needs you" used to check only the RUN's own state
+ * (`waiting_approval`/`awaiting_user` — true for a live permission prompt).
+ * F1 plan approvals and F8 remediation proposals are opened when a run
+ * FINALIZES (plan-execute.ts, self-healing.ts), so the run they hang off is
+ * already `completed` by the time the approval exists — that state can never
+ * match, so the one filter meant to surface work needing a human showed
+ * nothing for the two most common cases. `needsYouRunIds` (every run_id with
+ * an unresolved approval, computed from `GET /approvals`) is unioned in here
+ * so a finalized run with a pending decision still shows up under the chip.
+ */
+export function matchesFilter(r: Pick<RunRowT, 'id' | 'state'>, f: OutcomeFilter, needsYouRunIds: ReadonlySet<string>): boolean {
+  const state = r.state;
   switch (f) {
     case 'all': return true;
     case 'completed': return state === 'completed';
     case 'failed': return ['failed', 'timed_out', 'budget_exceeded', 'missed'].includes(state);
     case 'active': return ['running', 'queued', 'preparing', 'finalizing'].includes(state);
-    case 'needsyou': return ['waiting_approval', 'awaiting_user'].includes(state);
+    case 'needsyou': return needsYouRunIds.has(r.id) || ['waiting_approval', 'awaiting_user'].includes(state);
+  }
+}
+
+/**
+ * Honest empty state: "No runs yet" is only true when there truly are no
+ * runs. A filter or search that simply matched nothing gets its own message
+ * instead of implying the user has never booked a run.
+ */
+export function emptyMessageFor(q: string, filter: OutcomeFilter, totalRuns: number): string {
+  const term = q.trim();
+  if (term) return `No runs match “${term}”.`;
+  if (totalRuns === 0) return 'No runs yet. Book one from the calendar.';
+  switch (filter) {
+    case 'needsyou':
+      return 'Nothing needs your decision right now — plan approvals and remediation proposals show up here the moment one is waiting.';
+    case 'completed': return 'No completed runs yet.';
+    case 'failed': return 'No failed runs — nothing to fix.';
+    case 'active': return 'Nothing running right now.';
+    default: return 'No runs match this filter.';
   }
 }
 
@@ -79,6 +120,14 @@ export default function InboxView({ version }: { version: number }): JSX.Element
     };
   }, [q]);
 
+  // Every run_id with an unresolved approval — a plan (F1) or remediation
+  // (F8) approval opens once its run has already finalized, so this is the
+  // only way "needs you" can find that run again (see matchesFilter above).
+  const needsYouRunIds = useMemo(
+    () => new Set((approvals.data ?? []).map((a) => String(a.run_id))),
+    [approvals.data],
+  );
+
   const visibleRuns = useMemo(() => {
     let rows = runs.data ?? [];
     if (ftsOrder) {
@@ -88,8 +137,8 @@ export default function InboxView({ version }: { version: number }): JSX.Element
         return ai - bi;
       }).filter((r) => ftsOrder.has(r.id));
     }
-    return rows.filter((r) => matchesFilter(r.state, filter));
-  }, [runs.data, ftsOrder, filter]);
+    return rows.filter((r) => matchesFilter(r, filter, needsYouRunIds));
+  }, [runs.data, ftsOrder, filter, needsYouRunIds]);
 
   // IA: group by recency so the inbox answers "what happened while I wasn't looking?"
   const grouped = useMemo(() => {
@@ -155,7 +204,12 @@ export default function InboxView({ version }: { version: number }): JSX.Element
         )}
         <div className="filter-chips" role="tablist" aria-label="Filter by outcome">
           {(['all', 'completed', 'failed', 'active', 'needsyou'] as OutcomeFilter[]).map((f) => (
-            <button key={f} className={filter === f ? 'on' : ''} onClick={() => setFilter(f)}>
+            <button
+              key={f}
+              id={f === 'needsyou' ? APPROVALS_SURFACE.anchorId : undefined}
+              className={filter === f ? 'on' : ''}
+              onClick={() => setFilter(f)}
+            >
               {f === 'needsyou' ? 'needs you' : f}
             </button>
           ))}
@@ -164,6 +218,16 @@ export default function InboxView({ version }: { version: number }): JSX.Element
           </button>
         </div>
 
+        {approvals.error && (
+          <div className="error-banner" role="alert">
+            Couldn’t load approvals: {approvals.error}
+            <div>
+              <button className="btn small" style={{ marginTop: 8 }} onClick={approvals.reload}>
+                Retry
+              </button>
+            </div>
+          </div>
+        )}
         {(approvals.data?.length ?? 0) > 0 && (
           <div style={{ marginBottom: 12 }}>
             <div className="chip needs-you" style={{ display: 'inline-block', marginBottom: 6 }}>
@@ -192,7 +256,7 @@ export default function InboxView({ version }: { version: number }): JSX.Element
         )}
         {!runs.loading && !runs.error && visibleRuns.length === 0 && (
           <div className="empty">
-            {q ? `No runs match “${q}”.` : 'No runs yet. Book one from the calendar.'}
+            {emptyMessageFor(q, filter, (runs.data ?? []).length)}
           </div>
         )}
         {grouped.map(([label, rows]) => (
@@ -213,6 +277,9 @@ export default function InboxView({ version }: { version: number }): JSX.Element
                   <strong>{spec.taskName}</strong>
                   <div className="meta">
                     <span className={`chip ${chipFor(r.state)}`}>{r.state.replace('_', ' ')}</span>
+                    {needsYouRunIds.has(r.id) && !['waiting_approval', 'awaiting_user'].includes(r.state) && (
+                      <span className="chip needs-you">awaiting your decision</span>
+                    )}
                     {r.state === 'failed' && r.outcome_reason && (
                       <span className="mono" style={{ color: 'var(--danger, #c0392b)' }} title={FAILURE_GUIDANCE[r.outcome_reason]?.next}>
                         {r.outcome_reason.replace('_', ' ')}
@@ -243,47 +310,6 @@ export function setPendingRunId(runId: string): void {
   pendingRunId = runId;
   // nudge any mounted InboxView; if not mounted, it reads pendingRunId on mount
   window.dispatchEvent(new CustomEvent('clockwork:open-run', { detail: runId }));
-}
-
-function ApprovalCard({ approval, onChanged }: { approval: any; onChanged: () => void }): JSX.Element {
-  const payload = typeof approval.payload_json === 'string' ? safeJson(approval.payload_json) : approval.payload_json ?? {};
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  const respond = async (decision: 'approved' | 'denied'): Promise<void> => {
-    setBusy(true);
-    setErr(null);
-    try {
-      await api.respondApproval(approval.id, decision);
-      onChanged();
-    } catch (e) {
-      setErr(String((e as Error).message ?? e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="approval-card">
-      <strong>Permission request</strong>
-      <div className="meta mono" style={{ color: 'var(--dim)', fontSize: 12, margin: '3px 0' }}>
-        {String(payload.tool ?? '').slice(0, 100)}
-      </div>
-      <p className="hint" style={{ margin: 0 }}>
-        Answer within the engine’s decision window (~2 min) to steer this live run. After that it is
-        auto-denied (unattended fail-safe) and shown for audit.
-      </p>
-      {err && <div className="error-banner">{err}</div>}
-      <div className="approval-actions">
-        <button className="btn primary small" disabled={busy} onClick={() => void respond('approved')}>
-          Approve
-        </button>
-        <button className="btn danger small" disabled={busy} onClick={() => void respond('denied')}>
-          Deny
-        </button>
-      </div>
-    </div>
-  );
 }
 
 function ReportDetail({ runId, version }: { runId: string; version: number }): JSX.Element {
@@ -325,6 +351,8 @@ function ReportDetail({ runId, version }: { runId: string; version: number }): J
         {run.branch && <span>{run.branch}</span>}
       </div>
 
+      <TaskMemoryPanel taskId={run.task_id} runId={runId} version={version} />
+
       {active && <LiveTail runId={runId} />}
       {report?.summary ? (
         <div className="summary-block">{report.summary}</div>
@@ -332,6 +360,7 @@ function ReportDetail({ runId, version }: { runId: string; version: number }): J
         <div className="empty">Report not finalized yet — check back once the run completes.</div>
       )}
       <FailureBanner reason={run.outcome_reason} />
+      {!active && <OutcomeControls runId={runId} />}
       {report?.sandboxed === false && (
         <div className="error-banner" role="alert">
           <strong>Sandbox was off for this run</strong> (CW_SANDBOX=off). Writes and credential reads were not contained.
@@ -373,6 +402,7 @@ function ReportDetail({ runId, version }: { runId: string; version: number }): J
           {report.deliveries.map((d: any) => `${d.channel}${d.ok ? ' ✓' : ` ✗ (${d.error ?? '?'})`}`).join(', ')}
         </p>
       )}
+      <ProposedEvents runId={runId} events={report?.proposedEvents ?? []} />
       {run.branch && run.state === 'completed' && (
         <p className="ok-banner mono">Branch ready for review: {run.branch}</p>
       )}
@@ -385,6 +415,8 @@ function ReportDetail({ runId, version }: { runId: string; version: number }): J
           {showTr && <pre>{tr.data.lines.join('\n')}</pre>}
         </div>
       )}
+
+      {!active && <ProofOfWorkExport runId={runId} />}
     </>
   );
 }

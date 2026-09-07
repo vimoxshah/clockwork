@@ -13,6 +13,7 @@ import { randomBytes, timingSafeEqual, createHash } from 'node:crypto';
 import { ByokStore, validateProvider, keychainGet } from './byok.js';
 import { RetentionAudit } from './retention-audit.js';
 import { PolicyEngine } from './policy-engine.js';
+import { AutonomyPolicy } from './autonomy-policy.js';
 import {
   TaskCreate,
   TaskPatch,
@@ -24,13 +25,34 @@ import {
   slugify,
   branchFor,
   PROVIDER_KIND_META,
+  isTerminal,
+  type RunState,
+  // ---- Agent Workforce (plan/AGENT-WORKFORCE-SPEC.md) ----
+  AgentMemoryWrite, // F2
+  PlanExecuteCreate, // F1
+  type PlanExecuteStatus, // F1
+  OfficeHourCreate, // F3
+  SentinelCreate, // F4
+  RunOutcomeWrite, // F6
+  AutonomyRung, // F7
+  AutonomyOfferStatus, // F7
+  type PermissionMode, // F7
 } from '@clockwork/shared';
 import type { DB } from './db.js';
 import { TaskRepo, ProfileRepo, RunRepo, indexTask } from './repo.js';
+import { PlanExecute } from './plan-execute.js';
 import type { RunManager } from './run-manager.js';
 import type { Scheduler } from './scheduler.js';
-import { nextOccurrenceAfter } from './recurrence.js';
+import { nextOccurrenceAfter, type ScheduleLike } from './recurrence.js';
+import { OfficeHours, isKnownZone } from './office-hours.js';
+import { Sentinels } from './sentinel.js';
 import { isGitRepo } from '@clockwork/runner';
+import { HandoffMemory } from './handoff.js';
+import { Acceptance } from './acceptance.js';
+import { proposedEventsFor, toIcs, icsFilenameFor } from './proposed-events.js';
+import { proofOfWorkHtml, proofFilenameFor } from './proof-of-work.js';
+import { timesheet, setHumanHourlyRate } from './timesheets.js';
+import { scorecard, scorecards, reviewPromptFor } from './performance.js';
 import { loadDeliveryCreds, writeDeliveryCreds, maskBotToken, TelegramChannel, TelegramApiError } from './delivery.js';
 
 export interface ApiDeps {
@@ -38,7 +60,17 @@ export interface ApiDeps {
   dataDir: string;
   runManager: RunManager;
   scheduler: Scheduler;
+  /** The version THIS PROCESS started with — fixed for its whole lifetime. */
   version: string;
+  /**
+   * The version the build ON DISK declares right now, re-read on demand. A
+   * long-lived daemon keeps serving `version` while the build under it — and
+   * the UI bundle served out of that build — moves on (S-80, the stale-daemon
+   * trap). Injected rather than imported from ./main.js, which would make
+   * api <-> main a cycle; left unset, /health reports `installedVersion: null`
+   * and never claims a skew it cannot prove.
+   */
+  installedVersion?: () => string | null;
   /** Test-only override for the Telegram Bot API base URL (defaults to api.telegram.org). */
   telegramApiBase?: string;
 }
@@ -83,6 +115,64 @@ export function bearerMatches(header: string | undefined, token: string): boolea
   return timingSafeEqual(given, want);
 }
 
+/**
+ * Does this URL need the bearer token?
+ *
+ * S-review (auth bypass, critical): this test used to run against
+ * `req.raw.url` — the RAW, undecoded URL — while find-my-way percent-DECODES
+ * the path before it matches a route. One encoded character in the prefix
+ * therefore skipped the hook and still reached the handler: `GET /%74asks`
+ * answered 200 with no credential, and so did every `/workforce/` route,
+ * including the fifteen mutating ones.
+ *
+ * The decision now runs over EVERY spelling the router could resolve this URL
+ * to — the raw path plus its decoded forms (`decodeURI` is what the router's
+ * sanitizer applies to static segments; `decodeURIComponent` is the more
+ * permissive reading, and covering both means no decoder disagreement can open
+ * a route). Any one of them hitting a protected prefix demands the token. A
+ * malformed escape makes decoding throw, and that fails CLOSED.
+ *
+ * Exported because the fail-closed branch is otherwise untestable: Fastify
+ * answers a malformed escape with 400 FST_ERR_BAD_URL before onRequest hooks
+ * run, so `app.inject` can never reach it.
+ */
+export function requiresAuth(rawUrl: string): boolean {
+  let target = rawUrl || '';
+  // RFC 7230 §5.3.2 absolute-form: `GET http://host/tasks HTTP/1.1` is a legal
+  // request line, Node hands the whole thing to us as `req.raw.url`, and the
+  // router still matches `/tasks` — verified against a real socket. The old
+  // prefix test simply missed it, because the string starts with `http:`.
+  // Reduce it to the path the router will use; an unparseable target (the
+  // asterisk-form of OPTIONS, say) is refused rather than guessed at.
+  if (target !== '' && !target.startsWith('/')) {
+    try {
+      target = new URL(target).pathname;
+    } catch {
+      return true; // not origin-form and not a URL — fail closed
+    }
+  }
+  const rawPath = target.split(/[?#]/)[0]!;
+  const spellings = new Set<string>([rawPath]);
+  try {
+    spellings.add(decodeURI(rawPath));
+    spellings.add(decodeURIComponent(rawPath));
+  } catch {
+    return true; // malformed percent-escape — fail closed, never open
+  }
+  for (const url of spellings) {
+    const needsAuth =
+      /^\/(tasks|runs|approvals|profiles|search|widget|queue|onboarding|pause-all|resume|capacity)/.test(url) ||
+      /^\/(analytics|retention|audit|policies|capabilities|targets|byok|delivery-config|triggers|trigger-events|ics|usage)/.test(url) ||
+      /^\/(license|support|auth)\//.test(url) || // S-review: control plane + diagnostics must not be anonymous
+      /^\/(calendars|templates)\//.test(url) || // S-audit: ICS export leaks task data; template preview is control plane
+      /^\/fs\//.test(url) || // /fs/browse discloses directory AND file names under $HOME — never anonymous
+      /^\/workforce\//.test(url) || // all twelve workforce features
+      url.startsWith('/events');
+    if (needsAuth) return true;
+  }
+  return false;
+}
+
 export function rotateToken(dataDir: string): string {
   mkdirSync(dataDir, { recursive: true });
   const next = randomBytes(32).toString('base64url');
@@ -94,6 +184,51 @@ export function rotateToken(dataDir: string): string {
   writeFileSync(tmpPath, next, { mode: 0o600 });
   renameSync(tmpPath, finalPath);
   return next;
+}
+
+/**
+ * How far save-time materialization looks for the first fire, one rung at a
+ * time. It stops at the rung that answers, so the work stays proportional to
+ * how OFTEN a schedule fires, not to how far ahead it fires.
+ *
+ * The rungs are not arbitrary:
+ *  - 8 days answers everything sub-daily through weekly, which is where the
+ *    dense rules live. A per-minute rule is decided here and never expanded
+ *    across the wide window (measured: a DTSTART-anchored `FREQ=MINUTELY` costs
+ *    ~18ms at 8 days and ~1.6s at 732).
+ *  - 70 days covers fortnightly and monthly, including `FREQ=MONTHLY;
+ *    BYMONTHDAY=31`, whose Jan-31 → Mar-31 gap is 59 days.
+ *  - 366*2 is `nextOccurrenceAfter`'s own default. The last rung must equal it:
+ *    save then accepts exactly what the scheduler will later be able to
+ *    re-materialize, so nothing can be stored that the tick loop cannot see.
+ */
+const SAVE_HORIZON_LADDER_DAYS = [8, 70, 366 * 2];
+
+/**
+ * First fire for a schedule being SAVED. Returns null only when the schedule
+ * genuinely has no future occurrence the scheduler could ever reach.
+ *
+ * A single narrow window is the bug this replaces: at seven days, a monthly or
+ * fortnightly recurrence created mid-cycle has no occurrence to find, so an
+ * RRULE was refused outright ("RRULE has no future occurrences") and a cron was
+ * stored with `next_fire = NULL` — which `Scheduler.tick`'s `next_fire IS NOT
+ * NULL` filter then ignores forever.
+ *
+ * @param s the schedule to expand (rrule or cron; `once` never comes here).
+ * @param afterMs materialize the first occurrence strictly after this instant.
+ * @param resolve expander, injectable so tests can observe the rungs tried.
+ * @returns the first fire in UTC epoch ms, or null when there is none.
+ */
+export function nextFireForSave(
+  s: ScheduleLike,
+  afterMs: number,
+  resolve: (s: ScheduleLike, afterMs: number, horizonDays?: number) => number | null = nextOccurrenceAfter,
+): number | null {
+  for (const horizonDays of SAVE_HORIZON_LADDER_DAYS) {
+    const hit = resolve(s, afterMs, horizonDays);
+    if (hit !== null) return hit;
+  }
+  return null;
 }
 
 /**
@@ -171,9 +306,17 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
   const tasks = new TaskRepo(deps.db);
   const profiles = new ProfileRepo(deps.db);
   const runs = new RunRepo(deps.db);
+  // F2 shift-handoff: one append-only memory writer, shared with F6's
+  // Acceptance below so a single instance owns every agent_memories write.
+  const handoffMemory = new HandoffMemory(deps.db);
   // Governance services (goals #38/#40/#41) — declared early so all routes can use them.
   const retentionAudit = new RetentionAudit(deps.db);
   const policies = new PolicyEngine(deps.db);
+  // F6 accept-with-note: the acceptance signal read by F7/F10/F11 via run_outcomes.
+  const acceptance = new Acceptance(deps.db, handoffMemory);
+  // F7 earned-autonomy: composes the policy engine (its `evaluate` is folded
+  // into the fail-closed chain below) and F6's acceptance signal.
+  const autonomy = new AutonomyPolicy(deps.db, policies, acceptance);
   /** Audit helper: record a control-plane mutation with result snapshot. */
   const audit = (action: string, targetType: string | undefined, targetId: string | undefined, detail?: Record<string, unknown>): void => {
     try {
@@ -185,6 +328,86 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     const v = policies.evaluate({ engine: engine ?? 'cli', byokId: byokId ?? null, requestedBudgetUsd: budgetUsd });
     return v ? { violation: `${v.code}: ${v.message}` } : null;
   };
+  // ---- F1 plan-then-execute (plan/AGENT-WORKFORCE-SPEC.md §F1) ----
+  const planExecute = new PlanExecute({
+    db: deps.db,
+    // Books a run for a task that is DISABLED BY DESIGN: enabled=0 is F1's
+    // approval gate. This MUST NOT filter on tasks.enabled. pump() reads the
+    // `runs` table only (run-manager.ts:108), so the booked run still starts.
+    bookRun: (taskId, promptOverride) => {
+      // narrow cast for the policy gate; the spread below carries the whole row
+      const row = deps.db.prepare('SELECT * FROM tasks WHERE id=? AND deleted_at IS NULL').get(taskId) as
+        | { id: string; engine: string | null; byok_id: string | null; budget_usd: number }
+        | undefined;
+      if (!row) return null;
+      const pv = evaluatePolicy(row.engine, row.byok_id, row.budget_usd);
+      if (pv) {
+        audit('plan_execute.book_rejected', 'task', taskId, pv);
+        return null; // the pair stays 'approved' with no execute run — visible, not silent
+      }
+      // §3: shallow copy — never write the rendered prompt back to tasks.prompt
+      const runId = enqueueRunNow(deps.db, { ...row, prompt: promptOverride });
+      deps.runManager.pump();
+      return runId;
+    },
+  });
+  /**
+   * F1's approval gate, asked from the ORDINARY task routes (ADR-039).
+   *
+   * `enabled=0` gates the execute half against the scheduler and against chain
+   * firing, and it is no gate at all against the three routes that reach a task
+   * row directly: run-now and the webhook fire path never read it, and PATCH
+   * rewrites it. `docs/agent-workforce.md` promises "the execute half never
+   * runs without your explicit approval of that specific plan" — these
+   * refusals are what make that sentence true of the product rather than of
+   * the scheduler alone.
+   *
+   *   'run'    (run-now, webhook fire) is refused while the pair is not
+   *            approved. 'approved'/'executed' means a human read THAT plan, so
+   *            a manual re-run is theirs to make; 'rejected' stays refused,
+   *            because a rejected plan was never approved either.
+   *   'enable' (PATCH {enabled:true}) is refused for an execute half at ANY
+   *            status: resolve('approved') books the execute run itself, so
+   *            enabled=1 could only ever mean "let the next plan run fire this
+   *            half through the chain, carrying a plan nobody read".
+   *
+   * Returns null for every task that is not an execute half — only createPair
+   * writes that table, and it clones a fresh execute task per pair.
+   */
+  const planExecuteGate = (
+    taskId: string,
+    action: 'run' | 'enable',
+  ): { error: string; code: string; pairId: string; pairStatus: string } | null => {
+    const pair = planExecute.pairForExecuteTask(taskId);
+    if (!pair) return null;
+    const resolveRoute = `POST /workforce/plan-execute/${pair.pairId}/resolve`;
+    if (action === 'enable') {
+      return {
+        error:
+          `This task is the execute half of plan-then-execute pair ${pair.pairId}, and it stays disabled by design. ` +
+          `Enabling it would let a later plan run fire it through the chain with a plan nobody approved. ` +
+          `Approve the plan instead (${resolveRoute}) and Clockwork books the execute run for you.`,
+        code: 'execute_half_stays_disabled',
+        pairId: pair.pairId,
+        pairStatus: pair.status,
+      };
+    }
+    if (pair.status === 'approved' || pair.status === 'executed') return null;
+    const because =
+      pair.status === 'rejected'
+        ? 'you rejected that plan'
+        : pair.status === 'awaiting_approval'
+          ? 'its plan is waiting for your approval'
+          : 'its plan run has not produced a plan yet';
+    return {
+      error:
+        `This task is the execute half of plan-then-execute pair ${pair.pairId}, and ${because}. ` +
+        `Approve the plan (${resolveRoute}) and Clockwork books the execute run itself.`,
+      code: 'plan_not_approved',
+      pairId: pair.pairId,
+      pairStatus: pair.status,
+    };
+  };
   let token = loadOrCreateToken(deps.dataDir);
   const sseClients = new Set<FastifyReply>();
 
@@ -194,19 +417,17 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     await app.register(fastifyStatic, { root: uiDist, prefix: '/' });
   }
 
-  let paused = false;
+  // Daemon-wide pause. This used to be `let paused = false` right here — a
+  // local nothing but /health and the widget snapshot ever read, so the run
+  // manager dequeued and started runs while the UI said the daemon had
+  // stopped. The manager owns the flag now (run-manager.ts setPaused/isPaused),
+  // because the manager is the only thing that can honour it, and it is
+  // durable so a restart cannot silently un-pause.
+  const isPaused = (): boolean => deps.runManager.isPaused();
 
   // ---- auth hook: bearer token on data routes; static UI + health open ----
   app.addHook('onRequest', async (req, reply) => {
-    const url = (req.raw.url ?? '').split('?')[0]!;
-    const needsAuth =
-      /^\/(tasks|runs|approvals|profiles|search|widget|queue|onboarding|pause-all|resume|capacity)/.test(url) ||
-      /^\/(analytics|retention|audit|policies|capabilities|targets|byok|delivery-config|triggers|trigger-events|ics|usage)/.test(url) ||
-      /^\/(license|support|auth)\//.test(url) || // S-review: control plane + diagnostics must not be anonymous
-      /^\/(calendars|templates)\//.test(url) || // S-audit: ICS export leaks task data; template preview is control plane
-      /^\/fs\//.test(url) || // /fs/browse discloses directory AND file names under $HOME — never anonymous
-      url.startsWith('/events');
-    if (!needsAuth) return; // /health + static UI assets carry no user data
+    if (!requiresAuth(req.raw.url ?? '')) return; // /health + static UI assets carry no user data
     // S-audit: /events used to accept ?token= because EventSource cannot set
     // headers. A bearer token in a URL reaches proxy logs, browser history and
     // Referer headers — tolerable on loopback, disqualifying for any remote
@@ -236,6 +457,85 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     origBroadcast(e);
     broadcast(e);
   };
+  // Same escape hatch buildServer already uses for broadcast: the RunManager is
+  // constructed in main.ts before buildServer, so F1 registers itself here.
+  deps.runManager['deps'].planExecute = planExecute;
+
+  // A durable pause has to survive the boot that follows it, and main.ts calls
+  // `scheduler.start(30_000)` unconditionally after buildServer — so the flag
+  // alone would be undone at every restart. Same escape hatch this file
+  // already uses for `broadcast`, `planExecute` and `selfHealing`: wrap the
+  // method here rather than teach main.ts about pause. Holding the scheduler
+  // still (rather than letting it tick and pile up queued rows) makes a pause
+  // behave like a sleeping machine, so resuming replays through the existing
+  // missed-run coalescing (S-10/S-11) instead of a thundering herd.
+  // /resume clears the flag BEFORE calling start(), so that call gets through.
+  const startScheduler = deps.scheduler.start.bind(deps.scheduler);
+  deps.scheduler.start = (tickMs?: number): void => {
+    if (isPaused()) return;
+    startScheduler(tickMs);
+  };
+
+  // F4 sentinel-worker: books the worker run through the same evaluatePolicy +
+  // enqueueRunNow + pump() sequence the webhook handler uses.
+  const sentinels = new Sentinels({
+    db: deps.db,
+    bookWorker: (taskId: string): string | null => {
+      const taskRow = tasks.get(taskId);
+      if (!taskRow) return null;
+      const pv = evaluatePolicy((taskRow as any).engine ?? null, (taskRow as any).byok_id ?? null, Number(taskRow.budget_usd ?? 2));
+      if (pv) return null;
+      const runId = enqueueRunNow(deps.db, taskRow);
+      audit('run.enqueue', 'run', runId, { taskId: taskRow.id, taskName: taskRow.name, via: 'sentinel' });
+      deps.runManager.pump();
+      return runId;
+    },
+  });
+  // F4: wire the finalize hook onto the already-constructed RunManager's deps
+  // (same technique as the broadcast wiring above). A sentinel fault must
+  // never roll back the run's terminal state — evaluate() itself does not
+  // swallow errors, so the try/catch belongs here, not inside sentinel.ts.
+  (deps.runManager as any)['deps'].onSentinelFinalize = (runId: string, taskId: string, reportJson: string | null, now: number) => {
+    try {
+      sentinels.evaluate(runId, taskId, reportJson, now);
+    } catch {
+      /* F4 is best-effort side work: a sentinel fault must never roll back the run's terminal state */
+    }
+  };
+
+  // F8 self-healing (spec §4 F8). Dynamic import so the static import block at
+  // the top of this file stays untouched — twelve features appending imports is
+  // twelve merge conflicts.
+  const { SelfHealing } = await import('./self-healing.js');
+  const selfHealing = new SelfHealing({
+    db: deps.db,
+    bookRun: (taskId, promptOverride) => {
+      const taskRow = tasks.get(taskId);
+      if (!taskRow) return null;
+      // S-review: the two sibling auto-bookers gate on the policy engine before
+      // enqueueing (F1 above, F4's bookWorker below); this one did not, so every
+      // automatically booked diagnostic ran outside the engine allowlist, the
+      // BYOK restriction and the budget ceiling. Refusing here is safe by F8's
+      // own design: a null booking leaves `diagnostic_at` NULL, so the next
+      // failure tries again instead of the streak going quiet
+      // (self-healing.ts onRunFailed).
+      const pv = evaluatePolicy((taskRow as any).engine ?? null, (taskRow as any).byok_id ?? null, Number(taskRow.budget_usd ?? 2));
+      if (pv) {
+        audit('self_heal.book_rejected', 'task', taskId, pv);
+        return null;
+      }
+      // permission_mode 'plan' makes "propose, don't apply" a runner guarantee
+      // rather than prompt wording. The shallow copy is deliberate: the
+      // diagnostic prompt is never written back to tasks.prompt (spec §3).
+      const runId = enqueueRunNow(deps.db, { ...taskRow, prompt: promptOverride, permission_mode: 'plan' });
+      deps.runManager.pump();
+      return runId;
+    },
+  });
+  // Same precedent as the broadcast reassignment above: the manager is
+  // constructed in main.ts before buildServer, so the finalize hook is handed
+  // in here rather than at construction.
+  deps.runManager['deps'].selfHealing = selfHealing;
 
   // ---- health (S-61 handshake) ----
   app.get('/health', async () => {
@@ -244,11 +544,22 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     const nextFire = (
       deps.db.prepare('SELECT MIN(next_fire) nf FROM schedules WHERE enabled=1 AND next_fire IS NOT NULL').get() as any
     ).nf;
+    // Read per request and never cached: the point of the field is that this
+    // process does not change while the file under it does. A throwing reader
+    // is not allowed to be the thing that takes /health down.
+    let installedVersion: string | null = null;
+    try {
+      installedVersion = deps.installedVersion?.() ?? null;
+    } catch {
+      installedVersion = null;
+    }
     return {
       ok: true,
       apiVersion: API_VERSION,
       daemonVersion: deps.version,
-      paused,
+      installedVersion,
+      versionSkew: installedVersion !== null && installedVersion !== deps.version,
+      paused: isPaused(),
       activeRuns: active,
       queuedRuns: queued,
       nextFire,
@@ -295,7 +606,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
         triggers: count('SELECT COUNT(*) c FROM triggers'),
         providersConfigured: providerRows.length,
       },
-      scheduling: { paused },
+      scheduling: { paused: isPaused() },
       providers: providerRows,
       engines,
       entitlement: entitlements.status(),
@@ -330,7 +641,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       nextFire = input.schedule.runAt ?? null;
     } else if (input.schedule.kind === 'rrule' || input.schedule.kind === 'cron') {
       try {
-        nextFire = nextOccurrenceAfter(
+        nextFire = nextFireForSave(
           {
             kind: input.schedule.kind === 'rrule' ? 'rrule' : 'cron',
             rrule: input.schedule.rrule,
@@ -338,7 +649,6 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
             tz: input.schedule.tz,
           },
           Date.now(),
-          7, // save-time horizon check: must have a fire within a week? no — full horizon but bounded work
         );
         if (nextFire == null && input.schedule.kind === 'rrule') {
           return { ok: false, error: 'RRULE has no future occurrences' };
@@ -371,6 +681,14 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     if (pv) {
       audit('task.create_rejected', 'task', undefined, { ...pv, name: parsed.data.name });
       return reply.code(403).send(pv);
+    }
+    // F7 earned-autonomy: a task may not ask for more autonomy than its
+    // profile has earned. Same fail-closed 403 { violation } shape as above.
+    const av = autonomy.evaluate({ profileId: v.profileId, permissionMode: parsed.data.permissionMode });
+    if (av) {
+      const avio = { violation: `${av.code}: ${av.message}` };
+      audit('task.create_rejected', 'task', undefined, { ...avio, name: parsed.data.name });
+      return reply.code(403).send(avio);
     }
     const row = tasks.create(parsed.data, v.profileId, v.nextFire);
     indexTask(deps.db, row.id, row.name, row.prompt);
@@ -416,19 +734,71 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       if (!probe.ok) return reply.code(422).send({ error: probe.error });
       nextFire = probe.nextFire;
     }
-    const res = tasks.patch((req.params as any).id, parsed.data, (req.body as any)?.version, nextFire ?? null);
-    if (res === 'not_found') return reply.code(404).send({ error: 'not_found' });
-    if (res === 'version_conflict') return reply.code(409).send({ error: 'version_conflict' }); // S-82
+    // S-review (high): both gates below used to run AFTER `tasks.patch` had
+    // committed, so a 403 reported an escalation it had already persisted —
+    // spec §F7 calls the autonomy ceiling fail-closed, and it was fail-open on
+    // this path. They now decide on the PROSPECTIVE row: the patch's own value
+    // wherever it supplies one, the stored value otherwise, which is exactly
+    // what the write would produce. 404 and 409 stay ahead of them so the
+    // refusal order is unchanged, and `tasks.patch` still owns the real CAS.
+    const taskId = (req.params as any).id;
+    const current = tasks.get(taskId);
+    if (!current) return reply.code(404).send({ error: 'not_found' });
+    const expectedVersion = (req.body as any)?.version;
+    if (expectedVersion !== undefined && expectedVersion !== current.version) {
+      return reply.code(409).send({ error: 'version_conflict' }); // S-82
+    }
+    // F1 (ADR-039): re-enabling the execute half re-arms the one-shot chain —
+    // run-manager.ts:683 fires successors `WHERE chain_after = ? AND enabled = 1`
+    // and the execute half does carry `chain_after` (plan-execute.ts:180), so a
+    // later plan run would launch it with a plan nobody approved. Refused ahead
+    // of the two content gates below because it turns on WHICH TASK this is,
+    // not on what the patch asks for.
+    if (parsed.data.enabled === true) {
+      const peGate = planExecuteGate(current.id, 'enable');
+      if (peGate) {
+        audit('task.update_rejected', 'task', current.id, { code: peGate.code, pairId: peGate.pairId });
+        return reply.code(409).send(peGate);
+      }
+    }
     // Policy gate on edits that change engine/byok/budget.
     const pvEdit = evaluatePolicy(
-      parsed.data.engine ?? (res as unknown as { engine?: string }).engine ?? undefined,
+      parsed.data.engine ?? (current as unknown as { engine?: string }).engine ?? undefined,
       'byokId' in parsed.data ? ((parsed.data as unknown as { byokId?: string }).byokId ?? undefined) : undefined,
-      parsed.data.budget?.maxUsd ?? res.budget_usd,
+      parsed.data.budget?.maxUsd ?? current.budget_usd,
     );
     if (pvEdit) {
-      audit('task.update_rejected', 'task', res.id, { ...pvEdit });
+      audit('task.update_rejected', 'task', current.id, { ...pvEdit });
       return reply.code(403).send(pvEdit);
     }
+    // F7 earned-autonomy, on the profile and mode the row WILL hold. `patch`
+    // writes any key that is not `undefined`, so an explicit null profileId
+    // detaches the profile — mirror that, do not coalesce it away.
+    //
+    // S-review (usability trap): judging the prospective row ALONE made a
+    // grandfathered task — one stored above its profile's rung before that
+    // profile was enrolled — unpatchable for every field, `{enabled:false}`
+    // included. `evaluateEdit` compares the prospective row with the stored one
+    // and refuses only a patch that RAISES autonomy, so the fail-closed
+    // direction is unchanged and the escape hatch is reachable.
+    const avEdit = autonomy.evaluateEdit(
+      {
+        profileId: current.profile_id,
+        permissionMode: current.permission_mode as PermissionMode,
+      },
+      {
+        profileId: parsed.data.profileId !== undefined ? parsed.data.profileId : current.profile_id,
+        permissionMode: (parsed.data.permissionMode ?? current.permission_mode) as PermissionMode,
+      },
+    );
+    if (avEdit) {
+      const avio = { violation: `${avEdit.code}: ${avEdit.message}` };
+      audit('task.update_rejected', 'task', current.id, { ...avio });
+      return reply.code(403).send(avio);
+    }
+    const res = tasks.patch(taskId, parsed.data, expectedVersion, nextFire ?? null);
+    if (res === 'not_found') return reply.code(404).send({ error: 'not_found' });
+    if (res === 'version_conflict') return reply.code(409).send({ error: 'version_conflict' }); // S-82
     audit('task.update', 'task', res.id, { fields: Object.keys(parsed.data) });
     broadcast({ type: 'task.changed', taskId: res.id, at: Date.now() });
     const s = tasks.scheduleFor(res.id);
@@ -445,6 +815,13 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
   app.post('/tasks/:id/run-now', async (req, reply) => {
     const row = tasks.get((req.params as any).id);
     if (!row) return reply.code(404).send({ error: 'not_found' });
+    // F1 (ADR-039): the execute half of a pair a human has not approved is not
+    // launchable by hand either. Ahead of the enqueue, so nothing is booked.
+    const peGate = planExecuteGate(row.id, 'run');
+    if (peGate) {
+      audit('run.enqueue_rejected', 'task', row.id, { code: peGate.code, pairId: peGate.pairId, pairStatus: peGate.pairStatus });
+      return reply.code(409).send(peGate);
+    }
     const runId = enqueueRunNow(deps.db, row);
     audit('run.enqueue', 'run', runId, { taskId: row.id, taskName: row.name, via: 'run-now' });
     deps.runManager.pump();
@@ -591,6 +968,12 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       // Policy gate before firing — same rules as manual run-now.
       const pv = evaluatePolicy((taskRow as any).engine ?? null, (taskRow as any).byok_id ?? null, Number(taskRow.budget_usd ?? 2));
       if (pv) return respond(403, { error: 'policy', ...pv }, false, 'policy_violation');
+      const av = autonomy.evaluate({ profileId: taskRow.profile_id ?? null, permissionMode: taskRow.permission_mode as PermissionMode });
+      if (av) return respond(403, { error: 'policy', violation: `${av.code}: ${av.message}` }, false, 'policy_violation');
+      // F1 (ADR-039): a trigger bound to the execute half of an unapproved pair
+      // is a third way to launch it unapproved — same refusal as run-now.
+      const peGate = planExecuteGate(taskRow.id, 'run');
+      if (peGate) return respond(409, peGate, false, peGate.code);
 
       const runId = enqueueRunNow(deps.db, taskRow);
       // Stash the event payload into the run's spec so prompts can use {{event.*}}.
@@ -613,6 +996,40 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     // see docs/triggers.md for the history).
     app.post('/hooks/:id', handleHook);
   }
+
+  // ---- workforce: sentinel-worker (F4) ----
+  app.post('/workforce/sentinels', async (req, reply) => {
+    const parsed = SentinelCreate.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(422).send({ error: 'validation', details: parsed.error.flatten() });
+    }
+    const result = sentinels.create(parsed.data);
+    if ('error' in result) return reply.code(422).send({ error: result.error });
+    audit('sentinel.create', 'sentinel', result.id, { sentinelTaskId: result.sentinelTaskId, triggerId: result.triggerId });
+    broadcast({ type: 'workforce.sentinel_created', sentinelId: result.id, at: Date.now() });
+    return reply.code(201).send(result);
+  });
+
+  app.get('/workforce/sentinels', async () => {
+    return { sentinels: sentinels.list() };
+  });
+
+  app.delete('/workforce/sentinels/:id', async (req, reply) => {
+    const id = (req.params as any).id;
+    const ok = sentinels.remove(id);
+    if (!ok) return reply.code(404).send({ error: 'not_found' });
+    audit('sentinel.delete', 'sentinel', id, {});
+    broadcast({ type: 'workforce.sentinel_deleted', sentinelId: id, at: Date.now() });
+    return reply.code(204).send();
+  });
+
+  app.get('/workforce/sentinels/:id/trips', async (req, reply) => {
+    const id = (req.params as any).id;
+    const exists = deps.db.prepare('SELECT id FROM sentinels WHERE id=?').get(id);
+    if (!exists) return reply.code(404).send({ error: 'not_found' });
+    const limit = Math.min(200, Math.max(1, parseInt(String((req.query as any)?.limit ?? '50'), 10) || 50));
+    return { trips: sentinels.trips(id, limit) };
+  });
 
   // ---- templates (T-203) ----
   const { securityPreview, validateTemplateApply } = await import('./templates.js');
@@ -676,6 +1093,49 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     return { applied: true };
   });
 
+  // ---- workforce: repo-jobs (F5) ----
+  const { RepoJobs } = await import('./repo-jobs.js');
+  const repoJobs = new RepoJobs(deps.db);
+  const REPO_JOB_STATUSES = ['offered', 'imported', 'dismissed'] as const;
+
+  app.post('/workforce/repo-jobs/discover', async (req, reply) => {
+    const body = z.object({ repoPath: z.string().min(1) }).safeParse(req.body);
+    if (!body.success) return reply.code(422).send({ error: 'validation', details: body.error.issues });
+    const r = repoJobs.discover(body.data.repoPath);
+    if (r.error) return reply.code(422).send({ error: r.error });
+    broadcast({ type: 'workforce.repo_jobs_discovered', repoPath: body.data.repoPath, count: r.offers.length, at: Date.now() });
+    audit('repo_jobs.discover', 'repo', body.data.repoPath, { count: r.offers.length });
+    return { offers: r.offers };
+  });
+
+  app.get('/workforce/repo-jobs', async (req, reply) => {
+    const q = req.query as { status?: string };
+    if (q.status !== undefined && !REPO_JOB_STATUSES.includes(q.status as (typeof REPO_JOB_STATUSES)[number])) {
+      return reply.code(422).send({ error: 'validation', details: `status must be one of ${REPO_JOB_STATUSES.join(', ')}` });
+    }
+    return { offers: repoJobs.list(q.status as (typeof REPO_JOB_STATUSES)[number] | undefined) };
+  });
+
+  app.post('/workforce/repo-jobs/:id/import', async (req, reply) => {
+    const id = (req.params as any).id;
+    const r = repoJobs.import(id);
+    if (r === 'not_found') return reply.code(404).send({ error: 'not_found' });
+    if ('error' in r) return reply.code(422).send({ error: r.error });
+    broadcast({ type: 'task.changed', taskId: r.taskId, at: Date.now() }); // S-74 precedent — tray refresh
+    broadcast({ type: 'workforce.repo_job_imported', id, taskId: r.taskId, at: Date.now() });
+    audit('repo_job.import', 'repo_job', id, { taskId: r.taskId });
+    return reply.code(201).send({ taskId: r.taskId });
+  });
+
+  app.post('/workforce/repo-jobs/:id/dismiss', async (req, reply) => {
+    const id = (req.params as any).id;
+    const dismissed = repoJobs.dismiss(id);
+    if (!dismissed) return reply.code(404).send({ error: 'not_found' });
+    broadcast({ type: 'workforce.repo_job_dismissed', id, at: Date.now() });
+    audit('repo_job.dismiss', 'repo_job', id, {});
+    return { dismissed: true };
+  });
+
   // ---- runs ----
   app.get('/runs', async (req) => {
     const q = req.query as any;
@@ -733,6 +1193,51 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     }
   });
 
+  // ---- workforce: proposed-events (F9) — read-only view over runs.report_json; never writes to a calendar ----
+  app.get('/workforce/runs/:runId/proposed-events', async (req, reply) => {
+    const runId = (req.params as any).runId;
+    const run = deps.db.prepare('SELECT id FROM runs WHERE id=?').get(runId);
+    if (!run) return reply.code(404).send({ error: 'not_found' });
+    return { events: proposedEventsFor(deps.db, runId) };
+  });
+
+  app.get('/workforce/runs/:runId/proposed-events.ics', async (req, reply) => {
+    const runId = (req.params as any).runId;
+    const run = deps.db.prepare('SELECT id FROM runs WHERE id=?').get(runId);
+    if (!run) return reply.code(404).send({ error: 'not_found' });
+    const events = proposedEventsFor(deps.db, runId);
+    const ics = toIcs(events, { runId });
+    return reply
+      .header('Content-Type', 'text/calendar; charset=utf-8')
+      .header('Content-Disposition', `attachment; filename="${icsFilenameFor(runId)}"`)
+      .send(ics);
+  });
+
+  // ---- workforce: proof-of-work (F12) ----
+  app.get('/workforce/runs/:runId/proof-of-work', async (req, reply) => {
+    const runId = (req.params as any).runId;
+    const q = req.query as Record<string, unknown>;
+    // '1'/'true' -> true, '0'/'false' -> false, anything else/absent -> undefined
+    // so ProofOfWorkOptions.parse applies its own zod default.
+    const boolParam = (v: unknown): boolean | undefined => {
+      if (v === undefined) return undefined;
+      const s = String(v).toLowerCase();
+      if (s === '1' || s === 'true') return true;
+      if (s === '0' || s === 'false') return false;
+      return undefined;
+    };
+    const includeTranscript = boolParam(q.includeTranscript);
+    const includeDiffStat = boolParam(q.includeDiffStat);
+    const redactPaths = boolParam(q.redactPaths);
+    const html = proofOfWorkHtml(deps.db, runId, { includeTranscript, includeDiffStat, redactPaths });
+    if (html === 'not_found') return reply.code(404).send({ error: 'not_found' });
+    audit('run.export_proof', 'run', runId, { includeTranscript, includeDiffStat, redactPaths });
+    return reply
+      .header('Content-Type', 'text/html; charset=utf-8')
+      .header('Content-Disposition', `attachment; filename="${proofFilenameFor(runId)}"`)
+      .send(html);
+  });
+
   // ---- approvals (rows exist from M1 fail-safe; responses land M2 UI) ----
   app.get('/approvals', async () => {
     return deps.db.prepare('SELECT * FROM approvals WHERE responded_at IS NULL ORDER BY requested_at ASC').all();
@@ -742,6 +1247,12 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     const id = (req.params as any).id;
     const body = req.body as any;
     const decision: import('./run-manager.js').ApprovalDecision = body?.decision === 'approved' ? 'approved' : 'denied';
+    // The workforce dispatches below need to know WHICH kind of approval this
+    // row is, and respondToApproval does not report it — so the payload is read
+    // before the CAS closes the row.
+    const pendingRow = deps.db.prepare('SELECT payload_json FROM approvals WHERE id=?').get(id) as
+      | { payload_json?: unknown }
+      | undefined;
     // Reachable approvals (ADR-036): CAS/forwarding/broadcast/journal all live
     // in RunManager.respondToApproval — the Telegram inline-keyboard path
     // (telegram-approvals.ts) calls the exact same function, so both surfaces
@@ -753,10 +1264,114 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       case 'already_resolved':
         return reply.code(409).send({ error: 'already_resolved' });
       case 'resolved':
-      case 'run_gone':
+      case 'run_gone': {
+        // F1 and F8 (spec §2.4): the inbox and the /workforce/ routes must land
+        // in the same state. Each dispatch CASes on its own row, so whichever
+        // path arrives second is a no-op rather than a second write.
+        try {
+          const payload =
+            typeof pendingRow?.payload_json === 'string'
+              ? JSON.parse(pendingRow.payload_json)
+              : (pendingRow?.payload_json ?? {});
+          const approved = decision === 'approved';
+          if (payload?.pairId) planExecute.resolve(String(payload.pairId), approved ? 'approved' : 'rejected');
+          if (payload?.proposalId) {
+            if (approved) selfHealing.apply(String(payload.proposalId));
+            else selfHealing.reject(String(payload.proposalId));
+          }
+        } catch {
+          /* dispatch is best-effort; the approval record stands either way */
+        }
         return { resolved: true, forwarded: result.forwarded };
+      }
     }
   });
+
+  // ---- workforce: plan-then-execute (F1, spec §F1) ----
+  const PlanExecuteResolve = z.object({ decision: z.enum(['approved', 'rejected']) });
+
+  app.post('/workforce/plan-execute', async (req, reply) => {
+    const parsed = PlanExecuteCreate.safeParse(req.body);
+    if (!parsed.success) return reply.code(422).send({ error: 'validation', details: parsed.error.flatten() });
+    const res = planExecute.createPair(parsed.data);
+    if ('error' in res) return reply.code(422).send({ error: res.error });
+    audit('plan_execute.create', 'task', parsed.data.taskId, {
+      pairId: res.id,
+      planTaskId: res.planTaskId,
+      executeTaskId: res.executeTaskId,
+    });
+    broadcast({ type: 'workforce.plan_execute_created', pairId: res.id, taskId: parsed.data.taskId, at: Date.now() });
+    return reply.code(201).send(res);
+  });
+
+  app.get('/workforce/plan-execute', async (req) => {
+    const q = req.query as { status?: string };
+    // an unknown status yields an empty list, matching GET /runs?state=
+    return { pairs: planExecute.list(q.status ? (String(q.status) as PlanExecuteStatus) : undefined) };
+  });
+
+  app.get('/workforce/plan-execute/:id', async (req, reply) => {
+    const pair = planExecute.get((req.params as any).id);
+    if (!pair) return reply.code(404).send({ error: 'not_found' });
+    return pair;
+  });
+
+  app.post('/workforce/plan-execute/:id/resolve', async (req, reply) => {
+    const id = (req.params as any).id;
+    const parsed = PlanExecuteResolve.safeParse(req.body);
+    if (!parsed.success) return reply.code(422).send({ error: 'validation', details: parsed.error.flatten() });
+    const res = planExecute.resolve(id, parsed.data.decision);
+    if (res === 'not_found') return reply.code(404).send({ error: 'not_found' });
+    if (res === 'already_resolved') return reply.code(409).send({ error: 'already_resolved' });
+    audit('plan_execute.resolve', 'plan_execute_pair', id, { decision: parsed.data.decision, executeRunId: res.executeRunId });
+    broadcast({ type: 'workforce.plan_execute_resolved', pairId: id, decision: parsed.data.decision, at: Date.now() });
+    return res;
+  });
+
+  // ---- workforce: self-healing (F8) ----
+  {
+    const { RemediationStatus } = await import('@clockwork/shared');
+
+    app.get('/workforce/remediations', async (req, reply) => {
+      const q = req.query as any;
+      const parsed = q.status === undefined ? undefined : RemediationStatus.safeParse(String(q.status));
+      if (parsed !== undefined && !parsed.success) {
+        return reply.code(422).send({ error: 'validation', details: parsed.error.flatten() });
+      }
+      const status = parsed !== undefined && parsed.success ? parsed.data : undefined;
+      const limit = q.limit === undefined ? undefined : parseInt(String(q.limit), 10);
+      if (limit !== undefined && !(Number.isFinite(limit) && limit > 0)) {
+        return reply.code(422).send({ error: 'limit must be a positive integer' });
+      }
+      return { proposals: selfHealing.list(status, limit) };
+    });
+
+    app.get('/workforce/remediations/:id', async (req, reply) => {
+      const p = selfHealing.get((req.params as any).id);
+      if (!p) return reply.code(404).send({ error: 'not_found' });
+      return p;
+    });
+
+    app.post('/workforce/remediations/:id/apply', async (req, reply) => {
+      const id = (req.params as any).id;
+      const r = selfHealing.apply(id);
+      if (r === 'not_found') return reply.code(404).send({ error: 'not_found' });
+      if (r === 'already_resolved') return reply.code(409).send({ error: 'already_resolved' });
+      broadcast({ type: 'workforce.remediation_applied', proposalId: r.id, taskId: r.taskId, at: Date.now() });
+      audit('remediation.apply', 'task', r.taskId, { proposalId: r.id, target: r.target, runId: r.runId });
+      return r;
+    });
+
+    app.post('/workforce/remediations/:id/reject', async (req, reply) => {
+      const id = (req.params as any).id;
+      const r = selfHealing.reject(id);
+      if (r === 'not_found') return reply.code(404).send({ error: 'not_found' });
+      if (r === 'already_resolved') return reply.code(409).send({ error: 'already_resolved' });
+      broadcast({ type: 'workforce.remediation_rejected', proposalId: r.id, taskId: r.taskId, at: Date.now() });
+      audit('remediation.reject', 'task', r.taskId, { proposalId: r.id, target: r.target, runId: r.runId });
+      return r;
+    });
+  }
 
   // ---- profiles ----
   app.get('/profiles', async () => profiles.list());
@@ -771,9 +1386,22 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     const { occurrencesBetween } = await import('./recurrence.js');
 
     // Runs whose scheduled_for OR started/ended fall in range.
+    //
+    // NFR-3 ("windowed fetch") is why this projects `task_name` instead of
+    // returning `jobspec_json`: a year view holds ~5,000 rows and the calendar
+    // reads exactly one key out of that blob — the frozen S-5 snapshot name.
+    // Shipping the whole spec (prompt, profile, skills, paths) made the year
+    // view a 10.16MB response; projecting the one field it reads makes it
+    // 1.15MB. Measured on the 5k corpus in
+    // packages/daemon/test/workforce-bench.test.ts. This is a payload/memory
+    // win, NOT a latency win — request latency is dominated by the RRULE
+    // expansion, see that file's notes on recurrence.ts.
+    // json_extract, NOT a join to tasks.name: the calendar must keep showing the
+    // name the run was booked under, not the task's current name.
     const runRows = deps.db
       .prepare(
-        `SELECT id, task_id, state, outcome_reason, scheduled_for, started_at, ended_at, cost_usd, turns, jobspec_json
+        `SELECT id, task_id, state, outcome_reason, scheduled_for, started_at, ended_at, cost_usd, turns,
+                json_extract(jobspec_json, '$.taskName') AS task_name
          FROM runs
          WHERE (scheduled_for BETWEEN ? AND ?)
             OR (started_at BETWEEN ? AND ?)
@@ -1063,6 +1691,9 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       mcp_allow_json: d.mcpAllow ? JSON.stringify(d.mcpAllow) : existing.mcp_allow_json,
       context_roots_json: d.contextRoots ? JSON.stringify(d.contextRoots) : existing.context_roots_json,
       system_prompt_extra: d.systemPromptExtra ?? existing.system_prompt_extra,
+      // upsert persists delivery_json; this merge never supplied one, so a
+      // delivery-config edit was dropped one layer above the repo that stores it.
+      delivery_json: d.delivery ? JSON.stringify(d.delivery) : existing.delivery_json,
     });
     return profiles.get(existing.id);
   });
@@ -1098,20 +1729,29 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     const next = deps.db
       .prepare('SELECT next_fire, t.name FROM schedules s JOIN tasks t ON t.id=s.task_id WHERE s.enabled=1 AND s.next_fire IS NOT NULL ORDER BY next_fire LIMIT 1')
       .get() as any;
-    return { runsToday, needsYou, recentReports: unread, nextRun: next ?? null, paused };
+    return { runsToday, needsYou, recentReports: unread, nextRun: next ?? null, paused: isPaused() };
   });
 
   // ---- pause-all / resume ----
+  // Contract (SettingsView "Pause all scheduling"): "Queued and future runs
+  // hold until resumed. Active runs finish." Nothing in flight is killed —
+  // stopping a run mid-turn throws away work that is already paid for and can
+  // leave a half-written worktree behind — but nothing new starts, on any
+  // path, until /resume.
   app.post('/pause-all', async () => {
-    paused = true;
+    deps.runManager.setPaused(true); // the gate the run manager's pump reads
     deps.scheduler.stop();
-    broadcast({ type: 'daemon.health', data: { paused }, at: Date.now() });
+    audit('daemon.pause', undefined, undefined, { activeRuns: deps.runManager.countActive() });
+    broadcast({ type: 'daemon.health', data: { paused: true }, at: Date.now() });
     return { paused: true };
   });
 
   app.post('/resume', async () => {
-    paused = false;
+    // Clear the flag FIRST: the scheduler.start wrapper above no-ops while
+    // paused, and setPaused(false) is what pumps the runs that were held.
+    deps.runManager.setPaused(false);
     deps.scheduler.start();
+    audit('daemon.resume', undefined, undefined);
     broadcast({ type: 'daemon.health', data: { paused: false }, at: Date.now() });
     return { paused: false };
   });
@@ -1134,10 +1774,13 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
         (deps.db
           .prepare(`SELECT COUNT(*) c FROM runs WHERE id != ? AND jobspec_json LIKE ? AND state IN ('preparing','running','waiting_approval','finalizing')`)
           .get(r.id, `%${spec.repoPath}%`) as any).c > 0;
+      // 'paused' leads: while the daemon is paused nothing starts at all, so
+      // "waiting for slot" — which used to win for anything past position 2 —
+      // was telling the user their run was about to go.
       const reason =
-        repoBusy ? 'waiting for repo'
+        isPaused() ? 'paused'
+        : repoBusy ? 'waiting for repo'
         : active + position > maxParallel ? 'waiting for slot'
-        : paused ? 'paused'
         : 'starting soon';
       return {
         runId: r.id,
@@ -1252,6 +1895,26 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
   });
 
   // ---- cost & reliability analytics (ADR-029) ----
+  //
+  // An UNFINISHED run (queued / preparing / running / waiting_approval /
+  // finalizing / awaiting_user) is the normal state of this product, so the
+  // window predicate below deliberately admits one: `COALESCE(ended_at,
+  // scheduled_for)` places it on the day it was scheduled for, matching
+  // timesheets.ts:95 and performance.ts:67. How it is then COUNTED is the
+  // careful part, and the rule is one line: a run with no end time is a real
+  // run whose spend so far is real, but it is never counted as a FINISHED one.
+  //   - counted in `runs`; reported separately as `inFlight`
+  //   - its cost/turns so far count — that money is already gone
+  //   - never `completed`, never `failed`
+  //   - excluded from every rate's denominator (`successRate` divides by
+  //     finished runs) and from `avgDurationMs` (no end time, no duration)
+  // With no unfinished run in the window every number here is identical to
+  // what it was before, so this changes only the case that used to 500.
+  //
+  // That 500 was this: the SELECT list omitted `scheduled_for` while the day
+  // bucketing read it, so `Number(undefined)` -> NaN -> `new Date(NaN)
+  // .toISOString()` threw RangeError('Invalid time value') and took the whole
+  // Analytics tab down for as long as any run was in flight.
   app.get('/analytics', async (req, reply) => {
     const q = req.query as Record<string, string>;
     const to = q.to ? parseInt(String(q.to), 10) : Date.now();
@@ -1260,16 +1923,18 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
 
     const rows = deps.db
       .prepare(
-        `SELECT task_id, state, outcome_reason, started_at, ended_at, cost_usd, turns, jobspec_json
+        `SELECT task_id, state, outcome_reason, started_at, ended_at, scheduled_for, cost_usd, turns, jobspec_json
          FROM runs
          WHERE COALESCE(ended_at, scheduled_for) BETWEEN ? AND ?`,
       )
       .all(from, to) as unknown as Array<Record<string, unknown>>;
 
-    type TaskAgg = { taskId: string; name: string; runs: number; completed: number; failed: number; costUsd: number; turns: number; durationMs: number };
+    /** `finished` = terminal runs, the denominator of every rate. `timedRuns` = runs that have both a start and an end. */
+    type TaskAgg = { taskId: string; name: string; runs: number; finished: number; completed: number; failed: number; costUsd: number; turns: number; durationMs: number; timedRuns: number };
     const byTask = new Map<string, TaskAgg>();
-    const byEngine = new Map<string, { engine: string; runs: number; completed: number; failed: number; costUsd: number }>();
+    const byEngine = new Map<string, { engine: string; runs: number; finished: number; completed: number; failed: number; costUsd: number }>();
     let totalRuns = 0;
+    let totalFinished = 0;
     let totalCompleted = 0;
     let totalFailed = 0;
     let totalCostUsd = 0;
@@ -1279,40 +1944,72 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     for (const r of rows) {
       totalRuns += 1;
       const state = String(r.state);
+      // An unknown state is treated as unfinished — better to under-claim a
+      // finished run than to average an unfinished one in as though it ended.
+      const finished = isTerminal(state as RunState);
       const isDone = state === 'completed';
       const isFail = state === 'failed' || state === 'timed_out';
+      if (finished) totalFinished += 1;
       if (isDone) totalCompleted += 1;
       if (isFail) totalFailed += 1;
       const cost = Number(r.cost_usd ?? 0);
       totalCostUsd += cost;
       const turns = Number(r.turns ?? 0);
       totalTurns += turns;
-      const dur = Number(r.ended_at && r.started_at ? (r.ended_at as number) - (r.started_at as number) : 0);
+      // A duration needs BOTH ends. An unfinished run has no end; a `missed`
+      // or `cancelled` one never started. Neither is a 0 ms sample.
+      const timed = r.started_at != null && r.ended_at != null;
+      const dur = timed ? Number(r.ended_at) - Number(r.started_at) : 0;
 
       const spec = safeParseSpec(r.jobspec_json);
       const name = String(spec.taskName ?? 'unknown');
       const engFromSpec = String(spec.engine ?? 'cli');
-      const day = new Date(Number(r.ended_at ?? r.scheduled_for)).toISOString().slice(0, 10);
+      // Same COALESCE the WHERE clause uses, so every returned row has a day.
+      // Still guarded: one unreadable timestamp loses its bar, not the tab.
+      const bucketAt = Number(r.ended_at ?? r.scheduled_for ?? Number.NaN);
+      const day = Number.isFinite(bucketAt) ? new Date(bucketAt).toISOString().slice(0, 10) : null;
 
-      const t = byTask.get(String(r.task_id)) ?? { taskId: String(r.task_id), name, runs: 0, completed: 0, failed: 0, costUsd: 0, turns: 0, durationMs: 0 };
-      t.runs += 1; if (isDone) t.completed += 1; if (isFail) t.failed += 1;
-      t.costUsd += cost; t.turns += turns; t.durationMs += dur;
+      const t = byTask.get(String(r.task_id)) ?? { taskId: String(r.task_id), name, runs: 0, finished: 0, completed: 0, failed: 0, costUsd: 0, turns: 0, durationMs: 0, timedRuns: 0 };
+      t.runs += 1; if (finished) t.finished += 1; if (isDone) t.completed += 1; if (isFail) t.failed += 1;
+      t.costUsd += cost; t.turns += turns; t.durationMs += dur; if (timed) t.timedRuns += 1;
       byTask.set(String(r.task_id), t);
 
       const engKey = engFromSpec + (spec.byokId ? ':byok' : '');
-      const e = byEngine.get(engKey) ?? { engine: engKey, runs: 0, completed: 0, failed: 0, costUsd: 0 };
-      e.runs += 1; if (isDone) e.completed += 1; if (isFail) e.failed += 1; e.costUsd += cost;
+      const e = byEngine.get(engKey) ?? { engine: engKey, runs: 0, finished: 0, completed: 0, failed: 0, costUsd: 0 };
+      e.runs += 1; if (finished) e.finished += 1; if (isDone) e.completed += 1; if (isFail) e.failed += 1; e.costUsd += cost;
       byEngine.set(engKey, e);
 
-      const d = daily.get(day) ?? { day, runs: 0, costUsd: 0 };
-      d.runs += 1; d.costUsd += cost;
-      daily.set(day, d);
+      if (day !== null) {
+        const d = daily.get(day) ?? { day, runs: 0, costUsd: 0 };
+        d.runs += 1; d.costUsd += cost;
+        daily.set(day, d);
+      }
     }
 
     const tasksOut = [...byTask.values()]
       .sort((a, b) => b.costUsd - a.costUsd)
-      .map((t) => ({ ...t, costUsd: round4(t.costUsd), successRate: t.runs ? Math.round((t.completed / t.runs) * 100) : 0, avgDurationMs: t.runs ? Math.round(t.durationMs / t.runs) : 0 }));
-    const enginesOut = [...byEngine.values()].map((e) => ({ ...e, costUsd: round4(e.costUsd), successRate: e.runs ? Math.round((e.completed / e.runs) * 100) : 0 }));
+      .map((t) => ({
+        taskId: t.taskId,
+        name: t.name,
+        runs: t.runs,
+        completed: t.completed,
+        failed: t.failed,
+        inFlight: t.runs - t.finished,
+        costUsd: round4(t.costUsd),
+        turns: t.turns,
+        durationMs: t.durationMs,
+        successRate: t.finished ? Math.round((t.completed / t.finished) * 100) : 0,
+        avgDurationMs: t.timedRuns ? Math.round(t.durationMs / t.timedRuns) : 0,
+      }));
+    const enginesOut = [...byEngine.values()].map((e) => ({
+      engine: e.engine,
+      runs: e.runs,
+      completed: e.completed,
+      failed: e.failed,
+      inFlight: e.runs - e.finished,
+      costUsd: round4(e.costUsd),
+      successRate: e.finished ? Math.round((e.completed / e.finished) * 100) : 0,
+    }));
 
     // ---- cost optimization suggestions (goal #35) ----
     const suggestions: Array<{ taskName: string; kind: string; message: string }> = [];
@@ -1336,7 +2033,11 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
         });
       }
       // Turn-hungry tasks: prompt scoping suggestion.
-      if (t.turns / Math.max(1, t.runs) > 40 && t.completed < t.runs) {
+      // `completed < finished` is "some finished run did not complete" — the
+      // "and has failures" this line always meant. It is the same test as the
+      // older `completed < runs` whenever nothing is in flight; a run that is
+      // merely still going is not evidence of anything to fix.
+      if (t.turns / Math.max(1, t.runs) > 40 && t.completed < t.finished) {
         suggestions.push({
           taskName: t.name,
           kind: 'prompt_scoping',
@@ -1352,7 +2053,9 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
         runs: totalRuns,
         completed: totalCompleted,
         failed: totalFailed,
-        successRate: totalRuns ? Math.round((totalCompleted / totalRuns) * 100) : 0,
+        /** Runs in this window that have not finished yet — counted in `runs`, in no rate. */
+        inFlight: totalRuns - totalFinished,
+        successRate: totalFinished ? Math.round((totalCompleted / totalFinished) * 100) : 0,
         costUsd: round4(totalCostUsd),
         turns: totalTurns,
         avgCostPerRun: totalRuns ? round4(totalCostUsd / totalRuns) : 0,
@@ -1428,6 +2131,47 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       });
     }
     return policies.get();
+  });
+
+  // ---- workforce: earned autonomy (F7) — a rung is OFFERED, never granted ----
+  app.get('/workforce/autonomy/offers', async (req, reply) => {
+    const raw = (req.query as any)?.status;
+    if (raw !== undefined && String(raw) !== '') {
+      const parsed = AutonomyOfferStatus.safeParse(String(raw));
+      if (!parsed.success) {
+        return reply.code(422).send({ error: `unknown status "${String(raw)}" — expected offered, accepted or declined` });
+      }
+      return { offers: autonomy.listOffers(parsed.data) };
+    }
+    return { offers: autonomy.listOffers() };
+  });
+
+  app.post('/workforce/autonomy/offers/:id/respond', async (req, reply) => {
+    const parsed = z.object({ decision: z.enum(['accepted', 'declined']) }).safeParse(req.body);
+    if (!parsed.success) return reply.code(422).send({ error: 'validation', details: parsed.error.flatten() });
+    const res = autonomy.respond(String((req.params as any).id), parsed.data.decision);
+    if (res === 'not_found') return reply.code(404).send({ error: 'not_found' });
+    if (res === 'already_resolved') return reply.code(409).send({ error: 'already_resolved' });
+    broadcast({ type: 'workforce.autonomy_decided', offerId: res.id, profileId: res.profileId, decision: res.status, at: Date.now() });
+    audit('autonomy.respond', 'profile', res.profileId, { offerId: res.id, decision: res.status, fromRung: res.fromRung, toRung: res.toRung });
+    return res;
+  });
+
+  app.get('/workforce/autonomy/profiles/:profileId', async (req, reply) => {
+    const state = autonomy.state(String((req.params as any).profileId));
+    if (!state) return reply.code(404).send({ error: 'not_found' });
+    return state;
+  });
+
+  app.post('/workforce/autonomy/profiles/:profileId/enroll', async (req, reply) => {
+    const parsed = z.object({ rung: AutonomyRung }).safeParse(req.body);
+    if (!parsed.success) return reply.code(422).send({ error: 'validation', details: parsed.error.flatten() });
+    const profileId = String((req.params as any).profileId);
+    const state = autonomy.enroll(profileId, parsed.data.rung);
+    if (state === 'not_found') return reply.code(404).send({ error: 'not_found' });
+    broadcast({ type: 'workforce.autonomy_enrolled', profileId, rung: state.rung, at: Date.now() });
+    audit('autonomy.enroll', 'profile', profileId, { rung: state.rung });
+    return state;
   });
 
   // ---- capability matrix (goal #43): honest feature gating ----
@@ -1720,6 +2464,188 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     return { windows: [...byWindow.entries()].map(([kind, v]) => ({ kind, ...v })) };
   });
 
+  // ---- workforce: office hours (F3) ----
+  const officeHours = new OfficeHours(deps.db);
+
+  app.get('/workforce/office-hours', async () => {
+    return { enabled: officeHours.enabled(), windows: officeHours.list() };
+  });
+
+  app.post('/workforce/office-hours', async (req, reply) => {
+    const parsed = OfficeHourCreate.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(422).send({ error: 'validation', details: parsed.error.flatten() });
+    }
+    if (!isKnownZone(parsed.data.tz)) {
+      // A zone luxon cannot resolve stores a window that never opens, so it
+      // would silently never shift anything. Refuse it at the door.
+      return reply
+        .code(422)
+        .send({ error: `Unknown IANA time zone '${parsed.data.tz}' — use a name like 'America/New_York'.` });
+    }
+    const created = officeHours.create(parsed.data);
+    broadcast({ type: 'workforce.office_hours_created', windowId: created.id, at: Date.now() });
+    audit('office_hours.create', 'office_hour', created.id, {
+      dow: created.dow,
+      startMin: created.startMin,
+      endMin: created.endMin,
+      tz: created.tz,
+    });
+    return reply.code(201).send(created);
+  });
+
+  app.delete('/workforce/office-hours/:id', async (req, reply) => {
+    const id = String((req.params as any).id);
+    if (!officeHours.remove(id)) return reply.code(404).send({ error: 'not_found' });
+    broadcast({ type: 'workforce.office_hours_removed', windowId: id, at: Date.now() });
+    audit('office_hours.remove', 'office_hour', id, {});
+    return reply.code(204).send();
+  });
+
+  app.put('/workforce/office-hours/enabled', async (req, reply) => {
+    const parsed = z.object({ enabled: z.boolean() }).safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(422).send({ error: 'validation', details: parsed.error.flatten() });
+    }
+    officeHours.setEnabled(parsed.data.enabled);
+    broadcast({ type: 'workforce.office_hours_toggled', enabled: parsed.data.enabled, at: Date.now() });
+    audit('office_hours.set_enabled', 'workforce_prefs', '1', { enabled: parsed.data.enabled });
+    return { enabled: officeHours.enabled() };
+  });
+
+  // ---- workforce: accept-with-note (F6) ----
+  app.post('/workforce/runs/:runId/outcome', async (req, reply) => {
+    const parsed = RunOutcomeWrite.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(422).send({ error: 'validation', details: parsed.error.flatten() });
+    }
+    const runId = (req.params as any).runId;
+    const result = acceptance.record(runId, parsed.data, 'local');
+    if (result === 'not_found') return reply.code(404).send({ error: 'not_found' });
+    // F7 earned-autonomy: an acceptance may EARN the next rung. maybeOffer
+    // writes an autonomy_offers row and nothing else — the profile is untouched
+    // until a human accepts. Best-effort (§2.3): a failure here must never lose
+    // the outcome the human just recorded.
+    try {
+      if (result.profileId) {
+        const offer = autonomy.maybeOffer(result.profileId);
+        if (offer) {
+          broadcast({ type: 'workforce.autonomy_offered', offerId: offer.id, profileId: offer.profileId, toRung: offer.toRung, at: Date.now() });
+          audit('autonomy.offer', 'profile', offer.profileId, { offerId: offer.id, fromRung: offer.fromRung, toRung: offer.toRung, streak: offer.streak });
+        }
+      }
+    } catch { /* non-fatal: the recorded outcome stands either way */ }
+    broadcast({ type: 'workforce.outcome_recorded', runId, taskId: result.taskId, decision: result.decision, at: Date.now() });
+    audit('outcome.record', 'run', runId, { decision: result.decision });
+    return result;
+  });
+
+  // "Nobody has decided yet" is the normal state of a fresh run, not an error.
+  // Answering it with 404 put a red line in the browser console every time the
+  // inbox opened an undecided run — console noise that trains people to ignore
+  // the console. So the absence of a decision is an ordinary 200 carrying JSON
+  // `null`, and 404 is kept for the one case that really is a caller mistake:
+  // a runId that names no run. The two stay distinguishable.
+  //
+  // The body is a bare `null`, deliberately NOT an envelope like
+  // `{ outcome: null }`: OutcomeControls.tsx:50 stores whatever this returns
+  // and line 123 renders `outcome.decision` behind a bare truthiness check, so
+  // a truthy envelope would crash the panel this change exists to keep quiet.
+  app.get('/workforce/runs/:runId/outcome', async (req, reply) => {
+    const runId = (req.params as any).runId;
+    const rec = acceptance.get(runId); // a run_outcomes row implies the run exists (FK)
+    if (rec) return rec;
+    if (!deps.db.prepare('SELECT 1 FROM runs WHERE id=?').get(runId)) {
+      return reply.code(404).send({ error: 'not_found' });
+    }
+    return reply.send(null);
+  });
+
+  app.get('/workforce/tasks/:taskId/outcomes', async (req) => {
+    const q = req.query as any;
+    const limit = q.limit ? parseInt(String(q.limit), 10) : undefined;
+    return { outcomes: acceptance.listForTask((req.params as any).taskId, limit) };
+  });
+
+  // ---- workforce: timesheets (F10) ----
+  app.get('/workforce/timesheets', async (req, reply) => {
+    const q = req.query as Record<string, string>;
+    const toMs = q.to !== undefined ? parseInt(String(q.to), 10) : Date.now();
+    const fromMs = q.from !== undefined ? parseInt(String(q.from), 10) : toMs - 30 * 86_400_000;
+    if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs <= fromMs) {
+      return reply.code(422).send({ error: 'to must be after from' });
+    }
+    const profileId = q.profileId ? String(q.profileId) : undefined;
+    return timesheet(deps.db, { fromMs, toMs, profileId });
+  });
+
+  app.put('/workforce/prefs/hourly-rate', async (req, reply) => {
+    // NOTE: a fresh literal schema, NOT WorkforcePrefs.shape.humanHourlyRateUsd —
+    // that field carries `.default(null)`, so reusing it would make the body
+    // key optional and a bare `PUT {}` would silently clear the rate.
+    const HourlyRateBody = z.object({ humanHourlyRateUsd: z.number().nonnegative().nullable() });
+    const parsed = HourlyRateBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(422).send({ error: 'validation', details: parsed.error.flatten() });
+    setHumanHourlyRate(deps.db, parsed.data.humanHourlyRateUsd);
+    broadcast({ type: 'workforce.hourly_rate_set', humanHourlyRateUsd: parsed.data.humanHourlyRateUsd, at: Date.now() });
+    audit('workforce.hourly_rate_set', 'workforce_prefs', '1', { humanHourlyRateUsd: parsed.data.humanHourlyRateUsd });
+    return { humanHourlyRateUsd: parsed.data.humanHourlyRateUsd };
+  });
+
+  // ---- workforce: performance reviews (F11) ----
+  // review_period_days (workforce_prefs, singleton id=1) supplies the default
+  // window when the caller omits ?from/&to — this is the one place this
+  // feature reads that column; scorecard()/scorecards() always take an
+  // explicit {fromMs,toMs} and never read prefs themselves (spec F11).
+  // from/to are parsed leniently: missing or non-finite -> use the default,
+  // matching the fail-open posture the other read-only analytics routes in
+  // this file take (no 422 is named for these three routes in the spec,
+  // unlike F10's timesheets route, which explicitly requires one).
+  function resolvePerformanceWindow(query: unknown): { fromMs: number; toMs: number } {
+    const q = (query ?? {}) as { from?: string; to?: string };
+    const days = (
+      deps.db.prepare('SELECT review_period_days FROM workforce_prefs WHERE id=1').get() as {
+        review_period_days: number;
+      }
+    ).review_period_days;
+    const toParsed = Number(q.to);
+    const toMs = Number.isFinite(toParsed) ? toParsed : Date.now();
+    const fromParsed = Number(q.from);
+    const fromMs = Number.isFinite(fromParsed) ? fromParsed : toMs - days * 86_400_000;
+    return { fromMs, toMs };
+  }
+
+  app.get('/workforce/performance', async (req) => {
+    const window = resolvePerformanceWindow(req.query);
+    return { cards: scorecards(deps.db, window) };
+  });
+
+  app.get('/workforce/performance/:profileId', async (req, reply) => {
+    const profileId = (req.params as any).profileId as string;
+    const window = resolvePerformanceWindow(req.query);
+    const card = scorecard(deps.db, profileId, window);
+    // 404 rule, chosen so the list (GET /workforce/performance) and this
+    // detail route never disagree: performance.ts deliberately keeps a
+    // deleted/unknown profile id ADDRESSABLE (falls back to the raw id as
+    // profileName) rather than folding it into "Unassigned", and scorecards()
+    // will list such a card if it has runs. So 404 only when BOTH the id
+    // names no profiles row AND it produced zero runs in the window — a
+    // truly unknown id with no history. A deleted profile that still has
+    // runs in-window still resolves, matching the list.
+    const profileRow = deps.db.prepare('SELECT id FROM profiles WHERE id=?').get(profileId);
+    if (!profileRow && card.runs === 0) return reply.code(404).send({ error: 'not_found' });
+    return card;
+  });
+
+  app.get('/workforce/performance/:profileId/review-prompt', async (req, reply) => {
+    const profileId = (req.params as any).profileId as string;
+    const window = resolvePerformanceWindow(req.query);
+    const card = scorecard(deps.db, profileId, window);
+    const profileRow = deps.db.prepare('SELECT id FROM profiles WHERE id=?').get(profileId);
+    if (!profileRow && card.runs === 0) return reply.code(404).send({ error: 'not_found' });
+    return { prompt: reviewPromptFor(card) };
+  });
+
   // ---- SSE (Fastify v5: hijack the reply; the raw response lives on reply.raw) ----
   app.get('/events', (req, reply) => {
     const res = reply.raw;
@@ -1732,6 +2658,28 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     res.write(`data: ${JSON.stringify({ type: 'daemon.health', connected: true })}\n\n`);
     sseClients.add(reply);
     req.raw.on('close', () => sseClients.delete(reply));
+  });
+
+  // ---- workforce: shift-handoff (F2) ----
+  app.get('/workforce/handoff/:taskId', async (req) => {
+    const taskId = (req.params as any).taskId as string;
+    const rawLimit = (req.query as any)?.limit;
+    const limit = rawLimit !== undefined ? Math.max(1, parseInt(String(rawLimit), 10) || 5) : undefined;
+    return { memories: handoffMemory.latest(taskId, limit) };
+  });
+
+  app.post('/workforce/handoff/:taskId', async (req, reply) => {
+    const taskId = (req.params as any).taskId as string;
+    const parsed = AgentMemoryWrite.safeParse({ ...(req.body as Record<string, unknown>), taskId });
+    if (!parsed.success) return reply.code(422).send({ error: 'validation', details: parsed.error.flatten() });
+    // No 404 in this route's contract (spec §4 F2 routes table) — an unknown
+    // task is a 422 semantic failure, caught here rather than surfacing as an
+    // uncaught agent_memories.task_id FK throw (500).
+    if (!tasks.get(taskId)) return reply.code(422).send({ error: 'unknown task' });
+    const mem = handoffMemory.append(parsed.data);
+    broadcast({ type: 'workforce.memory_appended', taskId, memoryId: mem.id, at: mem.createdAt });
+    audit('memory.append', 'task', taskId, { memoryId: mem.id, author: mem.author, kind: mem.kind });
+    return reply.code(201).send(mem);
   });
 
   return { app, token, sseClients };

@@ -28,7 +28,13 @@ export class ApiError extends Error {
   }
 }
 
-async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
+/**
+ * One request, one error contract — auth header, 401 handling and the
+ * ApiError mapping live here and nowhere else. Split out of `req` so a
+ * non-JSON response (the proof-of-work HTML export) can reuse all of it and
+ * only differ in how the body is read.
+ */
+async function send(method: string, path: string, body?: unknown): Promise<Response> {
   let res: Response;
   try {
     res = await fetch(path, {
@@ -58,9 +64,16 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
     const details = (err as any).details;
     throw new ApiError(res.status, typeof msg === 'string' ? msg : JSON.stringify(msg), details);
   }
+  return res;
+}
+
+async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await send(method, path, body);
   // A 204 has no body, so res.json() throws SyntaxError and the caller's
   // .then() never runs — DELETE /triggers/:id and DELETE /byok/:id both answer
-  // 204, which made "Delete" look broken while the row was actually gone.
+  // 204, and so do the workforce deletes (DELETE /workforce/sentinels/:id and
+  // DELETE /workforce/office-hours/:id), which made "Delete" look broken while
+  // the row was actually gone.
   // Only definitive no-body signals skip the parse: HTTP forbids a body on
   // 204/205, and content-length: 0 says so outright. A missing content-type is
   // NOT such a signal — treating it as one would silently return undefined for
@@ -74,7 +87,12 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
 export interface Health {
   ok: boolean;
   apiVersion: number;
+  /** the version THIS PROCESS started with */
   daemonVersion: string;
+  /** the version of the build on disk right now; null when it cannot be read */
+  installedVersion: string | null;
+  /** true only when both are known and they differ — never claim skew that cannot be proven */
+  versionSkew: boolean;
   paused: boolean;
   activeRuns: number;
   queuedRuns: number;
@@ -116,6 +134,17 @@ export interface RunRowT {
   jobspec_json: string;
 }
 
+/**
+ * GET /calendar returns a WINDOWED PROJECTION of RunRowT, not the whole row
+ * (NFR-3). A year view holds ~5,000 rows, so the route omits `jobspec_json`,
+ * `report_json`, `branch` and `worktree_path` and projects the one field the
+ * calendar reads — the frozen S-5 snapshot name — as `task_name`. Fetch the
+ * full row from `/runs/:id` when a view needs more than a chip.
+ */
+export type CalendarRunRowT = Omit<RunRowT, 'jobspec_json' | 'report_json' | 'branch' | 'worktree_path'> & {
+  task_name: string | null;
+};
+
 export interface CalendarEvent {
   kind: 'run' | 'booking' | 'human';
   id: string;
@@ -134,6 +163,295 @@ export interface AnalyticsT {
   byTask: Array<{ taskId: string; name: string; runs: number; completed: number; failed: number; costUsd: number; successRate: number; avgDurationMs: number }>;
   byProvider: Array<{ engine: string; runs: number; completed: number; failed: number; costUsd: number; successRate: number }>;
   daily: Array<{ day: string; runs: number; costUsd: number }>;
+}
+
+/**
+ * F8 self-healing proposal (GET /workforce/remediations/:id). The approvals
+ * payload carries only `target` + `proposedValue`; `currentValue` and
+ * `rationale` live on the proposal row, and the inbox card needs both to show
+ * a human what the change would actually replace.
+ */
+export interface RemediationProposalT {
+  id: string;
+  taskId: string;
+  runId: string | null;
+  approvalId: string | null;
+  target: 'prompt' | 'profile';
+  currentValue: string | null;
+  proposedValue: string;
+  rationale: string | null;
+  status: 'proposed' | 'applied' | 'rejected';
+  createdAt: number;
+  decidedAt: number | null;
+}
+
+// ---------------------------------------------------------------------------
+// Agent workforce (plan/AGENT-WORKFORCE-SPEC.md, migration 0008).
+//
+// These mirror packages/shared/src/workforce.ts BY HAND. Nothing under
+// packages/ui/src imports @clockwork/shared — the UI is a pure wire client —
+// so every cross-package shape is re-declared here with this file's `T`
+// suffix, exactly as TaskViewT/RunRowT/RemediationProposalT already are. The
+// compiler cannot catch drift between the two: if a shape moves in
+// workforce.ts or in a daemon route, move it here in the same change.
+// ---------------------------------------------------------------------------
+
+/** F1 plan-then-execute. */
+export type PlanExecuteStatusT = 'awaiting_plan' | 'awaiting_approval' | 'approved' | 'rejected' | 'executed';
+
+export interface PlanExecutePairT {
+  id: string;
+  planTaskId: string;
+  executeTaskId: string;
+  planRunId: string | null;
+  approvalId: string | null;
+  executeRunId: string | null;
+  status: PlanExecuteStatusT;
+  decidedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** F2 shift-handoff (also F6's note sink). */
+export type MemoryAuthorT = 'agent' | 'human';
+export type MemoryKindT = 'handoff' | 'note';
+
+export interface AgentMemoryT {
+  id: string;
+  taskId: string;
+  runId: string | null;
+  author: MemoryAuthorT;
+  kind: MemoryKindT;
+  tried: string | null;
+  blocked: string | null;
+  nextCheck: string | null;
+  body: string | null;
+  createdAt: number;
+}
+
+/**
+ * Body of POST /workforce/handoff/:taskId. `taskId` is deliberately absent:
+ * the route merges it in from the path before validating, so a taskId in the
+ * body is ignored (api.ts:2352).
+ */
+export interface AgentMemoryWriteT {
+  runId?: string | null;
+  /** defaults to 'agent' server-side */
+  author?: MemoryAuthorT;
+  /** defaults to 'handoff' server-side */
+  kind?: MemoryKindT;
+  tried?: string | null;
+  blocked?: string | null;
+  nextCheck?: string | null;
+  body?: string | null;
+}
+
+/** F3 office-hours. A window never crosses midnight — that is two rows. */
+export interface OfficeHourWindowT {
+  id: string;
+  label: string | null;
+  /** 0 = Sunday .. 6 = Saturday */
+  dow: number;
+  startMin: number;
+  endMin: number;
+  tz: string;
+  enabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface OfficeHourCreateT {
+  label?: string;
+  dow: number;
+  startMin: number;
+  endMin: number;
+  /** IANA zone; the daemon 422s a name luxon cannot resolve */
+  tz: string;
+  /** defaults to true server-side */
+  enabled?: boolean;
+}
+
+/** F4 sentinel-worker. */
+export interface SentinelT {
+  id: string;
+  name: string;
+  sentinelTaskId: string;
+  triggerId: string;
+  tripExpr: string;
+  cooldownSec: number;
+  lastTrippedAt: number | null;
+  enabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface SentinelCreateT {
+  name: string;
+  sentinelTaskId: string;
+  triggerId: string;
+  /** case-insensitive substring the sentinel run's report summary must contain */
+  tripExpr: string;
+  /** defaults to 3600 server-side */
+  cooldownSec?: number;
+  /** defaults to true server-side */
+  enabled?: boolean;
+}
+
+export interface SentinelTripT {
+  id: string;
+  sentinelId: string;
+  runId: string | null;
+  workerRunId: string | null;
+  tripped: boolean;
+  reason: string | null;
+  at: number;
+}
+
+/** F5 repo-shipped jobs. */
+export type RepoJobStatusT = 'offered' | 'imported' | 'dismissed';
+
+export interface RepoJobSpecT {
+  key: string;
+  name: string;
+  prompt: string;
+  schedule?: { kind: 'cron' | 'rrule'; cron?: string; rrule?: string; tz: string };
+  description?: string;
+}
+
+export interface RepoJobOfferT {
+  id: string;
+  repoPath: string;
+  sourcePath: string;
+  jobKey: string;
+  name: string;
+  spec: RepoJobSpecT;
+  digest: string;
+  /** same flag shape as the template security preview (S-74) */
+  preview: { flags: Array<{ level: 'red' | 'yellow' | 'info'; text: string }>; arrivesDisabled: true } | null;
+  status: RepoJobStatusT;
+  taskId: string | null;
+  discoveredAt: number;
+  decidedAt: number | null;
+}
+
+/** F7 earned-autonomy. */
+export type AutonomyRungT = 'plan' | 'acceptEdits' | 'unattended';
+export type AutonomyOfferStatusT = 'offered' | 'accepted' | 'declined';
+
+export interface AutonomyOfferT {
+  id: string;
+  profileId: string;
+  fromRung: AutonomyRungT;
+  toRung: AutonomyRungT;
+  streak: number;
+  status: AutonomyOfferStatusT;
+  offeredAt: number;
+  decidedAt: number | null;
+}
+
+export interface AutonomyStateT {
+  profileId: string;
+  /** null = not enrolled */
+  rung: AutonomyRungT | null;
+  streakRequired: number;
+  streak: number;
+  eligible: boolean;
+}
+
+/**
+ * A profile row projected down to its autonomy columns. GET /profiles is a
+ * `SELECT *`, so it already carries the two columns migration 0008 added —
+ * hence snake_case here, matching the wire rather than pretending otherwise.
+ */
+export interface AutonomyEnrolledProfileT {
+  id: string;
+  slug: string;
+  name: string;
+  autonomy_rung: AutonomyRungT;
+  /** per-profile override; null = use the workforce_prefs default */
+  autonomy_streak_required: number | null;
+}
+
+/** F10 timesheets. */
+export interface TimesheetRowT {
+  profileId: string | null;
+  profileSlug: string | null;
+  profileName: string;
+  runs: number;
+  hoursWorked: number;
+  dollarsSpent: number;
+  outcomesAccepted: number;
+  outcomesRejected: number;
+  /** dollarsSpent / hoursWorked; null when the agent logged no time */
+  effectiveHourlyRateUsd: number | null;
+}
+
+export interface TimesheetT {
+  fromMs: number;
+  toMs: number;
+  humanHourlyRateUsd: number | null;
+  rows: TimesheetRowT[];
+}
+
+/** F11 performance reviews. */
+export interface PerformanceScorecardT {
+  profileId: string | null;
+  profileSlug: string | null;
+  profileName: string;
+  fromMs: number;
+  toMs: number;
+  runs: number;
+  /** accepted / decided; null when nothing was decided in the window */
+  acceptanceRate: number | null;
+  /** failed+timed_out / runs; null when there were no runs */
+  failureRate: number | null;
+  costUsd: number;
+  /** mean cost per run this window minus the previous window; null if no prior window */
+  costTrendUsd: number | null;
+  decided: number;
+}
+
+/** F12 proof-of-work. Secret masking always runs; it is not an option. */
+export interface ProofOfWorkOptionsT {
+  /** default false */
+  includeTranscript?: boolean;
+  /** default true */
+  includeDiffStat?: boolean;
+  /** strip repo paths and branch names as well as secrets; default false */
+  redactPaths?: boolean;
+}
+
+/** Epoch-ms window shared by the timesheet and scorecard routes. Both sides optional — the daemon supplies its own defaults. */
+export interface WindowQueryT {
+  from?: number;
+  to?: number;
+}
+
+/**
+ * Query string for the optional params above: absent keys are LEFT OUT rather
+ * than sent empty, so the daemon's own zod defaults apply. Booleans go over
+ * the wire as '1'/'0', which is what the proof-of-work route parses.
+ */
+function query(params: Record<string, string | number | boolean | undefined>): string {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined) continue;
+    qs.set(k, typeof v === 'boolean' ? (v ? '1' : '0') : String(v));
+  }
+  const s = qs.toString();
+  return s ? `?${s}` : '';
+}
+
+/**
+ * Shared by `api.proofOfWorkUrl` (the address) and `api.proofOfWork` (the
+ * bytes) so the two can never disagree about the options they encode.
+ */
+function proofOfWorkPath(runId: string, opts?: ProofOfWorkOptionsT): string {
+  return `/workforce/runs/${encodeURIComponent(runId)}/proof-of-work${query({
+    includeTranscript: opts?.includeTranscript,
+    includeDiffStat: opts?.includeDiffStat,
+    redactPaths: opts?.redactPaths,
+  })}`;
 }
 
 export interface DeliveryConfigT {
@@ -200,7 +518,7 @@ export const api = {
   deleteTask: (id: string) => req<{ deleted: boolean }>('DELETE', `/tasks/${id}`),
   runNow: (id: string) => req<{ runId: string }>('POST', `/tasks/${id}/run-now`),
   calendar: (from: number, to: number) =>
-    req<{ from: number; to: number; runs: RunRowT[]; bookings: Array<{ taskId: string; name: string; at: number; kind: 'booking' }>; humans?: Array<{ uid: string; name: string; at: number; allDay: boolean }> }>(
+    req<{ from: number; to: number; runs: CalendarRunRowT[]; bookings: Array<{ taskId: string; name: string; at: number; kind: 'booking' }>; humans?: Array<{ uid: string; name: string; at: number; allDay: boolean }> }>(
       'GET',
       `/calendar?from=${from}&to=${to}`,
     ),
@@ -246,6 +564,11 @@ export const api = {
     return req<RunRowT[]>('GET', `/runs?${qs}`);
   },
   report: (runId: string) => req<{ run: RunRowT; report: any }>('GET', `/runs/${runId}/report`),
+  proposedEvents: (runId: string) =>
+    req<{ events: Array<{ key: string; title: string; notes: string | null; durationMin: number; suggestedAt: number | null }> }>(
+      'GET',
+      `/workforce/runs/${runId}/proposed-events`,
+    ),
   transcript: (runId: string) =>
     req<{ available: boolean; totalLines?: number; lines: string[] }>(
       'GET',
@@ -253,6 +576,8 @@ export const api = {
     ),
   cancelRun: (id: string) => req<unknown>('POST', `/runs/${id}/cancel`),
   approvals: () => req<any[]>('GET', '/approvals'),
+  remediation: (id: string) =>
+    req<RemediationProposalT>('GET', `/workforce/remediations/${encodeURIComponent(id)}`),
   respondApproval: (id: string, decision: 'approved' | 'denied') =>
     req<{ resolved: boolean }>('POST', `/approvals/${id}/respond`, { decision }),
   profiles: () => req<any[]>('GET', '/profiles'),
@@ -287,6 +612,144 @@ export const api = {
     ),
   getPrefs: () => req<{ soundMode: 'chime' | 'system' | 'none'; volumePct: number }>('GET', '/prefs'),
   putPrefs: (p: { soundMode: string; volumePct: number }) => req<unknown>('PUT', '/prefs', p),
+  recordOutcome: (runId: string, body: { decision: 'accepted' | 'accepted_with_note' | 'rejected'; note?: string }) =>
+    req<{ runId: string; taskId: string; profileId: string | null; decision: string; note: string | null; memoryId: string | null; actor: string; decidedAt: number }>(
+      'POST',
+      `/workforce/runs/${runId}/outcome`,
+      body,
+    ),
+
+  // ---- workforce: plan-then-execute (F1) ----
+  /** One booking, two runs. The execute half stays disabled until a human approves THAT plan. */
+  planExecuteCreate: (body: { taskId: string; planHour?: number; tz?: string }) =>
+    req<PlanExecutePairT>('POST', '/workforce/plan-execute', body),
+  /** An unknown status yields an empty list, matching GET /runs?state=. */
+  planExecuteList: (status?: PlanExecuteStatusT) =>
+    req<{ pairs: PlanExecutePairT[] }>('GET', `/workforce/plan-execute${query({ status })}`),
+  planExecuteGet: (id: string) =>
+    req<PlanExecutePairT>('GET', `/workforce/plan-execute/${encodeURIComponent(id)}`),
+  /** Approving books the execute run itself; a second verdict is a 409. */
+  planExecuteResolve: (id: string, decision: 'approved' | 'rejected') =>
+    req<PlanExecutePairT>('POST', `/workforce/plan-execute/${encodeURIComponent(id)}/resolve`, { decision }),
+
+  // ---- workforce: shift-handoff (F2) ----
+  /** What the last shift left for the next one, newest first. */
+  handoff: (taskId: string, limit?: number) =>
+    req<{ memories: AgentMemoryT[] }>('GET', `/workforce/handoff/${encodeURIComponent(taskId)}${query({ limit })}`),
+  /** Append-only: a memory is never edited, only followed by a newer one. */
+  handoffAppend: (taskId: string, body: AgentMemoryWriteT) =>
+    req<AgentMemoryT>('POST', `/workforce/handoff/${encodeURIComponent(taskId)}`, body),
+
+  // ---- workforce: office hours (F3) ----
+  /** Both halves in one read: the master switch and every window. */
+  officeHours: () => req<{ enabled: boolean; windows: OfficeHourWindowT[] }>('GET', '/workforce/office-hours'),
+  officeHoursCreate: (w: OfficeHourCreateT) => req<OfficeHourWindowT>('POST', '/workforce/office-hours', w),
+  officeHoursDelete: (id: string) =>
+    req<void>('DELETE', `/workforce/office-hours/${encodeURIComponent(id)}`),
+  /** Off means no next_fire is ever shifted — the windows stay, they just stop applying. */
+  officeHoursSetEnabled: (enabled: boolean) =>
+    req<{ enabled: boolean }>('PUT', '/workforce/office-hours/enabled', { enabled }),
+
+  // ---- workforce: sentinels (F4) ----
+  // There is no update helper because there is no route to call: the daemon
+  // exposes create/list/delete/trips only (daemon api.ts:944-975) and
+  // `Sentinels` has no update method either — even though the row carries
+  // `enabled` and `updatedAt`, which is exactly what an editor would write.
+  // Changing a sentinel today means delete + create; a real edit needs
+  // PATCH /workforce/sentinels/:id in the daemon first.
+  sentinels: () => req<{ sentinels: SentinelT[] }>('GET', '/workforce/sentinels'),
+  sentinelCreate: (s: SentinelCreateT) => req<SentinelT>('POST', '/workforce/sentinels', s),
+  sentinelDelete: (id: string) => req<void>('DELETE', `/workforce/sentinels/${encodeURIComponent(id)}`),
+  /** Every evaluation, tripped or not — the reason column is why it did nothing. */
+  sentinelTrips: (id: string, limit?: number) =>
+    req<{ trips: SentinelTripT[] }>('GET', `/workforce/sentinels/${encodeURIComponent(id)}/trips${query({ limit })}`),
+
+  // ---- workforce: repo-shipped jobs (F5) ----
+  /** Re-reading a repo is idempotent: an offer's identity is repo + job key. */
+  repoJobsDiscover: (repoPath: string) =>
+    req<{ offers: RepoJobOfferT[] }>('POST', '/workforce/repo-jobs/discover', { repoPath }),
+  repoJobs: (status?: RepoJobStatusT) =>
+    req<{ offers: RepoJobOfferT[] }>('GET', `/workforce/repo-jobs${query({ status })}`),
+  /** The imported task arrives DISABLED — a repo cannot schedule itself onto your machine. */
+  repoJobImport: (id: string) =>
+    req<{ taskId: string }>('POST', `/workforce/repo-jobs/${encodeURIComponent(id)}/import`),
+  repoJobDismiss: (id: string) =>
+    req<{ dismissed: boolean }>('POST', `/workforce/repo-jobs/${encodeURIComponent(id)}/dismiss`),
+
+  // ---- workforce: earned autonomy (F7) ----
+  autonomyOffers: (status?: AutonomyOfferStatusT) =>
+    req<{ offers: AutonomyOfferT[] }>('GET', `/workforce/autonomy/offers${query({ status })}`),
+  /** The only promotion path. A second answer is a 409, not a second promotion. */
+  autonomyRespond: (id: string, decision: 'accepted' | 'declined') =>
+    req<AutonomyOfferT>('POST', `/workforce/autonomy/offers/${encodeURIComponent(id)}/respond`, { decision }),
+  /** Live rung, streak and eligibility for one profile. */
+  autonomyProfile: (profileId: string) =>
+    req<AutonomyStateT>('GET', `/workforce/autonomy/profiles/${encodeURIComponent(profileId)}`),
+  /** Enrolling is a human act, not a promotion: it applies that rung's profile settings and reads no streak. */
+  autonomyEnroll: (profileId: string, rung: AutonomyRungT) =>
+    req<AutonomyStateT>('POST', `/workforce/autonomy/profiles/${encodeURIComponent(profileId)}/enroll`, { rung }),
+  /**
+   * Every profile currently ENROLLED in the ladder.
+   *
+   * The daemon has no list route for this — autonomy state is per profile
+   * (GET /workforce/autonomy/profiles/:profileId). GET /profiles is a
+   * `SELECT *`, so it already carries migration 0008's `autonomy_rung`, and a
+   * null rung is exactly "not enrolled" (autonomy-policy.ts:10). Filtering
+   * that one response beats fanning out a request per profile; call
+   * `autonomyProfile(id)` for the streak of a specific one.
+   */
+  autonomyEnrolledProfiles: async (): Promise<AutonomyEnrolledProfileT[]> => {
+    const rows = await req<Array<Omit<AutonomyEnrolledProfileT, 'autonomy_rung'> & { autonomy_rung: AutonomyRungT | null }>>(
+      'GET',
+      '/profiles',
+    );
+    return rows.filter((p): p is AutonomyEnrolledProfileT => p.autonomy_rung !== null);
+  },
+
+  // ---- workforce: timesheets (F10) ----
+  /** Defaults to the last 30 days. `to` must be after `from` or the daemon 422s. */
+  timesheet: (range: WindowQueryT & { profileId?: string } = {}) =>
+    req<TimesheetT>('GET', `/workforce/timesheets${query({ from: range.from, to: range.to, profileId: range.profileId })}`),
+  /** The human rate an agent's effective hourly rate is compared against. null clears it. */
+  setHumanHourlyRate: (humanHourlyRateUsd: number | null) =>
+    req<{ humanHourlyRateUsd: number | null }>('PUT', '/workforce/prefs/hourly-rate', { humanHourlyRateUsd }),
+
+  // ---- workforce: performance reviews (F11) ----
+  /** Omit the window and the daemon uses workforce_prefs.review_period_days. */
+  performanceCards: (range: WindowQueryT = {}) =>
+    req<{ cards: PerformanceScorecardT[] }>('GET', `/workforce/performance${query({ from: range.from, to: range.to })}`),
+  performanceCard: (profileId: string, range: WindowQueryT = {}) =>
+    req<PerformanceScorecardT>(
+      'GET',
+      `/workforce/performance/${encodeURIComponent(profileId)}${query({ from: range.from, to: range.to })}`,
+    ),
+  /** The numbers, rendered as the prompt a reviewer agent is given. */
+  performanceReviewPrompt: (profileId: string, range: WindowQueryT = {}) =>
+    req<{ prompt: string }>(
+      'GET',
+      `/workforce/performance/${encodeURIComponent(profileId)}/review-prompt${query({ from: range.from, to: range.to })}`,
+    ),
+
+  // ---- workforce: proof-of-work (F12) ----
+  /**
+   * Address of a run's redacted single-file HTML export.
+   *
+   * NOT usable as an `<a href>` or an `<iframe src>`: every data route needs
+   * the bearer header and the `?token=` path was removed in the S-audit, so a
+   * bare link 401s. Use it to show the user where the bytes come from, and
+   * fetch them with `proofOfWork()` below.
+   */
+  proofOfWorkUrl: (runId: string, opts?: ProofOfWorkOptionsT): string => proofOfWorkPath(runId, opts),
+  /**
+   * The export itself, as a Blob — `text/html`, which the JSON `req` helper
+   * cannot carry. Same auth and same ApiError surface as every other call
+   * (both go through `send`); the caller decides whether to preview it or
+   * hand it to a download link, as ProposedEvents does for its .ics.
+   */
+  proofOfWork: async (runId: string, opts?: ProofOfWorkOptionsT): Promise<Blob> =>
+    (await send('GET', proofOfWorkPath(runId, opts))).blob(),
+
+  // ---- delivery: Telegram + webhook credentials ----
   deliveryConfig: () => req<DeliveryConfigT>('GET', '/delivery-config'),
   saveDeliveryConfig: (body: { telegramBotToken?: string | null; webhookSecret?: string | null }) =>
     req<DeliveryConfigT>('PUT', '/delivery-config', body),

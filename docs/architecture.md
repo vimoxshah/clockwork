@@ -90,3 +90,25 @@ runs/report/cancel, approvals w/ CAS respond, profiles CRUD, FTS `/search`,
 `/widget/snapshot` (aggregate-only scope), pause/resume, SSE `/events`.
 Static UI served from the same port. Contract tests in
 `packages/daemon/test/api.test.ts`.
+
+### Pause (`POST /pause-all` / `POST /resume`)
+
+Pause is enforced by the run manager, not by the API. `RunManager.pump()` is
+the only caller of `startRun`, and every path that books work — scheduler
+tick, run-now, webhook fire, chain firing, sentinel booking, self-healing,
+plan-then-execute — inserts a `'queued'` row and then calls `pump()`. One gate
+in `pump()` therefore holds all of them.
+
+- **A paused daemon starts nothing new.** Held rows stay `'queued'` and the
+  `/queue` lane reports `reason: 'paused'`.
+- **Runs already in flight finish.** Killing a run mid-turn throws away work
+  that is already paid for and can leave a half-written worktree behind. This
+  is the contract the Settings UI states verbatim: "Queued and future runs
+  hold until resumed. Active runs finish."
+- **Pause survives a daemon restart.** The flag is a marker file at
+  `${dataDir}/paused` (`~/.clockwork/paused`); its presence is the state and
+  its `{pausedAt}` body is diagnostics only. `RunManager`'s constructor loads
+  it, and `buildServer` wraps `Scheduler.start` so `main.ts`'s unconditional
+  `scheduler.start(30_000)` cannot silently un-pause a restarted daemon.
+- `/health`, `/widget/snapshot` and `/support/bundle` all report
+  `RunManager.isPaused()` — there is no second copy of the flag.

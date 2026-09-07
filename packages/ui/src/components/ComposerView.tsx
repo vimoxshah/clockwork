@@ -19,6 +19,32 @@ import { Zap, FolderGit2, Bot, Wallet, CalendarClock, AlertCircle, GitBranch, Be
 import { cn } from '../lib/cn';
 import { FolderBrowserDialog } from './FolderBrowserDialog';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from './ui/dialog';
+import { registerFeatureSurface } from './featureSurfaces';
+
+/**
+ * The RRULE/cron picker lives here, not on the calendar (which only
+ * DISPLAYS the occurrences a schedule produces — it has no control that
+ * writes a schedule). This is the only screen that actually builds one.
+ */
+export const SCHEDULING_SURFACE = registerFeatureSurface({
+  key: 'scheduling',
+  tab: 'new',
+  where: 'New task › Schedule',
+  anchorId: 'schedule-section',
+});
+
+/**
+ * The per-task budget cap (`maxUsd`/`maxTurns`/`timeoutSec`) is what
+ * run-manager.ts actually enforces as a hard stop mid-run — this section is
+ * where it is set at creation time (TasksView's EditDialog is the other
+ * writer, for an existing task).
+ */
+export const BUDGET_GUARDS_SURFACE = registerFeatureSurface({
+  key: 'budget_guards',
+  tab: 'new',
+  where: 'New task › Budget & limits',
+  anchorId: 'budget-guards',
+});
 
 
 function defaultSlot(): Date {
@@ -86,15 +112,17 @@ function Section({
   n,
   icon,
   title,
+  id,
   children,
 }: {
   n?: string;
   icon: React.ReactNode;
   title: string;
+  id?: string;
   children: React.ReactNode;
 }): JSX.Element {
   return (
-    <section>
+    <section id={id}>
       <div className="mb-3 flex items-center gap-2">
         <span className="flex h-6 w-6 items-center justify-center rounded-md bg-surface-active text-dim [&_svg]:h-3.5 [&_svg]:w-3.5">
           {icon}
@@ -416,7 +444,7 @@ export default function ComposerView({
               )}
             </Section>
 
-            <Section icon={<Wallet />} title="Budget & limits">
+            <Section icon={<Wallet />} title="Budget & limits" id={BUDGET_GUARDS_SURFACE.anchorId}>
               <div className="grid grid-cols-3 gap-3">
                 <div>
                   <Label htmlFor="c-usd">USD soft cap</Label>
@@ -502,7 +530,7 @@ export default function ComposerView({
               />
             </section>
 
-            <section>
+            <section id={SCHEDULING_SURFACE.anchorId}>
               <div className="mb-3 flex items-center gap-2">
                 <span className="flex h-6 w-6 items-center justify-center rounded-md bg-surface-active text-dim [&_svg]:h-3.5 [&_svg]:w-3.5">
                   <CalendarClock />
@@ -533,7 +561,7 @@ export default function ComposerView({
                     <p className="mt-2 text-xs text-dim">
                       {form.runAt.getTime() < Date.now()
                         ? '⚠ This time is in the past — pick a future slot.'
-                        : `Fires ${form.runAt.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' })} (${form.tz}).`}
+                        : `Fires ${form.runAt.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} (${form.tz}).`}
                     </p>
                   </>
                 )}

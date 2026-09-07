@@ -55,6 +55,48 @@ export const FEATURES: FeatureDef[] = [
   // the execution target that actually exists today — see GET /targets.
   { key: 'container_execution', label: 'Isolated container execution', category: 'execution', tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'available' },
   { key: 'agent_chains',        label: 'Agent chains',                 category: 'execution',  tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'available' },
+  // ---- Agent Workforce (plan/AGENT-WORKFORCE-SPEC.md) ----
+  // Schema landed in migration 0008; the twelve daemon modules and their
+  // wiring landed in the integration pass. The status below reports
+  // IMPLEMENTATION, not intent:
+  //   'enforced'  = daemon code OUTSIDE the /workforce/ routes refuses or
+  //                 defers a user action because of this feature.
+  //   'available' = a user can reach it through the API right now.
+  // Only three qualify as enforced.
+  //   F1 withholds the execute run until a human resolves the pair's approval
+  //     (run-manager finalize -> approvals row). The execute task is created
+  //     enabled=0 and is never re-enabled by this feature: resolve('approved')
+  //     leaves enabled=0 and books the run directly (ADR-041). What enabled=0
+  //     buys on its own is exactly two things — the scheduler skips the half
+  //     (queue schedule, next_fire NULL) and chain firing skips it
+  //     (run-manager.ts:683 selects `enabled = 1`). The routes that reach a
+  //     task row directly cannot be gated on that column, so they are gated on
+  //     the PAIR: POST /tasks/:id/run-now and POST /hooks/:id refuse an execute
+  //     half whose pair is not approved, and PATCH /tasks/:id {enabled:true}
+  //     refuses to re-enable an execute half at any pair status (409 each,
+  //     api.ts `planExecuteGate`). TaskRepo.patch is the only writer that can
+  //     put a 1 back in that column, and PATCH /tasks/:id is its only caller.
+  //   F3 defers a scheduled fire out of the tick loop into the next
+  //     office-hours window — but only for a task whose PROFILE carries
+  //     may_require_approval=1, which nothing outside F7 enrolment sets.
+  //   F7 returns 403 from POST /tasks, PATCH /tasks/:id and the webhook fire
+  //     path — in practice only when the profile is enrolled at rung 'plan'
+  //     and the task asks for a mode other than 'plan'. The two upper rungs
+  //     share permission mode 'acceptEdits', so the gate never fires there.
+  // Everything else is reachable but gates nothing, so it says 'available'.
+  // No upgrade-modal copy may reference any of these keys (feature-honesty.test.ts).
+  { key: 'plan_then_execute',    label: 'Plan-then-execute bookings',    category: 'execution',    tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'enforced' },
+  { key: 'shift_handoff',        label: 'Shift handoff memory',          category: 'execution',    tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'available' },
+  { key: 'office_hours',         label: 'Office hours for approvals',    category: 'scheduling',   tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'enforced' },
+  { key: 'sentinel_worker',      label: 'Sentinel + worker pairs',       category: 'scheduling',   tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'available' },
+  { key: 'repo_shipped_jobs',    label: 'Repo-shipped jobs',             category: 'integrations', tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'available' },
+  { key: 'accept_with_note',     label: 'Accept with a note',            category: 'governance',   tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'available' },
+  { key: 'earned_autonomy',      label: 'Earned autonomy',               category: 'governance',   tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'enforced' },
+  { key: 'self_healing',         label: 'Self-healing task diagnostics', category: 'governance',   tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'available' },
+  { key: 'proposed_events',      label: 'Agent-proposed calendar events', category: 'integrations', tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'available' },
+  { key: 'agent_timesheets',     label: 'Agent timesheets',              category: 'analytics',    tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'available' },
+  { key: 'performance_reviews',  label: 'Agent performance reviews',     category: 'analytics',    tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'available' },
+  { key: 'proof_of_work_export', label: 'Proof-of-work export',          category: 'analytics',    tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'available' },
   { key: 'sso_scim',            label: 'SSO / SCIM',                   category: 'governance', tiers: { enterprise: { available: true } }, status: 'planned' },
 ];
 

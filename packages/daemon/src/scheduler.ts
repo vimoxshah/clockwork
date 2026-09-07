@@ -13,6 +13,7 @@ import type { DB } from './db.js';
 import type { Clock } from './clock.js';
 import { occurrencesBetween, nextOccurrenceAfter, type ScheduleLike } from './recurrence.js';
 import { newId, slugify, branchFor, type JobSpec } from '@clockwork/shared';
+import { shiftForApproval } from './office-hours.js';
 
 export const GRACE_MS = 120_000; // NFR-1: missed-run detection within 120s of wake
 
@@ -203,6 +204,24 @@ export class Scheduler {
           .run(sched.id, resumeAt, now);
         const bump = this.deps.db.prepare('UPDATE schedules SET next_fire=? WHERE id=? AND kind != \'once\'');
         if (sched.kind !== 'once') bump.run(resumeAt, sched.id);
+        return;
+      }
+      // Office hours (F3, spec §4): a task whose profile is flagged
+      // may_require_approval waits for a window a human can answer in.
+      // Fail-open — shiftForApproval returns null on any error and the run
+      // fires on time.
+      const officeShift = shiftForApproval(this.deps.db, task.id, fireAt);
+      if (officeShift != null && officeShift > fireAt) {
+        this.deps.db
+          .prepare(`UPDATE schedule_occurrences SET disposition='deferred' WHERE schedule_id=? AND occurrence_at=?`)
+          .run(sched.id, fireAt);
+        this.deps.notify('missed', task.name, `Deferred into office hours — rescheduled to ${new Date(officeShift).toLocaleString()}.`);
+        // Repoint next_fire at the resume instant and deliberately DO NOT
+        // pre-claim a ledger row there: the tick at officeShift has to win its
+        // own INSERT OR IGNORE claim, or `if (!claimed) return` fires first and
+        // the schedule is pinned here forever. 'once' is bumped too — the claim
+        // tx above NULLed its next_fire, and a dropped one-shot is lost work.
+        this.deps.db.prepare('UPDATE schedules SET next_fire=? WHERE id=?').run(officeShift, sched.id);
         return;
       }
       this.enqueue(task, sched, fireAt, now, false, 0);

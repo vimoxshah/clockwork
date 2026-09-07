@@ -5,6 +5,7 @@ export * from './sandbox.js';
 export * from './permission-server.js';
 export * from './floor-hook.js';
 export * from './stream-parser.js';
+export * from './proposed-events-parse.js';
 export * from './deny-list.js';
 export * from './budget-guard.js';
 export * from './mock-runner.js';

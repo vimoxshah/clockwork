@@ -263,7 +263,19 @@ export const ProfileCreate = z.object({
 });
 export type ProfileCreate = z.infer<typeof ProfileCreate>;
 
-export const ProfilePatch = ProfileCreate.partial();
+/**
+ * A patch the server has no intention of applying must not answer 200.
+ *
+ * `.strict()`: zod strips unknown keys by default, so a client typo
+ * (`budgetUsd` for the nested `budget.maxUsd`) came back 200 with the field
+ * silently gone. 422 says which key it was.
+ *
+ * `.omit({ slug })`: slug was accepted and then ignored by the handler, and it
+ * cannot be applied here at all — `ProfileRepo.upsert` is `ON CONFLICT(slug)`,
+ * so a changed slug misses the conflict target and tries to INSERT a second row
+ * under the same id. Identity changes belong to a migration, not a PATCH.
+ */
+export const ProfilePatch = ProfileCreate.omit({ slug: true }).partial().strict();
 export type ProfilePatch = z.infer<typeof ProfilePatch>;
 
 // ---- Tasks (FR-1)

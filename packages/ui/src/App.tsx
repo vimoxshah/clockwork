@@ -15,12 +15,55 @@ import SettingsView from './components/SettingsView';
 import AnalyticsView from './components/AnalyticsView';
 import type { Health } from './api';
 
+/**
+ * The nine agent-workforce surfaces did NOT earn a tab. Each one belongs to a
+ * section that already exists, and it belongs there for a reason the user
+ * already understands:
+ *
+ *   Settings   office hours, earned autonomy   — they configure the workforce
+ *   Analytics  timesheets, performance cards   — they measure it
+ *   Tasks      sentinels, repo jobs, plan/exec — they create and hold work
+ *   Inbox      proof-of-work, shift handoff    — they hang off one run
+ *
+ * A tab per feature would have made the shell a table of contents for our
+ * backlog instead of a map of the product. Nothing was added here.
+ */
 type Tab = 'calendar' | 'inbox' | 'agents' | 'tasks' | 'analytics' | 'new' | 'settings';
 const TABS: Tab[] = ['calendar', 'inbox', 'agents', 'tasks', 'analytics', 'new', 'settings'];
 
 function tabFromHash(): Tab {
   const h = window.location.hash.replace('#/', '').replace('#', '') as Tab;
   return TABS.includes(h) ? h : 'calendar';
+}
+
+/**
+ * The topbar's "next …" stamp. A bare clock time is a lie by omission: with one
+ * task booked for 20 Dec the header read `next 2:00:00 PM`, which is exactly
+ * what a run fourteen minutes away would look like. Enough date to place the
+ * time, and not a character more — this shares one 48px line with the daemon
+ * version, two counters and the paused chip:
+ *
+ *   today                  `2:00 PM`
+ *   the next six days      `Sun 2:00 PM`
+ *   further out, this year `Dec 20, 2:00 PM`
+ *   another year           `Dec 20, 2027, 2:00 PM`
+ *
+ * The comparison is between LOCAL CALENDAR DAYS, not over a rolling 24 hours,
+ * so a run at 1am tomorrow never renders as if it were today. Seconds are gone
+ * with the same reasoning: nothing here is decided on a second. The exact
+ * instant stays available in the span's tooltip.
+ */
+export function formatNextFire(ts: number, now: Date = new Date()): string {
+  const at = new Date(ts);
+  const midnight = (d: Date): number => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  // Rounded, because a DST boundary makes a calendar day 23 or 25 hours long.
+  const daysAway = Math.round((midnight(at) - midnight(now)) / 86_400_000);
+  const clock = { hour: 'numeric', minute: '2-digit' } as const;
+  if (daysAway === 0) return at.toLocaleTimeString(undefined, clock);
+  if (daysAway > 0 && daysAway < 7) return at.toLocaleString(undefined, { weekday: 'short', ...clock });
+  return at.getFullYear() === now.getFullYear()
+    ? at.toLocaleString(undefined, { month: 'short', day: 'numeric', ...clock })
+    : at.toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', ...clock });
 }
 
 export default function App(): JSX.Element {
@@ -160,19 +203,36 @@ export default function App(): JSX.Element {
                   <span className={`dot ${health?.ok ? '' : 'down'}`} />
                   {health ? `daemon ${health.daemonVersion}` : 'daemon down'}
                 </span>
+                {health?.versionSkew && (
+                  <span
+                    className="chip needs-you"
+                    title={`This daemon is running ${health.daemonVersion} but ${health.installedVersion} is installed. Restart it: launchctl kickstart -k gui/$(id -u)/com.clockwork.daemon`}
+                  >
+                    RESTART NEEDED — daemon {health.daemonVersion}, build {health.installedVersion}
+                  </span>
+                )}
                 {health && (
                   <>
                     <span>{health.activeRuns} running</span>
                     <span>{health.queuedRuns} queued</span>
                     {health.paused && <span className="chip needs-you">PAUSED</span>}
                     {health.nextFire && (
-                      <span>next {new Date(health.nextFire).toLocaleTimeString()}</span>
+                      <span
+                        data-testid="next-fire"
+                        title={`Next scheduled run: ${new Date(health.nextFire).toLocaleString()}`}
+                      >
+                        next {formatNextFire(health.nextFire)}
+                      </span>
                     )}
                   </>
                 )}
               </div>
             </header>
             <main className="main">
+              {/* First thing in main, on every tab — including 'new', which the
+                  onboarding gate skips. A stale daemon breaks whatever the user
+                  is doing, so it cannot be a per-section concern. */}
+              <VersionSkewNotice health={health} />
               {tab !== 'new' && <OnboardingGate version={dataVersion} onBook={() => setTab('new')} />}
               {tab === 'calendar' && (
                 <CalendarView
@@ -221,6 +281,64 @@ export default function App(): JSX.Element {
         )}
       </ErrorBoundary>
     </ThemeProvider>
+  );
+}
+
+/**
+ * The stale-daemon trap (S-80), put in front of the person it is happening to.
+ *
+ * A long-lived daemon keeps serving the version it booted with while the build
+ * on disk — and the UI bundle served out of that build — moves on. The browser
+ * then runs a NEW frontend against an OLD API: every route added since the
+ * running version answers 404, so the product fails in a dozen unrelated-looking
+ * ways at once instead of one obvious way. That is not hypothetical; it cost
+ * three days and looked like a dozen separate bugs. The daemon's drift watch
+ * already reports it on stderr (main.ts startBuildDriftWatch), which nobody
+ * reads, so /health carries `versionSkew` and this says it out loud.
+ *
+ * Deliberately NOT dismissable. A banner the user can hide is the silent
+ * failure all over again; it goes away when the daemon is restarted and
+ * /health stops reporting skew, and not one moment sooner.
+ *
+ * `versionSkew` is only true when BOTH versions are known and they differ, so
+ * a daemon that cannot read its own build on disk shows nothing rather than
+ * claiming a skew it cannot prove. A daemon older than the release that added
+ * the field sends neither key, which reads as no skew — one restart closes
+ * that gap for good.
+ */
+export function VersionSkewNotice({ health }: { health: Health | null }): JSX.Element | null {
+  if (!health?.versionSkew) return null;
+  return (
+    <div className="error-banner" role="alert" data-testid="version-skew">
+      <strong>Restart your daemon — it is older than the app you are looking at.</strong>
+      <p style={{ margin: '6px 0' }}>
+        clockworkd is still serving version {health.daemonVersion}, but version{' '}
+        {health.installedVersion} is installed on disk. This window was built from{' '}
+        {health.installedVersion} and is calling a {health.daemonVersion} API, so anything added
+        since {health.daemonVersion} answers 404: buttons that do nothing, lists that never load,
+        errors with no cause — all one problem wearing a dozen disguises. Your data in
+        ~/.clockwork is fine.
+      </p>
+      <p style={{ margin: '6px 0' }}>Run this in a terminal to hand the slot to the new build:</p>
+      <pre
+        className="mono"
+        style={{
+          background: 'var(--surface)',
+          border: '1px solid var(--border)',
+          borderRadius: 8,
+          padding: '8px 10px',
+          margin: 0,
+          overflow: 'auto',
+          fontSize: 12,
+        }}
+      >
+        {'launchctl kickstart -k gui/$(id -u)/com.clockwork.daemon'}
+      </pre>
+      <p className="hint" style={{ margin: '6px 0 0' }}>
+        That stops the running daemon, which may be executing agent runs right now — pick a moment
+        when nothing important is in flight.
+      </p>
+    </div>
   );
 }
 

@@ -225,6 +225,14 @@ export interface ProfileRow {
   system_prompt_extra: string | null;
   delivery_json: string | null;
   builtin: number;
+  /**
+   * Present on every row read back via `get`/`bySlug` (SELECT * over a
+   * NOT NULL column); optional here because `upsert()` always writes
+   * `Date.now()` for both regardless of what the caller passes, so callers
+   * building a fresh row for INSERT (e.g. seedBuiltinProfiles) never set them.
+   */
+  created_at?: number;
+  updated_at?: number;
   /** Agent Library grouping (migration 0006). */
   category?: string | null;
   featured?: number;
@@ -245,6 +253,16 @@ export class ProfileRepo {
     return this.db.prepare('SELECT * FROM profiles ORDER BY builtin DESC, name ASC').all() as unknown as ProfileRow[];
   }
 
+  /**
+   * Insert-or-update a profile row keyed on slug. Callers (PATCH /profiles/:id
+   * and seedBuiltinProfiles) always pass a full row — `{...existing, ...changed
+   * fields}` — so the ON CONFLICT branch must persist every user-editable
+   * column, not just name/color, or a PATCH silently discards whatever it
+   * didn't explicitly re-list (the bug this fixes: 200 response, only name
+   * and color ever reached the database). `id`, `builtin` and `created_at`
+   * are deliberately excluded from the SET clause: identity and
+   * creation-time facts never change via upsert, only via a real migration.
+   */
   upsert(p: ProfileRow): void {
     this.db
       .prepare(
@@ -252,7 +270,22 @@ export class ProfileRepo {
           budget_usd, max_turns, timeout_sec, skills_json, mcp_allow_json, context_roots_json,
           system_prompt_extra, delivery_json, builtin, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(slug) DO UPDATE SET name=excluded.name, color=excluded.color`,
+         ON CONFLICT(slug) DO UPDATE SET
+           name=excluded.name,
+           color=excluded.color,
+           avatar=excluded.avatar,
+           engine=excluded.engine,
+           model=excluded.model,
+           permission_mode=excluded.permission_mode,
+           budget_usd=excluded.budget_usd,
+           max_turns=excluded.max_turns,
+           timeout_sec=excluded.timeout_sec,
+           skills_json=excluded.skills_json,
+           mcp_allow_json=excluded.mcp_allow_json,
+           context_roots_json=excluded.context_roots_json,
+           system_prompt_extra=excluded.system_prompt_extra,
+           delivery_json=excluded.delivery_json,
+           updated_at=excluded.updated_at`,
       )
       .run(
         p.id, p.slug, p.name, p.color, p.avatar, p.engine, p.model, p.permission_mode,

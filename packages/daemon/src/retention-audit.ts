@@ -55,52 +55,64 @@ export class RetentionAudit {
     this.db.prepare('UPDATE retention_prefs SET run_days=?, max_runs=? WHERE id=1').run(runDays, maxRuns);
   }
 
-  /** Prune terminal runs outside the retention window / per-task cap. Returns deleted count. */
+  /**
+   * Prune terminal runs outside the retention window / per-task cap. Returns
+   * deleted count.
+   *
+   * Runs inside a single transaction (S-34-adjacent: half-pruned history is
+   * its own kind of corruption) so that if any of the three deletes below
+   * throws — an un-cascaded FK to runs(id) being the historical example,
+   * see migration 0010 — nothing commits. Never partially delete.
+   */
   sweep(now = Date.now()): number {
     this.ensureSchema();
     const { runDays, maxRuns } = this.getPrefs();
-    let deleted = 0;
 
-    // Window-based: only terminal runs are ever pruned.
-    if (runDays !== null) {
-      const cutoff = now - runDays * 86_400_000;
-      const info = this.db
-        .prepare(
-          `DELETE FROM runs WHERE state IN ('completed','failed','timed_out','skipped','cancelled') AND COALESCE(ended_at, scheduled_for) < ?`,
-        )
-        .run(cutoff);
-      deleted += Number(info.changes ?? 0);
-    }
+    const tx = this.db.transaction(() => {
+      let deleted = 0;
 
-    // Cap-based: keep the N most recent terminal runs per task.
-    if (maxRuns !== null) {
-      const info = this.db
-        .prepare(
-          `DELETE FROM runs WHERE state IN ('completed','failed','timed_out','skipped','cancelled') AND id IN (
-             SELECT r.id FROM runs r
-             JOIN tasks t ON t.id = r.task_id
-             WHERE r.state IN ('completed','failed','timed_out','skipped','cancelled') AND t.deleted_at IS NULL
-             ORDER BY t.id, COALESCE(r.ended_at, r.scheduled_for) DESC
-           ) AND (
-             SELECT COUNT(*) FROM runs r2
-             WHERE r2.task_id = runs.task_id AND r2.state IN ('completed','failed','timed_out','skipped','cancelled')
-               AND COALESCE(r2.ended_at, r2.scheduled_for) > COALESCE(runs.ended_at, runs.scheduled_for)
-           ) >= ?`,
-        )
-        .run(maxRuns);
-      deleted += Number(info.changes ?? 0);
-    }
+      // Window-based: only terminal runs are ever pruned.
+      if (runDays !== null) {
+        const cutoff = now - runDays * 86_400_000;
+        const info = this.db
+          .prepare(
+            `DELETE FROM runs WHERE state IN ('completed','failed','timed_out','skipped','cancelled') AND COALESCE(ended_at, scheduled_for) < ?`,
+          )
+          .run(cutoff);
+        deleted += Number(info.changes ?? 0);
+      }
 
-    // Trigger event log (goal #27): raw inbound payloads grow unboundedly and
-    // may embed third-party data — prune with the same window as runs.
-    if (runDays !== null) {
-      const cutoff = now - runDays * 86_400_000;
-      const info = this.db
-        .prepare('DELETE FROM trigger_events WHERE at < ?')
-        .run(cutoff);
-      deleted += Number(info.changes ?? 0);
-    }
-    return deleted;
+      // Cap-based: keep the N most recent terminal runs per task.
+      if (maxRuns !== null) {
+        const info = this.db
+          .prepare(
+            `DELETE FROM runs WHERE state IN ('completed','failed','timed_out','skipped','cancelled') AND id IN (
+               SELECT r.id FROM runs r
+               JOIN tasks t ON t.id = r.task_id
+               WHERE r.state IN ('completed','failed','timed_out','skipped','cancelled') AND t.deleted_at IS NULL
+               ORDER BY t.id, COALESCE(r.ended_at, r.scheduled_for) DESC
+             ) AND (
+               SELECT COUNT(*) FROM runs r2
+               WHERE r2.task_id = runs.task_id AND r2.state IN ('completed','failed','timed_out','skipped','cancelled')
+                 AND COALESCE(r2.ended_at, r2.scheduled_for) > COALESCE(runs.ended_at, runs.scheduled_for)
+             ) >= ?`,
+          )
+          .run(maxRuns);
+        deleted += Number(info.changes ?? 0);
+      }
+
+      // Trigger event log (goal #27): raw inbound payloads grow unboundedly and
+      // may embed third-party data — prune with the same window as runs.
+      if (runDays !== null) {
+        const cutoff = now - runDays * 86_400_000;
+        const info = this.db
+          .prepare('DELETE FROM trigger_events WHERE at < ?')
+          .run(cutoff);
+        deleted += Number(info.changes ?? 0);
+      }
+      return deleted;
+    });
+    return tx();
   }
 
   // ---- audit log ----
