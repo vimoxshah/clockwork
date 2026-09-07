@@ -111,8 +111,37 @@ body {
   background: transparent; color: var(--muted); border: 1px solid transparent;
   padding: 6px 14px; border-radius: 7px; cursor: pointer; font-size: 13px;
 }
+.tabs button { position: relative; }
 .tabs button:hover { color: var(--fg); }
-.tabs button.active { color: var(--fg); background: var(--surface-active); }
+/**
+ * The selected section has to be obvious at a glance.
+ *
+ * It used to be `background: var(--surface-active)` only — #e4e7ee sitting on
+ * the #ffffff topbar in light mode. That is a 2% luminance step: a real
+ * reviewer looked at the topbar and could not tell which tab was open, and it
+ * carried no `aria-current` either, so a screen reader could not tell at all.
+ * Colour AND weight AND a rule under the tab, so it survives a low-contrast
+ * display, colour-blindness, and a glance.
+ */
+.tabs button[aria-current='page'] {
+  color: var(--accent);
+  font-weight: 600;
+  background: var(--surface-active);
+}
+.tabs button[aria-current='page']::after {
+  content: '';
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  /* Sits ON the topbar's 1px bottom border, which is 10px below the button. */
+  bottom: -11px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 2px 2px 0 0;
+}
+@media (prefers-contrast: more) {
+  .tabs button[aria-current='page'] { text-decoration: underline; }
+}
 .btn { border-color: var(--border-strong); }
 .btn:hover:not(:disabled) { background: var(--surface-hover); color: var(--fg); }
 .btn.primary { background: var(--accent); color: var(--accent-fg); font-weight: 600; border: none; }
@@ -204,6 +233,28 @@ button.cal-event:hover { filter: brightness(1.12); }
   padding: 1px 7px; cursor: pointer; text-align: left;
 }
 .cal-more:hover { color: var(--accent); }
+
+/* One day's full list (DayDialog). Wider than the default dialog because the
+   rows carry a time, a name, a state and a cost side by side — the narrow day
+   panel is exactly what clipped "ASAP verify (temp)" to "ASAP verify (te…". */
+.dialog.wide { width: min(680px, 94vw); }
+.day-list { list-style: none; margin: 0; padding: 0; max-height: 52vh; overflow-y: auto; }
+.day-list > li + li { border-top: 1px solid var(--border); }
+.day-list-row {
+  display: grid; grid-template-columns: 62px 1fr auto auto; gap: 12px; align-items: center;
+  width: 100%; padding: 9px 6px; background: transparent; border: none; cursor: pointer;
+  text-align: left; color: var(--fg); font-size: 13px; font-family: inherit;
+  border-radius: 7px;
+}
+.day-list-row:hover { background: var(--surface-hover); }
+.day-list-time { color: var(--dim); font-size: 11.5px; }
+/* Long task names wrap here instead of being cut off — the whole point. */
+.day-list-name { overflow-wrap: anywhere; }
+.day-list-cost { color: var(--dim); font-size: 11.5px; text-align: right; min-width: 62px; }
+@media (max-width: 560px) {
+  .day-list-row { grid-template-columns: 54px 1fr; row-gap: 4px; }
+  .day-list-cost { text-align: left; }
+}
 .cal-empty-day::after {
   content: ''; position: absolute; inset: 30px 8px 8px; border: 1px dashed var(--border);
   border-radius: 7px; pointer-events: none;
@@ -231,6 +282,18 @@ button.cal-event:hover { filter: brightness(1.12); }
 .inbox-layout { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 16px; height: calc(100% - 46px); }
 .inbox-list { overflow: auto; border-right: 1px solid var(--border); padding-right: 12px; }
 .inbox-search { width: 100%; margin-bottom: 10px; }
+/* Filters on the left, the one action pinned right — and the action never
+   joins the filters' wrap, which is what stranded it on its own row. */
+.filter-bar {
+  display: flex; align-items: flex-start; gap: 10px; margin-bottom: 10px;
+}
+.filter-bar .filter-chips { flex: 1; margin-bottom: 0; }
+.filter-action {
+  flex: none; border: 1px solid var(--border-strong); background: transparent;
+  color: var(--muted); border-radius: 999px; padding: 3px 11px; font-size: 12px;
+  cursor: pointer; white-space: nowrap;
+}
+.filter-action:hover { color: var(--fg); background: var(--surface-hover); }
 .filter-chips { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
 .filter-chips button {
   border: 1px solid var(--border-strong); background: transparent; color: var(--muted);

@@ -16,18 +16,27 @@ import { ApprovalCard } from './ApprovalCard';
 import { APPROVALS_SURFACE } from './ApprovalCard';
 import { ProofOfWorkExport } from './ProofOfWorkExport';
 import { TaskMemoryPanel } from './TaskMemoryPanel';
+import { chipFor, stateLabel } from '../lib/runState';
 
 type OutcomeFilter = 'all' | 'completed' | 'failed' | 'active' | 'needsyou';
 
+/**
+ * What each filter is CALLED, as opposed to what it is keyed by.
+ *
+ * The chips used to render the enum value itself, so the bar read
+ * "all completed failed active" — internal identifiers, lower-cased, shown to
+ * a person. The order here is the order on screen.
+ */
+const FILTER_LABELS: Record<OutcomeFilter, string> = {
+  all: 'All',
+  completed: 'Completed',
+  failed: 'Failed',
+  active: 'Active',
+  needsyou: 'Needs you',
+};
+
 const UNREAD_KEY = 'clockwork.inbox.lastRead';
 
-function chipFor(state: string): string {
-  if (state === 'completed') return 'completed';
-  if (['failed', 'timed_out', 'budget_exceeded', 'missed'].includes(state)) return 'failed';
-  if (['running', 'queued', 'preparing', 'finalizing'].includes(state)) return 'running';
-  if (['waiting_approval', 'awaiting_user'].includes(state)) return 'needs-you';
-  return '';
-}
 
 /**
  * "needs you" used to check only the RUN's own state
@@ -202,19 +211,27 @@ export default function InboxView({ version }: { version: number }): JSX.Element
             {visibleRuns.length} result{visibleRuns.length === 1 ? '' : 's'} for “{q.trim()}” (full-text)
           </p>
         )}
-        <div className="filter-chips" role="tablist" aria-label="Filter by outcome">
-          {(['all', 'completed', 'failed', 'active', 'needsyou'] as OutcomeFilter[]).map((f) => (
-            <button
-              key={f}
-              id={f === 'needsyou' ? APPROVALS_SURFACE.anchorId : undefined}
-              className={filter === f ? 'on' : ''}
-              onClick={() => setFilter(f)}
-            >
-              {f === 'needsyou' ? 'needs you' : f}
-            </button>
-          ))}
-          <button style={{ marginLeft: 'auto' }} onClick={markAllRead} title="Mark all as read">
-            mark read
+        {/* The filters are a tablist; "Mark all read" is an ACTION and sits
+            outside it — it used to be the last child with `marginLeft:auto`,
+            so on a wrap it stranded on its own row next to a ragged gap, and
+            a screen reader counted it as a sixth filter. */}
+        <div className="filter-bar">
+          <div className="filter-chips" role="tablist" aria-label="Filter by outcome">
+            {(Object.keys(FILTER_LABELS) as OutcomeFilter[]).map((f) => (
+              <button
+                key={f}
+                role="tab"
+                aria-selected={filter === f}
+                id={f === 'needsyou' ? APPROVALS_SURFACE.anchorId : undefined}
+                className={filter === f ? 'on' : ''}
+                onClick={() => setFilter(f)}
+              >
+                {FILTER_LABELS[f]}
+              </button>
+            ))}
+          </div>
+          <button className="filter-action" onClick={markAllRead} title="Mark all as read">
+            Mark all read
           </button>
         </div>
 
@@ -276,7 +293,7 @@ export default function InboxView({ version }: { version: number }): JSX.Element
                 >
                   <strong>{spec.taskName}</strong>
                   <div className="meta">
-                    <span className={`chip ${chipFor(r.state)}`}>{r.state.replace('_', ' ')}</span>
+                    <span className={`chip ${chipFor(r.state)}`}>{stateLabel(r.state)}</span>
                     {needsYouRunIds.has(r.id) && !['waiting_approval', 'awaiting_user'].includes(r.state) && (
                       <span className="chip needs-you">awaiting your decision</span>
                     )}
@@ -341,7 +358,7 @@ function ReportDetail({ runId, version }: { runId: string; version: number }): J
     <>
       <h2>{spec.taskName}</h2>
       <div className="statrow mono">
-        <span className={`chip ${chipFor(run.state)}`}>{run.state.replace('_', ' ')}</span>
+        <span className={`chip ${chipFor(run.state)}`}>{stateLabel(run.state)}</span>
         {run.outcome_reason && <span>reason: {run.outcome_reason}</span>}
         <span>{fmtCost(run.cost_usd, spec.engine, 4, 'not reported')}</span>
         <span>{run.turns} turns</span>

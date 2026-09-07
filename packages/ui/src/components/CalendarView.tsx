@@ -27,6 +27,7 @@ import {
   type GridCell,
 } from '../calendar';
 import type { CalendarDayT, CalendarDetailT, CalendarEvent, CalendarLimitsT } from '../api';
+import { chipFor, stateLabel } from '../lib/runState';
 
 const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const MAX_PER_CELL = 4;
@@ -132,6 +133,12 @@ export default function CalendarView({
     localStorage.getItem('clockwork.calview') === 'year' ? null : todayMidnight(),
   );
   const [detailEvent, setDetailEvent] = useState<CalendarEvent | null>(null);
+  /**
+   * Whether the selected day's full list is open. A boolean rather than a
+   * second timestamp on purpose: the list always describes `selectedTs`, and
+   * two sources of truth for "which day" is a desync waiting to happen.
+   */
+  const [dayDialogOpen, setDayDialogOpen] = useState(false);
 
   /**
    * The seven days Week mode draws. The title, the fetch window and the columns
@@ -338,7 +345,13 @@ export default function CalendarView({
                   events={eventsByDay.get(c.ts) ?? []}
                   selected={selectedTs === c.ts}
                   onSelect={() => setSelectedTs(c.ts)}
-                  onMore={() => setSelectedTs(c.ts)}
+                  // "+N more" now actually shows the rest. It used to do
+                  // exactly what a plain cell click does, which left the
+                  // hidden items hidden.
+                  onMore={() => {
+                    setSelectedTs(c.ts);
+                    setDayDialogOpen(true);
+                  }}
                   onEvent={(e) => setDetailEvent(e)}
                 />
               ))}
@@ -414,10 +427,20 @@ export default function CalendarView({
                   onKeyDown={(e) => e.key === 'Enter' && setDetailEvent(ev)}>
                   <span className={`chip ${ev.kind === 'run' ? chipFor(ev.state!) : ''}`}>{ev.name}</span>
                   <span className="mono" style={{ color: 'var(--dim)' }}>
-                    {ev.kind === 'run' ? ev.state?.replace('_', ' ') : 'booked'}
+                    {ev.kind === 'run' ? stateLabel(ev.state) : 'Booked'}
                   </span>
                 </div>
               ))}
+              {selectedEvents.length > 0 && (
+                <button
+                  className="btn small"
+                  style={{ marginTop: 12 }}
+                  data-testid="view-all-day"
+                  onClick={() => setDayDialogOpen(true)}
+                >
+                  View all {selectedEvents.length} item{selectedEvents.length === 1 ? '' : 's'}
+                </button>
+              )}
               <button className="btn small" style={{ marginTop: 12 }} onClick={() => bookOn(selectedTs)}>
                 ＋ Book a run this day
               </button>
@@ -425,6 +448,21 @@ export default function CalendarView({
             </aside>
           )}
         </div>
+      )}
+
+      {/* Rendered before EventDialog so that opening an event from the day
+          list stacks the event dialog on top rather than under it. */}
+      {dayDialogOpen && selectedTs != null && (
+        <DayDialog
+          ts={selectedTs}
+          events={selectedEvents}
+          onClose={() => setDayDialogOpen(false)}
+          onEvent={(ev) => setDetailEvent(ev)}
+          onBook={() => {
+            setDayDialogOpen(false);
+            bookOn(selectedTs);
+          }}
+        />
       )}
 
       {detailEvent && (
@@ -648,6 +686,112 @@ function MonthCell({
   );
 }
 
+/**
+ * Everything booked on one day, in full.
+ *
+ * A month cell fits `MAX_PER_CELL` names and then said "+N more" — but the
+ * button only selected the day, and the side panel it filled is a narrow
+ * column that clips a name like "ASAP verify (temp)" to "ASAP verify (te…" and
+ * never showed a time at all. So on a busy day there was no way to read what
+ * was actually scheduled, or in what order. This is the full view: one row per
+ * item, sorted by time, with the time, the state and the cost the panel had no
+ * room for. Rows open the same per-event dialog they always did.
+ */
+function DayDialog({
+  ts,
+  events,
+  onClose,
+  onEvent,
+  onBook,
+}: {
+  ts: number;
+  events: CalendarEvent[];
+  onClose: () => void;
+  onEvent: (e: CalendarEvent) => void;
+  onBook: () => void;
+}): JSX.Element {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const dayLabel = new Date(ts).toLocaleDateString(undefined, {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+  // Sorted rather than left in whatever order the two halves of /calendar
+  // arrived in: the point of this view is reading the day in sequence.
+  const ordered = [...events].sort((a, b) => a.at - b.at);
+  const runs = ordered.filter((e) => e.kind === 'run').length;
+  const booked = ordered.filter((e) => e.kind === 'booking').length;
+  const humans = ordered.filter((e) => e.kind === 'human').length;
+  const spend = ordered.reduce((sum, e) => sum + (e.costUsd ?? 0), 0);
+
+  return (
+    <div
+      className="dialog-backdrop"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${dayLabel}, ${ordered.length} items`}
+      data-testid="day-dialog"
+    >
+      <div className="dialog wide" onClick={(e) => e.stopPropagation()}>
+        <h3>{dayLabel}</h3>
+        <div className="statrow mono">
+          <span>
+            {ordered.length} item{ordered.length === 1 ? '' : 's'}
+          </span>
+          {runs > 0 && <span>{runs} run{runs === 1 ? '' : 's'}</span>}
+          {booked > 0 && <span>{booked} booked</span>}
+          {humans > 0 && <span>{humans} from your calendar</span>}
+          {spend > 0 && <span>${spend.toFixed(4)}</span>}
+        </div>
+
+        {ordered.length === 0 ? (
+          <p className="hint">Nothing scheduled on this day.</p>
+        ) : (
+          <ul className="day-list">
+            {ordered.map((ev) => (
+              <li key={ev.id}>
+                <button className="day-list-row" onClick={() => onEvent(ev)}>
+                  <span className="mono day-list-time">{ev.allDay ? 'all day' : timeLabel(ev.at)}</span>
+                  <span className="day-list-name" title={ev.name}>
+                    {ev.name}
+                  </span>
+                  {ev.kind === 'run' ? (
+                    <span className={`chip ${chipFor(ev.state!)}`}>{stateLabel(ev.state)}</span>
+                  ) : (
+                    <span className="chip">{ev.kind === 'human' ? 'Personal' : 'Booked'}</span>
+                  )}
+                  <span className="mono day-list-cost">
+                    {ev.kind === 'run' ? `$${(ev.costUsd ?? 0).toFixed(4)}` : ''}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <div className="actions" style={{ marginTop: 16 }}>
+          <button className="btn primary" onClick={onBook}>
+            ＋ Book a run this day
+          </button>
+          <button className="btn" onClick={onClose}>
+            Close
+          </button>
+        </div>
+        <p className="honest-note">Runs execute when the machine is awake.</p>
+      </div>
+    </div>
+  );
+}
+
 function EventDialog({
   event,
   onClose,
@@ -684,12 +828,12 @@ function EventDialog({
           <span>{new Date(event.at).toLocaleString()}</span>
           {event.kind === 'run' ? (
             <>
-              <span className={`chip ${chipFor(event.state!)}`}>{event.state?.replace('_', ' ')}</span>
+              <span className={`chip ${chipFor(event.state!)}`}>{stateLabel(event.state)}</span>
               {event.outcomeReason && <span>reason: {event.outcomeReason}</span>}
               <span>${(event.costUsd ?? 0).toFixed(4)}</span>
             </>
           ) : (
-            <span className="chip">booked (future occurrence)</span>
+            <span className="chip">Booked — future occurrence</span>
           )}
         </div>
 
@@ -756,10 +900,3 @@ function EventDialog({
   );
 }
 
-function chipFor(state: string): string {
-  if (state === 'completed') return 'completed';
-  if (['failed', 'timed_out', 'budget_exceeded', 'missed'].includes(state)) return 'failed';
-  if (['running', 'queued', 'preparing', 'finalizing'].includes(state)) return 'running';
-  if (['waiting_approval', 'awaiting_user'].includes(state)) return 'needs-you';
-  return '';
-}
