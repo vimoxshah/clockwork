@@ -141,26 +141,28 @@ per-feature detail, routes, and refusal-path notes: `docs/agent-workforce.md`.
 ## Test inventory vs mandate
 
 Every row below was re-counted from one `rtk proxy pnpm test` run on
-2026-09-06, and the rows now sum to the total — an earlier version of this
-table listed only some suites while calling the last row a total, and
-overstated the feature-module row by 36.
+2026-09-07, and the rows sum to the total. Two earlier versions of this table
+were wrong in the same direction: one listed only some suites while calling the
+last row a total, and one went stale at 788 while the suite had grown to 1185.
+The counts are read off a real run, never carried forward by hand.
 
 | Suite | Count | Location |
 |---|---|---|
-| Runner unit/scenario | 116 | `packages/runner/test/*` (15 files) |
+| Runner unit/scenario | 156 | `packages/runner/test/*` (17 files) |
 | Daemon scheduler fixtures | 18 | `packages/daemon/test/scheduler.test.ts` |
-| API contracts | 32 | `packages/daemon/test/api.test.ts` |
+| API contracts | 33 | `packages/daemon/test/api.test.ts` |
 | Full-loop child-process integration | 4 | `packages/daemon/test/full-loop.test.ts` |
 | Recovery (real orphan kills) | 3 | `packages/daemon/test/recovery.test.ts` |
 | Templates/chains | 9 | `packages/daemon/test/templates-chains.test.ts` |
 | Agent Workforce F1–F12 (feature modules) | 332 | `packages/daemon/test/{plan-execute,handoff,office-hours,sentinel,repo-jobs,acceptance,autonomy-policy,self-healing,proposed-events,timesheets,performance,proof-of-work}.test.ts` |
-| Agent Workforce foundation + API contracts | 104 | `packages/daemon/test/workforce-foundation.test.ts` (16), `packages/daemon/test/workforce-api.test.ts` (88) |
+| Agent Workforce foundation + API contracts | 105 | `packages/daemon/test/workforce-foundation.test.ts` (16), `packages/daemon/test/workforce-api.test.ts` (89) |
 | Agent Workforce performance bench (T-113/T-307/S-9) | 16 | `packages/daemon/test/workforce-bench.test.ts` |
-| Claim tripwires (this table, the bench gate, the F3/F7 prose, the latency record, the F5 red-flag/YAML claims, the F1/F8 UI notes, the autonomy call sites, ADR-039) | 44 | `packages/daemon/test/claims-honesty.test.ts` |
-| Other daemon suites (13 files) | 71 | chains, entitlements, event-prompts, feature-honesty, gates, ics, ics-ssrf, install-instructions, landing-honesty, loopback-bind, policy-engine, quiet-hours, triggers |
+| Claim tripwires (docs vs code) | 44 | `packages/daemon/test/claims-honesty.test.ts` |
 | Finalize/teardown race regression | 6 | `packages/daemon/test/finalize-teardown.test.ts` |
-| UI component tests (5 files) | 33 | `packages/ui/test/*` |
-| **Total automated (measured 2026-09-06, `rtk proxy pnpm test`)** | **788 passed, 0 failed, across 55 files** | full run: daemon + runner + shared + ui workspaces (`packages/shared` ships no test file of its own) |
+| Keep-awake wiring guard | 7 | `packages/daemon/test/keep-awake-wiring.test.ts` |
+| Other daemon suites (30 files) | 223 | analytics, approval-notify, chains, credential-channel, delivery-config-api, entitlements, event-prompts, feature-honesty, gates, health-version, hooks-rawbody, ics, ics-import, ics-ssrf, install-instructions, landing-honesty, loopback-bind, pause, policy-engine, profile-api-patch, profile-repo-patch, proposed-events-producer, quiet-hours, recurrence, retention-sweep, save-time-recurrence, single-instance, task-repo-patch, telegram-approvals, triggers |
+| UI component tests (18 files) | 229 | `packages/ui/test/*` |
+| **Total automated (measured 2026-09-07, `rtk proxy pnpm test`)** | **1185 passed, 0 failed, across 88 files** | full run: daemon + runner + shared + ui workspaces (`packages/shared` ships no test file of its own) |
 
 **The bench does not assert its latency bounds in this run.** Every wall-clock
 bound in `workforce-bench.test.ts` goes through `assertLatency`
