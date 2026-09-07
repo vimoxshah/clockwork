@@ -523,11 +523,28 @@ function IcsCard({ version }: { version: number }): JSX.Element {
 }
 
 /**
- * Telegram (and optional webhook) delivery credentials (goal: chat-based
- * approvals). The bot token is a bearer credential for the whole bot — never
- * rendered in full once saved, only as the masked hint the daemon returns.
+ * Delivery credentials for every channel the daemon can actually reach:
+ * Telegram (chat-based approvals), the generic HMAC webhook, a Slack incoming
+ * webhook and an SMTP relay.
+ *
+ * All four are bearer credentials — a bot token acts as the whole bot, a Slack
+ * incoming-webhook URL posts to that channel for anyone who holds it, and an
+ * SMTP URL carries the mailbox password — so none of them is ever rendered in
+ * full once saved. The daemon returns only the masked form
+ * (`readDeliveryConfigStatus`), and the inputs here are write-only.
+ *
+ * One asymmetry is stated on screen rather than hidden: Telegram is the only
+ * channel that receives the APPROVAL REQUEST itself, because the approval
+ * fan-out in the daemon's run-manager still keeps its own telegram/webhook
+ * copy. Slack and email receive run REPORTS. Naming that here is cheaper than
+ * a user discovering it while a run waits.
+ *
+ * Exported only so `packages/ui/test/delivery-channels-ui.test.tsx` can drive
+ * this card on its own — mounting the whole Settings page to click one Save
+ * button would route a dozen unrelated fetches. Same reason `App.tsx` exports
+ * `VersionSkewNotice`. `SettingsView` below is still its only mount site.
  */
-function DeliveryCard({ version }: { version: number }): JSX.Element {
+export function DeliveryCard({ version }: { version: number }): JSX.Element {
   const cfg = useAsync(() => api.deliveryConfig(), [version]);
   const [token, setTokenInput] = useState('');
   const [tokenBusy, setTokenBusy] = useState(false);
@@ -544,7 +561,21 @@ function DeliveryCard({ version }: { version: number }): JSX.Element {
   const [testMsg, setTestMsg] = useState<string | null>(null);
   const [testOk, setTestOk] = useState<boolean | null>(null);
 
+  const [slackUrl, setSlackUrl] = useState('');
+  const [slackBusy, setSlackBusy] = useState(false);
+  const [slackMsg, setSlackMsg] = useState<string | null>(null);
+  const [slackOk, setSlackOk] = useState<boolean | null>(null);
+
+  const [smtpUrl, setSmtpUrl] = useState('');
+  const [smtpFrom, setSmtpFrom] = useState('');
+  const [smtpTo, setSmtpTo] = useState('');
+  const [smtpBusy, setSmtpBusy] = useState(false);
+  const [smtpMsg, setSmtpMsg] = useState<string | null>(null);
+  const [smtpOk, setSmtpOk] = useState<boolean | null>(null);
+
   const configured = cfg.data?.telegram.configured ?? false;
+  const slackConfigured = cfg.data?.slack?.configured ?? false;
+  const smtpConfigured = cfg.data?.smtp?.configured ?? false;
 
   const saveToken = async (): Promise<void> => {
     setTokenBusy(true); setTokenErr(null); setTokenMsg(null);
@@ -616,6 +647,109 @@ function DeliveryCard({ version }: { version: number }): JSX.Element {
     }
   };
 
+  const saveSlack = async (): Promise<void> => {
+    setSlackBusy(true); setSlackMsg(null); setSlackOk(null);
+    try {
+      await api.saveDeliveryConfig({ slackWebhookUrl: slackUrl.trim() });
+      setSlackUrl('');
+      setSlackOk(true);
+      setSlackMsg('Slack webhook saved.');
+      cfg.reload();
+    } catch (e) {
+      setSlackOk(false);
+      setSlackMsg(String((e as Error).message ?? e));
+    } finally {
+      setSlackBusy(false);
+    }
+  };
+
+  const clearSlack = async (): Promise<void> => {
+    if (!confirm('Clear the Slack webhook? Run reports stop reaching Slack until a new one is set.')) return;
+    setSlackBusy(true); setSlackMsg(null); setSlackOk(null);
+    try {
+      await api.saveDeliveryConfig({ slackWebhookUrl: null });
+      setSlackOk(true);
+      setSlackMsg('Slack webhook cleared.');
+      cfg.reload();
+    } catch (e) {
+      setSlackOk(false);
+      setSlackMsg(String((e as Error).message ?? e));
+    } finally {
+      setSlackBusy(false);
+    }
+  };
+
+  const testSlack = async (): Promise<void> => {
+    setSlackBusy(true); setSlackMsg(null); setSlackOk(null);
+    try {
+      const r = await api.testSlack();
+      setSlackOk(r.ok);
+      // r.error is Slack's own body text, forwarded by the daemon.
+      setSlackMsg(r.ok ? 'Sent — check the Slack channel.' : (r.error ?? 'Slack did not accept the message.'));
+    } catch (e) {
+      setSlackOk(false);
+      setSlackMsg(String((e as Error).message ?? e));
+    } finally {
+      setSlackBusy(false);
+    }
+  };
+
+  const saveSmtp = async (): Promise<void> => {
+    setSmtpBusy(true); setSmtpMsg(null); setSmtpOk(null);
+    try {
+      // Only what was typed is sent, one key per field. Two reasons, and both
+      // are bugs if you skip them: sending `smtpFrom: null` on every URL save
+      // would silently drop an already-stored From address (Clear is the
+      // explicit path for that), and sending `smtpUrl: ''` to change only the
+      // From address would take the relay down with it.
+      const url = smtpUrl.trim();
+      const from = smtpFrom.trim();
+      await api.saveDeliveryConfig({ ...(url ? { smtpUrl: url } : {}), ...(from ? { smtpFrom: from } : {}) });
+      setSmtpUrl('');
+      setSmtpFrom('');
+      setSmtpOk(true);
+      setSmtpMsg(url ? 'SMTP relay saved.' : 'From address saved.');
+      cfg.reload();
+    } catch (e) {
+      setSmtpOk(false);
+      setSmtpMsg(String((e as Error).message ?? e));
+    } finally {
+      setSmtpBusy(false);
+    }
+  };
+
+  const clearSmtp = async (): Promise<void> => {
+    if (!confirm('Clear the SMTP relay? Email reports stop being sent until a new relay is set.')) return;
+    setSmtpBusy(true); setSmtpMsg(null); setSmtpOk(null);
+    try {
+      await api.saveDeliveryConfig({ smtpUrl: null, smtpFrom: null });
+      setSmtpFrom('');
+      setSmtpOk(true);
+      setSmtpMsg('SMTP relay cleared.');
+      cfg.reload();
+    } catch (e) {
+      setSmtpOk(false);
+      setSmtpMsg(String((e as Error).message ?? e));
+    } finally {
+      setSmtpBusy(false);
+    }
+  };
+
+  const testSmtp = async (): Promise<void> => {
+    setSmtpBusy(true); setSmtpMsg(null); setSmtpOk(null);
+    try {
+      const r = await api.testSmtp(smtpTo.trim());
+      setSmtpOk(r.ok);
+      // r.error is the relay's own reply line, forwarded by the daemon.
+      setSmtpMsg(r.ok ? 'Sent — check the inbox.' : (r.error ?? 'The relay refused the message.'));
+    } catch (e) {
+      setSmtpOk(false);
+      setSmtpMsg(String((e as Error).message ?? e));
+    } finally {
+      setSmtpBusy(false);
+    }
+  };
+
   if (cfg.loading) return <p className="hint">Loading delivery settings…</p>;
   if (cfg.error) return <div className="error-banner">{cfg.error}</div>;
 
@@ -625,6 +759,12 @@ function DeliveryCard({ version }: { version: number }): JSX.Element {
         When a run waits for your OK, Clockwork can message you on Telegram instead of waiting for you
         to open the app — you approve or deny right from the chat. The bot token is a credential:
         anyone who holds it can act as your bot, so treat it like a password.
+      </p>
+      <p className="hint" style={{ marginTop: 0 }}>
+        Slack and email carry the <strong>run report</strong> — what the agent did, what it cost, and
+        the branch it left behind. They do not carry the approval request itself: an approval still
+        reaches you through Telegram, the webhook, or this app. Every credential below is stored on
+        this Mac at file mode 0600 and is never handed to a running agent.
       </p>
 
       <div className="tasklist-row">
@@ -722,6 +862,138 @@ function DeliveryCard({ version }: { version: number }): JSX.Element {
       </div>
       {whMsg && <div className="ok-banner">{whMsg}</div>}
       {whErr && <div className="error-banner" role="alert">{whErr}</div>}
+
+      <div className="tasklist-row" style={{ marginTop: 14 }}>
+        <div className="grow">
+          <label className="f" htmlFor="slack-hook">Slack incoming webhook</label>
+          <input
+            id="slack-hook"
+            type="password"
+            autoComplete="off"
+            value={slackUrl}
+            onChange={(e) => setSlackUrl(e.target.value)}
+            placeholder={slackConfigured ? (cfg.data?.slack?.webhookUrlMasked ?? 'configured') : 'https://hooks.slack.com/services/…'}
+            style={{ width: '100%' }}
+            data-testid="slack-webhook-input"
+          />
+          <div className="hint" style={{ margin: '4px 0 0' }}>
+            {slackConfigured
+              ? `Configured — ${cfg.data?.slack?.webhookUrlMasked}`
+              : 'Not configured. The URL is the credential: anyone holding it can post to that channel. One webhook posts to one channel — a second destination needs a second webhook.'}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            className="btn small primary"
+            disabled={slackBusy || !slackUrl.trim()}
+            onClick={() => void saveSlack()}
+            data-testid="slack-webhook-save"
+          >
+            {slackBusy ? 'Saving…' : 'Save'}
+          </button>
+          <button
+            className="btn small"
+            disabled={slackBusy || !slackConfigured}
+            onClick={() => void testSlack()}
+            data-testid="slack-test-send"
+          >
+            Send test
+          </button>
+          <button
+            className="btn small danger"
+            disabled={slackBusy || !slackConfigured}
+            onClick={() => void clearSlack()}
+          >
+            Clear
+          </button>
+        </div>
+      </div>
+      {slackMsg && (
+        <div className={slackOk ? 'ok-banner' : 'error-banner'} role={slackOk ? undefined : 'alert'} data-testid="slack-result">
+          {slackMsg}
+        </div>
+      )}
+
+      <div className="tasklist-row" style={{ marginTop: 14 }}>
+        <div className="grow">
+          <label className="f" htmlFor="smtp-url">SMTP relay</label>
+          <input
+            id="smtp-url"
+            type="password"
+            autoComplete="off"
+            value={smtpUrl}
+            onChange={(e) => setSmtpUrl(e.target.value)}
+            placeholder={smtpConfigured ? (cfg.data?.smtp?.endpointMasked ?? 'configured') : 'smtp://user:pass@smtp.example.com:587'}
+            style={{ width: '100%' }}
+            data-testid="smtp-url-input"
+          />
+          <div className="hint" style={{ margin: '4px 0 0' }}>
+            {smtpConfigured
+              ? `Configured — ${cfg.data?.smtp?.endpointMasked}`
+              : 'Not configured. Port 587 upgrades with STARTTLS; smtps:// is TLS from the first byte. Plain-text mail only — no attachments, no HTML.'}
+          </div>
+          <label className="f" htmlFor="smtp-from" style={{ marginTop: 8 }}>From address</label>
+          <input
+            id="smtp-from"
+            type="email"
+            autoComplete="off"
+            value={smtpFrom}
+            onChange={(e) => setSmtpFrom(e.target.value)}
+            placeholder={cfg.data?.smtp?.from ?? 'clockwork@example.com (defaults to the SMTP username)'}
+            style={{ width: '100%' }}
+            data-testid="smtp-from-input"
+          />
+          <div className="hint" style={{ margin: '4px 0 0' }}>
+            {cfg.data?.smtp?.from
+              ? `Sending as ${cfg.data.smtp?.from}. Leave blank to keep it.`
+              : 'Optional — leave blank when the SMTP username is itself an email address.'}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            className="btn small primary"
+            disabled={smtpBusy || (!smtpUrl.trim() && !smtpFrom.trim())}
+            onClick={() => void saveSmtp()}
+            data-testid="smtp-save"
+          >
+            {smtpBusy ? 'Saving…' : 'Save'}
+          </button>
+          <button
+            className="btn small danger"
+            disabled={smtpBusy || !smtpConfigured}
+            onClick={() => void clearSmtp()}
+          >
+            Clear
+          </button>
+        </div>
+      </div>
+      <div className="tasklist-row">
+        <div className="grow">
+          <label className="f" htmlFor="smtp-test-to">Send test email to</label>
+          <input
+            id="smtp-test-to"
+            type="email"
+            value={smtpTo}
+            onChange={(e) => setSmtpTo(e.target.value)}
+            placeholder="you@example.com"
+            disabled={!smtpConfigured}
+            data-testid="smtp-test-to"
+          />
+        </div>
+        <button
+          className="btn small"
+          disabled={!smtpConfigured || smtpBusy || !smtpTo.trim()}
+          onClick={() => void testSmtp()}
+          data-testid="smtp-test-send"
+        >
+          {smtpBusy ? 'Sending…' : 'Send test email'}
+        </button>
+      </div>
+      {smtpMsg && (
+        <div className={smtpOk ? 'ok-banner' : 'error-banner'} role={smtpOk ? undefined : 'alert'} data-testid="smtp-result">
+          {smtpMsg}
+        </div>
+      )}
     </div>
   );
 }

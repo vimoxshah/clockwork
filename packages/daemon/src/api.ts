@@ -53,7 +53,19 @@ import { proposedEventsFor, toIcs, icsFilenameFor } from './proposed-events.js';
 import { proofOfWorkHtml, proofFilenameFor } from './proof-of-work.js';
 import { timesheet, setHumanHourlyRate } from './timesheets.js';
 import { scorecard, scorecards, reviewPromptFor } from './performance.js';
-import { loadDeliveryCreds, writeDeliveryCreds, maskBotToken, TelegramChannel, TelegramApiError } from './delivery.js';
+import {
+  loadDeliveryCreds,
+  writeDeliveryCreds,
+  maskBotToken,
+  maskSlackWebhookUrl,
+  maskSmtpUrl,
+  TelegramChannel,
+  TelegramApiError,
+  SlackChannel,
+  SlackApiError,
+  SmtpChannel,
+  parseSmtpUrl,
+} from './delivery.js';
 
 export interface ApiDeps {
   db: DB;
@@ -184,6 +196,91 @@ export function rotateToken(dataDir: string): string {
   writeFileSync(tmpPath, next, { mode: 0o600 });
   renameSync(tmpPath, finalPath);
   return next;
+}
+
+// ---------------------------------------------------------------------------
+// S-64 — the calendar's payload bound and its per-day fold.
+// ---------------------------------------------------------------------------
+
+/**
+ * Hard ceiling on the rows any single `GET /calendar` response may carry, per
+ * collection. A caller may ask for fewer with `?limit=`; nobody can ask for
+ * more, and every response reports the bound it applied plus whether it hit it
+ * (`limits.truncated`) — a capped answer that looked complete would be worse
+ * than no bound at all.
+ *
+ * 5,000 is NFR-3's own corpus size ("calendar renders 5,000 historical runs",
+ * plan/01-product-spec.md:91), so the year view that spec describes sits AT
+ * the boundary rather than inside it. That is deliberate: the bound exists to
+ * stop an unbounded window, and the per-day fold below — not the bound — is
+ * what makes a wide window cheap.
+ */
+export const CALENDAR_ROW_LIMIT = 5_000;
+
+/**
+ * How a run state colours a calendar cell.
+ *
+ * This is the one source of truth for the grouping: the SQL `CASE` arms in the
+ * aggregate query are generated from it, and `calendarOutcomeBucket` reads the
+ * same table, so the route can never disagree with itself. It mirrors
+ * `stateClass()` in `packages/ui/src/components/CalendarView.tsx`, which is
+ * what actually paints the cell — `missed` is drawn like a cancellation there,
+ * so it is grouped like one here.
+ *
+ * Anything outside these five groups falls to `other` (today: `scheduled`).
+ * `other` is a real bucket, not a silent drop: the six counts always sum back
+ * to the day's run count.
+ */
+export const CALENDAR_OUTCOME_BUCKETS = {
+  completed: ['completed'],
+  failed: ['failed', 'timed_out', 'budget_exceeded'],
+  cancelled: ['cancelled', 'missed'],
+  running: ['running', 'queued', 'preparing', 'finalizing'],
+  needsYou: ['waiting_approval', 'awaiting_user'],
+} as const satisfies Readonly<Record<string, readonly RunState[]>>;
+
+/** The outcome groups a day row reports, `other` included. */
+export type CalendarOutcomeBucket = keyof typeof CALENDAR_OUTCOME_BUCKETS | 'other';
+
+const CALENDAR_BUCKET_KEYS = Object.keys(CALENDAR_OUTCOME_BUCKETS) as Array<
+  keyof typeof CALENDAR_OUTCOME_BUCKETS
+>;
+
+/**
+ * Which cell colour a run state belongs to.
+ *
+ * @param state a run's FSM state, as stored in `runs.state`.
+ * @returns the outcome bucket the per-day aggregate counts it under.
+ */
+export function calendarOutcomeBucket(state: string): CalendarOutcomeBucket {
+  for (const key of CALENDAR_BUCKET_KEYS) {
+    if ((CALENDAR_OUTCOME_BUCKETS[key] as readonly string[]).includes(state)) return key;
+  }
+  return 'other';
+}
+
+/** One collection's share of the bound: what came back, what exists, was it cut. */
+export interface CalendarCollectionLimit {
+  returned: number;
+  total: number;
+  truncated: boolean;
+}
+
+/**
+ * The local calendar day of an instant as `YYYY-MM-DD`.
+ *
+ * LOCAL, not UTC, and that is the whole point: the grid snaps every event to
+ * local midnight (`todayMidnight` in `packages/ui/src/calendar.ts`), so a run
+ * at 23:30 belongs in tonight's cell and not in tomorrow's. The runs half of
+ * the fold is done in SQLite with the `localtime` modifier, which resolves
+ * through the same OS zone database; `calendar-aggregate.test.ts` re-derives
+ * the whole aggregate from the detail rows with THIS function, so the two
+ * clocks cannot drift apart unnoticed.
+ */
+function localDayKey(ms: number): string {
+  const d = new Date(ms);
+  const p = (n: number): string => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
 /**
@@ -1376,42 +1473,183 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
   // ---- profiles ----
   app.get('/profiles', async () => profiles.list());
 
-  // ---- calendar range (month/week views): runs + expanded occurrences ----
+  // ---- calendar window: runs + expanded occurrences, either as events or
+  //      folded to per-day counts (S-64) ----
+  //
+  // TWO MODES, ONE WINDOW.
+  //   no `group`  — the event-level detail view. One row per run, which is what
+  //                 the month grid, the week grid and the day panel draw.
+  //   `group=day` — per-day COUNTS: one row per day that holds something, with
+  //                 the outcome breakdown a month or year cell needs to colour
+  //                 itself. No run rows at all. This is S-64: a year view over
+  //                 5,000 runs ships ~300 day rows instead of 5,000 events.
+  //
+  // BOTH modes are bounded (`CALENDAR_ROW_LIMIT`) and both report the bound
+  // they applied in `limits`, so a caller can always tell a complete answer
+  // from a capped one.
+  //
+  // HONEST NOTE ON COST. The fold is a payload and row-count win, not a
+  // latency win. `GET /calendar`'s latency is dominated by RRULE expansion —
+  // `recurrence.ts` anchors a DTSTART-less rule at 1970, so `RRule.between()`
+  // replays every occurrence since then before it reaches the window (~26ms
+  // per enabled daily schedule). Both modes pay that identically, because both
+  // have to know which days hold bookings. Measured both ways in
+  // `packages/daemon/test/calendar-aggregate-bench.test.ts`.
   app.get('/calendar', async (req, reply) => {
-    const q = req.query as any;
+    const q = req.query as Record<string, unknown>;
     const to = q.to ? parseInt(String(q.to), 10) : Date.now() + 31 * 86_400_000;
     const from = q.from ? parseInt(String(q.from), 10) : to - 62 * 86_400_000;
     if (!(from > 0 && to > from)) return reply.code(422).send({ error: 'invalid range' });
 
+    const group = q.group === undefined ? null : String(q.group);
+    if (group !== null && group !== 'day') return reply.code(422).send({ error: 'invalid group' });
+
+    // `?limit=` may only lower the ceiling. Anything that is not a positive
+    // integer is refused rather than coerced: silently reading `limit=abc` as
+    // "no limit" is how a caller ends up with a different bound than it asked
+    // for and no way to know.
+    let rowLimit = CALENDAR_ROW_LIMIT;
+    if (q.limit !== undefined) {
+      const raw = String(q.limit);
+      if (!/^[0-9]+$/.test(raw)) return reply.code(422).send({ error: 'invalid limit' });
+      const asked = parseInt(raw, 10);
+      if (!(asked > 0)) return reply.code(422).send({ error: 'invalid limit' });
+      rowLimit = Math.min(asked, CALENDAR_ROW_LIMIT);
+    }
+
     const { occurrencesBetween } = await import('./recurrence.js');
 
-    // Runs whose scheduled_for OR started/ended fall in range.
-    //
-    // NFR-3 ("windowed fetch") is why this projects `task_name` instead of
-    // returning `jobspec_json`: a year view holds ~5,000 rows and the calendar
-    // reads exactly one key out of that blob — the frozen S-5 snapshot name.
-    // Shipping the whole spec (prompt, profile, skills, paths) made the year
-    // view a 10.16MB response; projecting the one field it reads makes it
-    // 1.15MB. Measured on the 5k corpus in
-    // packages/daemon/test/workforce-bench.test.ts. This is a payload/memory
-    // win, NOT a latency win — request latency is dominated by the RRULE
-    // expansion, see that file's notes on recurrence.ts.
-    // json_extract, NOT a join to tasks.name: the calendar must keep showing the
-    // name the run was booked under, not the task's current name.
-    const runRows = deps.db
-      .prepare(
-        `SELECT id, task_id, state, outcome_reason, scheduled_for, started_at, ended_at, cost_usd, turns,
+    // A run belongs to the window if ANY of its three timestamps lands inside
+    // it; it is FILED under the first one it has. Both modes use the same
+    // predicate and the same coalesce, which is what lets the aggregate be
+    // provably the detail view collapsed rather than a second opinion.
+    const WINDOW = `(scheduled_for BETWEEN ? AND ?)
+            OR (started_at BETWEEN ? AND ?)
+            OR (ended_at BETWEEN ? AND ?)`;
+    const windowArgs = [from, to, from, to, from, to] as const;
+    const AT = `COALESCE(scheduled_for, started_at, ended_at)`;
+
+    const emptyOutcomes = (): Record<CalendarOutcomeBucket, number> => ({
+      completed: 0,
+      failed: 0,
+      cancelled: 0,
+      running: 0,
+      needsYou: 0,
+      other: 0,
+    });
+    interface DayRow {
+      day: string;
+      runs: number;
+      bookings: number;
+      humans: number;
+      costUsd: number;
+      outcomes: Record<CalendarOutcomeBucket, number>;
+    }
+    const dayRows = new Map<string, DayRow>();
+    const dayRow = (key: string): DayRow => {
+      let row = dayRows.get(key);
+      if (row === undefined) {
+        row = { day: key, runs: 0, bookings: 0, humans: 0, costUsd: 0, outcomes: emptyOutcomes() };
+        dayRows.set(key, row);
+      }
+      return row;
+    };
+
+    // ---- runs ----
+    let runRows: Array<Record<string, unknown>> = [];
+    let runsReturned = 0;
+    let runsTotal = 0;
+    let runsTruncated = false;
+
+    if (group === 'day') {
+      // The fold happens in SQLite. Not because the SQL is the expensive part
+      // (it is ~12ms of a ~355ms year view) but because it is the part that
+      // scales with history: this never materializes 5,000 rows in JS, never
+      // parses 5,000 jobspec blobs for a name the aggregate does not use, and
+      // never serializes them.
+      //
+      // `GROUP BY` emits a row only for a day that HAS runs, so the result is
+      // bounded by the number of non-empty days — never by the window's span.
+      // A `from=1` window therefore costs a handful of rows, not 20,000.
+      const buckets = CALENDAR_BUCKET_KEYS.map(
+        (key, i) =>
+          `SUM(CASE WHEN state IN (${CALENDAR_OUTCOME_BUCKETS[key]
+            .map((s) => `'${s}'`)
+            .join(', ')}) THEN 1 ELSE 0 END) AS bucket_${i}`,
+      ).join(',\n                ');
+      const grouped = deps.db
+        .prepare(
+          `SELECT strftime('%Y-%m-%d', ${AT} / 1000, 'unixepoch', 'localtime') AS day,
+                COUNT(*) AS runs,
+                SUM(COALESCE(cost_usd, 0)) AS cost_usd,
+                ${buckets}
+         FROM runs
+         WHERE ${WINDOW}
+         GROUP BY day
+         ORDER BY day ASC`,
+        )
+        .all(...windowArgs) as unknown as Array<Record<string, number | string>>;
+      for (const g of grouped) {
+        const row = dayRow(String(g.day));
+        row.runs = Number(g.runs);
+        // Rounded, because a REAL SUM prints as 12.340000000000002 otherwise.
+        // Six places is far below a cent and well inside float precision for
+        // the magnitudes involved.
+        row.costUsd = Math.round(Number(g.cost_usd ?? 0) * 1e6) / 1e6;
+        let named = 0;
+        CALENDAR_BUCKET_KEYS.forEach((key, i) => {
+          const n = Number(g[`bucket_${i}`] ?? 0);
+          row.outcomes[key] = n;
+          named += n;
+        });
+        // `other` is derived, so the buckets sum back to `runs` by
+        // construction — a state nobody grouped cannot go missing.
+        row.outcomes.other = row.runs - named;
+      }
+    } else {
+      // NFR-3 ("windowed fetch") is why this projects `task_name` instead of
+      // returning `jobspec_json`: the calendar reads exactly one key out of
+      // that blob — the frozen S-5 snapshot name. Shipping the whole spec
+      // (prompt, profile, skills, paths) made the year view a 10.16MB
+      // response; projecting the one field it reads makes it 1.15MB. Measured
+      // on the 5k corpus in packages/daemon/test/workforce-bench.test.ts. This
+      // is a payload/memory win, NOT a latency win — request latency is
+      // dominated by the RRULE expansion, see that file's notes on
+      // recurrence.ts.
+      // json_extract, NOT a join to tasks.name: the calendar must keep showing
+      // the name the run was booked under, not the task's current name.
+      //
+      // `LIMIT rowLimit + 1` is the bound and its own detector: one row past
+      // the ceiling proves there is more without a second query. The exact
+      // total is only paid for when the answer really was cut, so the common
+      // (uncapped) path costs nothing extra.
+      const fetched = deps.db
+        .prepare(
+          `SELECT id, task_id, state, outcome_reason, scheduled_for, started_at, ended_at, cost_usd, turns,
                 json_extract(jobspec_json, '$.taskName') AS task_name
          FROM runs
-         WHERE (scheduled_for BETWEEN ? AND ?)
-            OR (started_at BETWEEN ? AND ?)
-            OR (ended_at BETWEEN ? AND ?)
-         ORDER BY COALESCE(scheduled_for, started_at, ended_at) ASC`,
-      )
-      .all(from, to, from, to, from, to) as unknown as Array<Record<string, unknown>>;
+         WHERE ${WINDOW}
+         ORDER BY ${AT} ASC
+         LIMIT ?`,
+        )
+        .all(...windowArgs, rowLimit + 1) as unknown as Array<Record<string, unknown>>;
+      runsTruncated = fetched.length > rowLimit;
+      runRows = runsTruncated ? fetched.slice(0, rowLimit) : fetched;
+      runsReturned = runRows.length;
+      runsTotal = runsTruncated
+        ? Number(
+            (
+              deps.db
+                .prepare(`SELECT COUNT(*) AS n FROM runs WHERE ${WINDOW}`)
+                .get(...windowArgs) as { n: number }
+            ).n,
+          )
+        : runsReturned;
+    }
 
     // Bookings: expand every enabled schedule into the visible window.
     const bookings: Array<{ taskId: string; name: string; at: number; kind: 'booking' }> = [];
+    let bookingsTotal = 0;
     const scheds = deps.db
       .prepare(
         `SELECT s.id, s.task_id, s.kind, s.rrule, s.cron, s.run_at, s.tz, s.next_fire,
@@ -1438,7 +1676,14 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
           );
         }
         for (const at of ats) {
-          bookings.push({ taskId: s.task_id, name: s.task_name, at, kind: 'booking' });
+          bookingsTotal++;
+          dayRow(localDayKey(at)).bookings++;
+          // Counted always, COLLECTED only up to the bound: the day fold needs
+          // the count, the detail view needs the rows, and neither may grow
+          // without limit.
+          if (group === null && bookings.length < rowLimit) {
+            bookings.push({ taskId: s.task_id, name: s.task_name, at, kind: 'booking' });
+          }
         }
       } catch {
         /* one bad schedule must not break the calendar */
@@ -1449,7 +1694,8 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     // Human events from calendar sources (read-only; never written to). A
     // `url` source is re-fetched live; a `file` source is a frozen import —
     // it is re-parsed from the stored copy and MUST NOT trigger a fetch.
-    let humans: Array<{ uid: string; name: string; at: number; allDay: boolean }> = [];
+    const humans: Array<{ uid: string; name: string; at: number; allDay: boolean }> = [];
+    let humansTotal = 0;
     try {
       const { loadIcsSources, fetchIcs, readIcsImport, parseIcs } = await import('./ics.js');
       const sources = loadIcsSources(deps.dataDir);
@@ -1471,7 +1717,11 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
             if (ev.startMs < from || ev.startMs > to) continue;
             if (seen.has(ev.uid)) continue;
             seen.add(ev.uid);
-            humans.push({ uid: ev.uid, name: ev.summary, at: ev.startMs, allDay: ev.allDay });
+            humansTotal++;
+            dayRow(localDayKey(ev.startMs)).humans++;
+            if (group === null && humans.length < rowLimit) {
+              humans.push({ uid: ev.uid, name: ev.summary, at: ev.startMs, allDay: ev.allDay });
+            }
           }
         } catch {
           /* one bad feed/import must not break the calendar */
@@ -1482,7 +1732,46 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       /* ICS overlay is best-effort */
     }
 
-    return { from, to, runs: runRows, bookings, humans };
+    const collection = (returned: number, total: number): CalendarCollectionLimit => ({
+      returned,
+      total,
+      truncated: total > returned,
+    });
+
+    if (group === 'day') {
+      const all = [...dayRows.values()].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
+      const days = all.length > rowLimit ? all.slice(0, rowLimit) : all;
+      const sum = (rows: DayRow[], pick: (r: DayRow) => number): number =>
+        rows.reduce((acc, r) => acc + pick(r), 0);
+      const limits = {
+        rowLimit,
+        truncated: all.length > rowLimit,
+        days: collection(days.length, all.length),
+        // Shipped-vs-existing per collection: when the day rows are capped,
+        // the runs on the days that were cut are counted here and NOT in the
+        // response body, which is exactly what a caller needs to know.
+        runs: collection(sum(days, (r) => r.runs), sum(all, (r) => r.runs)),
+        bookings: collection(sum(days, (r) => r.bookings), bookingsTotal),
+        humans: collection(sum(days, (r) => r.humans), humansTotal),
+      };
+      return { from, to, group: 'day' as const, days, limits };
+    }
+
+    return {
+      from,
+      to,
+      runs: runRows,
+      bookings,
+      humans,
+      limits: {
+        rowLimit,
+        truncated:
+          runsTruncated || bookings.length < bookingsTotal || humans.length < humansTotal,
+        runs: { returned: runsReturned, total: runsTotal, truncated: runsTruncated },
+        bookings: collection(bookings.length, bookingsTotal),
+        humans: collection(humans.length, humansTotal),
+      },
+    };
   });
 
   // ---- ICS calendar sources (read-only subscriptions + frozen file imports; Settings → Calendars) ----
@@ -1856,20 +2145,46 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     return readPrefs(deps.dataDir);
   });
 
-  // ---- delivery credentials (Telegram bot token / webhook HMAC secret) ----
+  // ---- delivery credentials (Telegram bot token / webhook HMAC secret /
+  //      Slack incoming-webhook URL / SMTP relay URL + From) ----
   app.get('/delivery-config', async () => readDeliveryConfigStatus(deps.dataDir));
 
   app.put('/delivery-config', async (req, reply) => {
     const DeliveryCredsSchema = z.object({
       telegramBotToken: z.union([z.string(), z.null()]).optional(),
       webhookSecret: z.union([z.string(), z.null()]).optional(),
+      // The Slack incoming-webhook URL is itself the credential, so it is
+      // stored like the bot token (0600 file / env) and never in a task row.
+      slackWebhookUrl: z
+        .union([z.string().url().startsWith('https://', 'slack webhook url must be https'), z.null()])
+        .optional(),
+      smtpUrl: z
+        .union([
+          z.string().refine((s) => {
+            try {
+              parseSmtpUrl(s);
+              return true;
+            } catch {
+              return false;
+            }
+          }, 'expected smtp://user:pass@host:587 or smtps://…:465'),
+          z.null(),
+        ])
+        .optional(),
+      smtpFrom: z.union([z.string().email(), z.null()]).optional(),
     });
     const parsed = DeliveryCredsSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(422).send({ error: 'validation' });
     writeDeliveryCreds(deps.dataDir, parsed.data);
+    // One entry per credential — 'set'/'cleared'/'unchanged', never a value.
+    const credState = (k: keyof typeof parsed.data): string =>
+      k in parsed.data ? (parsed.data[k] === null ? 'cleared' : 'set') : 'unchanged';
     audit('delivery-config.update', 'delivery-config', undefined, {
-      telegramBotToken: 'telegramBotToken' in parsed.data ? (parsed.data.telegramBotToken === null ? 'cleared' : 'set') : 'unchanged',
-      webhookSecret: 'webhookSecret' in parsed.data ? (parsed.data.webhookSecret === null ? 'cleared' : 'set') : 'unchanged',
+      telegramBotToken: credState('telegramBotToken'),
+      webhookSecret: credState('webhookSecret'),
+      slackWebhookUrl: credState('slackWebhookUrl'),
+      smtpUrl: credState('smtpUrl'),
+      smtpFrom: credState('smtpFrom'),
     });
     return readDeliveryConfigStatus(deps.dataDir);
   });
@@ -1890,6 +2205,40 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       // the error even though it shouldn't be able to reach here (network
       // errors / a misbehaving stub could still echo the URL back).
       if (creds.telegramBotToken) msg = msg.split(creds.telegramBotToken).join('[redacted]');
+      return reply.send({ ok: false, error: msg.slice(0, 200) });
+    }
+  });
+
+  // Same shape as test-telegram: the saved credential, one fixed message, no
+  // retry. Slack needs no body — one incoming webhook posts to exactly one
+  // channel, so the credential already names the destination.
+  app.post('/delivery-config/test-slack', async (_req, reply) => {
+    const creds = loadDeliveryCreds(deps.dataDir);
+    if (!creds.slackWebhookUrl) return reply.send({ ok: false, error: 'no slack webhook url configured' });
+    try {
+      await new SlackChannel().sendTest(creds);
+      return reply.send({ ok: true });
+    } catch (e) {
+      let msg = e instanceof SlackApiError ? (e.description ?? e.message) : e instanceof Error ? e.message : String(e);
+      // The channel already redacts the URL; belt-and-braces for a transport
+      // error that echoed it back through some other path.
+      msg = msg.split(creds.slackWebhookUrl).join('[redacted]');
+      return reply.send({ ok: false, error: msg.slice(0, 200) });
+    }
+  });
+
+  app.post('/delivery-config/test-smtp', async (req, reply) => {
+    const TestSchema = z.object({ to: z.string().email() });
+    const parsed = TestSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(422).send({ error: 'validation' });
+    const creds = loadDeliveryCreds(deps.dataDir);
+    if (!creds.smtpUrl) return reply.send({ ok: false, error: 'no smtp url configured' });
+    try {
+      await new SmtpChannel().sendTest(parsed.data.to, creds);
+      return reply.send({ ok: true });
+    } catch (e) {
+      // SmtpChannel.sendMail already scrubs the password out of its message.
+      const msg = e instanceof Error ? e.message : String(e);
       return reply.send({ ok: false, error: msg.slice(0, 200) });
     }
   });
@@ -2789,11 +3138,15 @@ export function readPrefs(dataDir: string): { soundMode: 'chime' | 'system' | 'n
 
 /**
  * GET /delivery-config shape: effective (env-merged, file-wins) credential
- * status. Never returns a raw token/secret — `botTokenMasked` only.
+ * status. Never returns a raw token/secret/URL — only the masked forms
+ * (`botTokenMasked`, `webhookUrlMasked`, `endpointMasked`). `smtpFrom` is the
+ * one value returned whole, because a From address is not a secret.
  */
 export function readDeliveryConfigStatus(dataDir: string): {
   telegram: { configured: boolean; botTokenMasked: string | null };
   webhook: { configured: boolean };
+  slack: { configured: boolean; webhookUrlMasked: string | null };
+  smtp: { configured: boolean; endpointMasked: string | null; from: string | null };
 } {
   const creds = loadDeliveryCreds(dataDir);
   return {
@@ -2802,5 +3155,15 @@ export function readDeliveryConfigStatus(dataDir: string): {
       botTokenMasked: creds.telegramBotToken ? maskBotToken(creds.telegramBotToken) : null,
     },
     webhook: { configured: Boolean(creds.webhookSecret) },
+    slack: {
+      configured: Boolean(creds.slackWebhookUrl),
+      webhookUrlMasked: creds.slackWebhookUrl ? maskSlackWebhookUrl(creds.slackWebhookUrl) : null,
+    },
+    smtp: {
+      configured: Boolean(creds.smtpUrl),
+      // maskSmtpUrl keeps scheme/user/host:port and drops the password.
+      endpointMasked: creds.smtpUrl ? maskSmtpUrl(creds.smtpUrl) : null,
+      from: creds.smtpFrom ?? null,
+    },
   };
 }

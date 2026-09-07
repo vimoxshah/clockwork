@@ -145,6 +145,97 @@ export type CalendarRunRowT = Omit<RunRowT, 'jobspec_json' | 'report_json' | 'br
   task_name: string | null;
 };
 
+/**
+ * The BOUND every `/calendar` response reports (S-64).
+ *
+ * `truncated` is the whole point: no window may return an unbounded number of
+ * rows, so a wide one comes back capped — and a client that could not tell a
+ * capped answer from a complete one would turn the bound into a silent lie.
+ * Per collection, `returned` is what arrived and `total` is what the window
+ * actually holds.
+ *
+ * Every member is optional because a daemon older than this field answers
+ * without it, and so does every test mock written before it existed. Read it
+ * defensively; never assume it is there.
+ */
+export interface CalendarCollectionLimitT {
+  returned: number;
+  total: number;
+  truncated: boolean;
+}
+
+export interface CalendarLimitsT {
+  /** The row ceiling this response applied, per collection. */
+  rowLimit: number;
+  /** True when ANY collection was cut — the answer is partial. */
+  truncated: boolean;
+  runs?: CalendarCollectionLimitT;
+  bookings?: CalendarCollectionLimitT;
+  humans?: CalendarCollectionLimitT;
+  /** Aggregate mode only: the per-day rows. */
+  days?: CalendarCollectionLimitT;
+}
+
+export interface CalendarBookingT {
+  taskId: string;
+  name: string;
+  at: number;
+  kind: 'booking';
+}
+
+export interface CalendarHumanT {
+  uid: string;
+  name: string;
+  at: number;
+  allDay: boolean;
+}
+
+/** The event-level `/calendar` answer: what the month grid, week grid and day panel draw. */
+export interface CalendarDetailT {
+  from: number;
+  to: number;
+  runs: CalendarRunRowT[];
+  bookings: CalendarBookingT[];
+  humans?: CalendarHumanT[];
+  limits?: CalendarLimitsT;
+}
+
+/**
+ * One day of the per-day fold (`GET /calendar?group=day`) — S-64.
+ *
+ * `day` is a LOCAL calendar day as `YYYY-MM-DD`, not an instant: parse it with
+ * `new Date(y, m - 1, d)` to get the same local midnight the grid keys its
+ * cells on. An epoch would have forced the daemon to guess the reader's zone.
+ *
+ * `outcomes` mirrors `stateClass()` in CalendarView, which is what paints a
+ * cell. The six counts always sum back to `runs`, `other` included, so a state
+ * nobody grouped cannot go missing from a summary.
+ */
+export interface CalendarDayT {
+  day: string;
+  runs: number;
+  bookings: number;
+  humans: number;
+  costUsd: number;
+  outcomes: {
+    completed: number;
+    failed: number;
+    cancelled: number;
+    running: number;
+    needsYou: number;
+    other: number;
+  };
+}
+
+/** The folded `/calendar` answer: counts per day, no run rows at all. */
+export interface CalendarAggregateT {
+  from: number;
+  to: number;
+  group: 'day';
+  days: CalendarDayT[];
+  limits?: CalendarLimitsT;
+}
+
 export interface CalendarEvent {
   kind: 'run' | 'booking' | 'human';
   id: string;
@@ -454,9 +545,25 @@ function proofOfWorkPath(runId: string, opts?: ProofOfWorkOptionsT): string {
   })}`;
 }
 
+/**
+ * Credential STATUS per delivery channel — never a credential. The daemon
+ * masks on the way out (`readDeliveryConfigStatus`, packages/daemon/src/api.ts):
+ * a bot token, a Slack incoming-webhook URL and an SMTP URL are all bearer
+ * credentials, so only their masked forms cross the wire. `smtp.from` is the
+ * one value returned whole, because a From address is not a secret.
+ */
 export interface DeliveryConfigT {
   telegram: { configured: boolean; botTokenMasked: string | null };
   webhook: { configured: boolean };
+  /**
+   * Optional because of the version-skew trap this app already guards
+   * elsewhere (`/health` `versionSkew`): a daemon left running from before
+   * T-310 answers this route without these two members, and a bare
+   * `data.slack.configured` would throw and blank the whole Settings screen.
+   * The current daemon always sends them.
+   */
+  slack?: { configured: boolean; webhookUrlMasked: string | null };
+  smtp?: { configured: boolean; endpointMasked: string | null; from: string | null };
 }
 
 /**
@@ -518,10 +625,14 @@ export const api = {
   deleteTask: (id: string) => req<{ deleted: boolean }>('DELETE', `/tasks/${id}`),
   runNow: (id: string) => req<{ runId: string }>('POST', `/tasks/${id}/run-now`),
   calendar: (from: number, to: number) =>
-    req<{ from: number; to: number; runs: CalendarRunRowT[]; bookings: Array<{ taskId: string; name: string; at: number; kind: 'booking' }>; humans?: Array<{ uid: string; name: string; at: number; allDay: boolean }> }>(
-      'GET',
-      `/calendar?from=${from}&to=${to}`,
-    ),
+    req<CalendarDetailT>('GET', `/calendar?from=${from}&to=${to}`),
+  /**
+   * The per-day fold for a WIDE window (S-64). A year over 5,000 runs comes
+   * back as ~300 day rows instead of 5,000 events; the day panel then asks
+   * `calendar()` for the one day a reader clicked.
+   */
+  calendarDays: (from: number, to: number) =>
+    req<CalendarAggregateT>('GET', `/calendar?from=${from}&to=${to}&group=day`),
   icsSources: () => req<IcsSourceT[]>('GET', '/calendars/ics'),
   addIcsSource: (url: string, label: string) =>
     req<{ id: string; label: string; events: number }>('POST', '/calendars/ics', { url, label }),
@@ -749,12 +860,21 @@ export const api = {
   proofOfWork: async (runId: string, opts?: ProofOfWorkOptionsT): Promise<Blob> =>
     (await send('GET', proofOfWorkPath(runId, opts))).blob(),
 
-  // ---- delivery: Telegram + webhook credentials ----
+  // ---- delivery: Telegram, webhook, Slack and SMTP credentials ----
   deliveryConfig: () => req<DeliveryConfigT>('GET', '/delivery-config'),
-  saveDeliveryConfig: (body: { telegramBotToken?: string | null; webhookSecret?: string | null }) =>
-    req<DeliveryConfigT>('PUT', '/delivery-config', body),
+  saveDeliveryConfig: (body: {
+    telegramBotToken?: string | null;
+    webhookSecret?: string | null;
+    slackWebhookUrl?: string | null;
+    smtpUrl?: string | null;
+    smtpFrom?: string | null;
+  }) => req<DeliveryConfigT>('PUT', '/delivery-config', body),
   testTelegram: (chatId: string) =>
     req<{ ok: boolean; error?: string }>('POST', '/delivery-config/test-telegram', { chatId }),
+  // No body: one Slack incoming webhook posts to exactly one channel, so the
+  // stored credential already names the destination.
+  testSlack: () => req<{ ok: boolean; error?: string }>('POST', '/delivery-config/test-slack'),
+  testSmtp: (to: string) => req<{ ok: boolean; error?: string }>('POST', '/delivery-config/test-smtp', { to }),
 };
 
 export interface EventStream {

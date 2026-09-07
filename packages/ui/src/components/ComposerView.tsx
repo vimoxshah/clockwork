@@ -15,7 +15,7 @@ import { Switch } from './ui/switch';
 import { AgentPicker } from './AgentPicker';
 import { DateTimePicker } from './ui/datetime-picker';
 import { Badge } from './ui/card';
-import { Zap, FolderGit2, Bot, Wallet, CalendarClock, AlertCircle, GitBranch, Bell } from 'lucide-react';
+import { Zap, FolderGit2, Bot, Wallet, CalendarClock, AlertCircle, GitBranch, Bell, Send } from 'lucide-react';
 import { cn } from '../lib/cn';
 import { FolderBrowserDialog } from './FolderBrowserDialog';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from './ui/dialog';
@@ -55,28 +55,39 @@ function defaultSlot(): Date {
 
 /**
  * Assemble the task's `delivery` object (DeliveryConfig, packages/shared/src/schemas.ts)
- * from the composer's Telegram fields. Exported (pure, no component state) so
- * the "unchanged when blank" and group allow-list rules are unit-testable
- * without mounting the composer.
+ * from the composer's per-task delivery fields. Exported (pure, no component
+ * state) so the "unchanged when blank" and group allow-list rules are
+ * unit-testable without mounting the composer.
  *
- * - No chat id: sends exactly `{ osNotify: true }` — the object shipped before
- *   per-task Telegram existed, so existing behaviour is unchanged.
+ * - Nothing filled in: sends exactly `{ osNotify: true }` — the object shipped
+ *   before per-task delivery existed, so existing behaviour is unchanged.
  * - A chat id in a non-group chat: no allow-list needed — there's only one
  *   person on the other end.
  * - A chat id marked as a group: always attaches `allowedUserIds`, even when
  *   the list is empty. An empty list in a group is the honest "refuse every
  *   press" state (ADR-036), not an unset one, so it must be sent, not omitted.
+ * - Slack carries no URL: the incoming-webhook URL is the credential and lives
+ *   in Settings, so the task row only holds the opt-in.
+ * - Email carries recipients only, for the same reason — the relay password is
+ *   a credential and stays in Settings.
+ *
+ * `extra` is a fourth, optional parameter rather than three more positional
+ * ones so the existing three-argument call sites and tests read unchanged.
  */
 export function buildTaskDelivery(
   chatIdRaw: string,
   isGroup: boolean,
   allowedUserIdsRaw: string,
+  extra: { slack?: boolean; emailToRaw?: string } = {},
 ): Record<string, unknown> {
   const chatId = chatIdRaw.trim();
-  if (!chatId) return { osNotify: true };
-  return {
-    osNotify: true,
-    telegram: {
+  const emailTo = (extra.emailToRaw ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const delivery: Record<string, unknown> = { osNotify: true };
+  if (chatId) {
+    delivery.telegram = {
       chatId,
       ...(isGroup
         ? {
@@ -86,8 +97,11 @@ export function buildTaskDelivery(
               .filter(Boolean),
           }
         : {}),
-    },
-  };
+    };
+  }
+  if (extra.slack) delivery.slack = { enabled: true };
+  if (emailTo.length > 0) delivery.email = { to: emailTo };
+  return delivery;
 }
 
 interface ProfileRow {
@@ -168,6 +182,8 @@ export default function ComposerView({
     telegramChatId: '',
     telegramIsGroup: false,
     telegramAllowedUserIds: '',
+    slackEnabled: false,
+    emailTo: '',
   }));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -235,7 +251,10 @@ export default function ComposerView({
       schedule = { kind: 'rrule', rrule, tz: form.tz };
     }
 
-    const delivery = buildTaskDelivery(form.telegramChatId, form.telegramIsGroup, form.telegramAllowedUserIds);
+    const delivery = buildTaskDelivery(form.telegramChatId, form.telegramIsGroup, form.telegramAllowedUserIds, {
+      slack: form.slackEnabled,
+      emailToRaw: form.emailTo,
+    });
 
     setBusy(true);
     try {
@@ -686,6 +705,56 @@ export default function ComposerView({
                   )}
                 </div>
               )}
+            </section>
+
+            {/*
+              A separate section from Telegram approvals on purpose. These two
+              channels carry the run REPORT — what the agent did, what it cost,
+              the branch it left — and not the approval request: the daemon's
+              approval fan-out still has its own telegram/webhook-only copy in
+              run-manager.ts. Heading them "approvals" would be the overclaim.
+
+              Neither field takes a URL or a password. A Slack incoming-webhook
+              URL and an SMTP relay password are credentials, so they live in
+              Settings and never in a task row (DeliveryConfig, schemas.ts).
+            */}
+            <section>
+              <div className="mb-3 flex items-center gap-2">
+                <span className="flex h-6 w-6 items-center justify-center rounded-md bg-surface-active text-dim [&_svg]:h-3.5 [&_svg]:w-3.5">
+                  <Send />
+                </span>
+                <h3 className="text-compact font-semibold">Run reports (optional)</h3>
+              </div>
+              <p className="mb-2 text-xs text-dim">
+                Where the outcome goes when this task finishes. Approvals are not sent here — those
+                arrive by Telegram, by webhook, or in this app.
+              </p>
+              <div className="flex items-center gap-2">
+                <Switch
+                  id="c-slack"
+                  checked={form.slackEnabled}
+                  onCheckedChange={(v) => setForm({ ...form, slackEnabled: v })}
+                />
+                <Label htmlFor="c-slack" className="mb-0">
+                  Post the report to Slack
+                </Label>
+              </div>
+              <p className="mt-1 text-xxs text-dim">
+                Uses the workspace webhook from Settings → Notifications &amp; delivery. One webhook
+                posts to one channel, so every task that opts in posts to that same channel.
+              </p>
+              <Label htmlFor="c-email-to" style={{ marginTop: 10 }}>
+                Email the report to (comma-separated)
+              </Label>
+              <Input
+                id="c-email-to"
+                placeholder="dana@example.com, marcus@example.com"
+                value={form.emailTo}
+                onChange={(e) => setForm({ ...form, emailTo: e.target.value })}
+              />
+              <p className="mt-1 text-xxs text-dim">
+                Plain text, sent through the SMTP relay in Settings. Up to 20 recipients.
+              </p>
             </section>
           </div>
         </CardContent>

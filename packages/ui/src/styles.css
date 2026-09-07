@@ -271,7 +271,11 @@ button.cal-event:hover { filter: brightness(1.12); }
 .approval-actions { display: flex; gap: 8px; margin-top: 8px; }
 
 /* ---------- forms / tasks ---------- */
-input[type='text'], input[type='password'], input[type='datetime-local'], input[type='time'], input[type='number'], input:not([type]), select, textarea {
+/* Every input type this app renders must be listed here. An omitted type
+   falls through to the native control paint, which reads as a light-grey box
+   in dark mode — the bug that added password and the typeless case. The SMTP
+   From and test-recipient fields are what added email. */
+input[type='text'], input[type='password'], input[type='email'], input[type='datetime-local'], input[type='time'], input[type='number'], input:not([type]), select, textarea {
   background: var(--bg); color: var(--fg); border: 1px solid var(--border-strong);
   border-radius: 7px; padding: 7px 10px; font-size: 13px; outline: none; width: 100%;
 }
