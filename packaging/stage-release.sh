@@ -60,6 +60,16 @@ LATEST="https://github.com/vimoxshah/clockwork/releases/latest/download/Clockwor
 /usr/bin/sed -i '' -E "s#href=\"https://github.com/vimoxshah/clockwork/releases/download/v[0-9.]+/checksums-sha256.txt\"#href=\"https://github.com/vimoxshah/clockwork/releases/latest/download/checksums-sha256.txt\"#g" "$PAGE"
 /usr/bin/sed -i '' -E "s#Download Clockwork [0-9.]+ for Mac#Download Clockwork ${VERSION} for Mac#" "$PAGE"
 
+# The data-ver / data-size spans are rewritten at runtime from the GitHub
+# release, so a visitor normally sees the truth. Their INLINE values are the
+# fallback a rate-limited visitor gets, and they were being refreshed by hand
+# every release — which is exactly how the page sat on 0.4.0 while shipping
+# 0.9.0. Refresh them here so the fallback is current too.
+DMG_BYTES="$(/usr/bin/stat -f%z "$DEST/Clockwork_${VERSION}_aarch64.dmg")"
+DMG_MB="$(/usr/bin/awk -v b="$DMG_BYTES" 'BEGIN{printf "%.1f", b/1048576}')"
+/usr/bin/sed -i '' -E "s#(<span data-ver>)[0-9.]+(</span>)#\1${VERSION}\2#g" "$PAGE"
+/usr/bin/sed -i '' -E "s#(<span data-size>)[0-9.]+ MB(</span>)#\1${DMG_MB} MB\2#g" "$PAGE"
+
 # keep the cask host in sync with BASE_URL
 /usr/bin/sed -i '' -E "s#url \"https://[^/]+/downloads/#url \"${BASE_URL}/downloads/#" "$CASK"
 /usr/bin/sed -i '' -E "s#homepage \"https://[^/]+/?\"#homepage \"${BASE_URL}/\"#" "$CASK"
