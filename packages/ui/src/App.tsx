@@ -410,7 +410,14 @@ function ConnectGate({ onConnected }: { onConnected: () => void }): JSX.Element 
     setErr(null);
     setToken(tokenInput.trim());
     try {
-      await api.health();
+      // Deliberately an AUTHED route. This gate used to probe /health, which
+      // `requiresAuth` leaves open on purpose — so it answered 200 to any
+      // string, including an empty one, and the gate let the paste through.
+      // The app then loaded and every real request 401'd, which reads as "the
+      // app is broken" rather than "that is the wrong token". Verified against
+      // a live daemon: a junk bearer gets 200 from /health and 401 from
+      // /tasks. /capabilities is authed, bounded and ~2ms.
+      await api.capabilities();
       onConnected();
     } catch (e) {
       clearStoredToken();

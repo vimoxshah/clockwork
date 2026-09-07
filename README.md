@@ -75,11 +75,19 @@ REPEAT  Make it weekly. Search your retained run history.
 - 🛡 **Human-in-the-loop approvals** — risky actions pause the run and ask you;
   unanswered asks fail safe (never silently approved), and notify you when a run
   is waiting. The macOS notification is unconditional — no per-task setting gates
-  it. Telegram is the one channel you configure from the app (Settings, plus a
-  chat id per task), and you can approve or deny from the Telegram message itself
-  (`packages/daemon/src/telegram-approvals.ts`) without opening Clockwork. A
-  third channel, an HMAC-signed outbound webhook, exists in the daemon and its URL
-  is set through the API only; there is no screen for it
+  it. Telegram, Slack and email are all configured from the app — credentials in
+  Settings, per-task fields in the composer — and all three now receive the
+  approval **request** as well as the run report, through one fan-out that
+  serves both directions (`packages/daemon/src/delivery-dispatch.ts`). **The
+  decision is not symmetric, and the screens say so.** You answer in Clockwork,
+  or from the Telegram message itself
+  (`packages/daemon/src/telegram-approvals.ts`), which carries approve/deny
+  buttons behind an inbound poller. Slack and email can only point you at the
+  Inbox — Slack because its interactivity POSTs the click to a public HTTPS URL
+  and this daemon binds loopback only, so a button there would be a control
+  that silently does nothing. The generic HMAC-signed outbound webhook has its
+  signing secret in Settings, but its per-task URL is set through the API only;
+  there is no field for it in the composer
 - 🧱 **Policy floor in every mode** — force-pushes to protected branches and
   package publishing are refused before they run on the Claude engine, even when
   the CLI would not have asked (a `PreToolUse` hook, fail-closed, ~60 ms per call)
@@ -264,7 +272,12 @@ cat ~/.clockwork/api-token
 ```
 
 Prerequisites:
-- Node.js ≥ 22, pnpm ≥ 11 (`corepack enable`)
+- Node.js ≥ 22, pnpm ≥ 11 (`corepack enable`). Run `pnpm install` with the same
+  Node you will start the daemon with: `better-sqlite3` is a native module
+  compiled for one Node ABI, so switching versions afterwards (a Homebrew
+  upgrade will do it) leaves the daemon unable to start, with
+  `NODE_MODULE_VERSION` in `~/.clockwork/daemon.log.err`. `pnpm install` again
+  to rebuild.
 - At least one provider CLI installed and logged in:
   - [`claude`](https://docs.anthropic.com/en/docs/claude-code) (recommended default)
   - [`codex`](https://github.com/openai/codex), [`opencode`](https://opencode.ai), or [`hermes`](https://github.com/NousResearch/hermes-agent) for alternative engines
@@ -277,9 +290,14 @@ Prerequisites:
 pnpm tauri build          # unsigned .app + DMG in src-tauri/target/release/bundle/
 ```
 
-The Tauri shell loads the local daemon URL. This build is unsigned and
-un-notarized; the release workflow only signs when Apple Developer credentials
-are present in CI, and they are not.
+The Tauri shell loads the local daemon URL — it is a window, and **the bundle
+does not contain the daemon**, so the .app alone cannot run anything. When
+nothing answers on `127.0.0.1:4747` the window shows `daemon-down.html`
+(`packages/ui/public/`) with the start command and the log path, and navigates
+to the real UI as soon as the port answers.
+
+This build is unsigned and un-notarized; the release workflow only signs when
+Apple Developer credentials are present in CI, and they are not.
 
 </details>
 
@@ -409,18 +427,25 @@ Open, reproducible, and written down here rather than discovered by you:
   approved plan into the prompt, so it is not an equivalent recovery. (A **paused**
   daemon is not one of these cases: the run is queued and the pair reaches
   `executed` normally.)
-- **The calendar latency ceiling is unproven on the acceptance machine.** Every
-  number was measured on an Apple M4; the acceptance criterion names a base M1
-  Air, which has never been measured at all. On the M4 the year-view median met
-  the 500 ms bound in six of ten runs and missed it in four, decided by machine
-  load rather than by code, so the bench measures by default and only asserts
-  under `CLOCKWORK_BENCH_ASSERT=1`. Root cause found and not fixed: a synthetic
-  1970 `DTSTART` makes RRULE expansion replay every occurrence since 1970.
-  Full record: `plan/STATUS.md` (T-307) and
-  `docs/architecture/scalability.md`.
-- **Per-day calendar aggregation is not implemented.** `GET /calendar` still
-  returns one row per run rather than counts per day, and it has no `LIMIT`, so
-  the payload grows with the window.
+- **The calendar latency ceiling is proven on one machine, not on the
+  acceptance machine.** Every number was measured on an Apple M4; the
+  acceptance criterion names a base M1 Air, which has never been measured at
+  all. On the M4 the year-view median over 5,000 runs is
+  40.82–42.17ms across three full test runs on 2026-09-07, against a 500 ms
+  bound. Before the RRULE anchor fix the same
+  measurement ranged 349.59–684.26ms across ten runs on one laptop at one
+  commit: it met the bound in six and missed it in four, and the p95 was above
+  the ceiling in seven, decided by machine load rather than by code. That is
+  why the bench measures by default and only asserts under
+  `CLOCKWORK_BENCH_ASSERT=1` — the gate is about a wall-clock assertion
+  deciding a build, not about the size of the margin. Full record:
+  `plan/STATUS.md` (T-307) and `docs/architecture/scalability.md`.
+- **One recurrence shape still hangs, and the defect is upstream.** An hourly
+  rule whose coarser `BY` part cannot be reached from its own `INTERVAL` grid —
+  `FREQ=HOURLY;INTERVAL=2;BYHOUR=3`, whose hours stay even — never terminates
+  inside rrule 2.8.1's skip loop. It behaved that way before the anchor work and
+  it behaves that way after, because the reachable residues depend only on
+  `gcd(INTERVAL, 24)`. Nothing in Clockwork refuses such a rule yet.
 - **Four older capabilities have no screen, and two of them have no setter
   either.** Retention is API-only (`PUT /retention`), and an outbound webhook's
   URL is API-only (a task's or profile's delivery config). **Quiet hours has no
@@ -511,12 +536,19 @@ An overclaim here is a red build, not a marketing choice.
       (`packages/ui/src/components/featureSurfaces.ts`)
 - [x] Telegram delivery: bot credentials in Settings, chat id per task in the
       composer, and approve or deny a waiting run from the chat message
-- [ ] Slack delivery target (the generic HMAC-signed webhook can front one
-      today, but only over the API — no screen, no Slack-specific formatting)
+- [x] Slack and email delivery — Slack posts Block Kit through an incoming
+      webhook; email goes out over an SMTP client written on Node's standard
+      library, with no dependency added. Both have Settings fields with a
+      test-send and per-task composer fields, and both receive approval
+      requests as well as run reports. Neither can take the decision — that
+      still happens in the app or in Telegram
 - [ ] Chaining v2 (fan-in/out DAGs)
 - [ ] RRULE expansion for external calendars — `packages/daemon/src/ics.ts`
       emits one `(recurring)` base occurrence per recurring event instead
-- [ ] Per-day calendar aggregation and a bounded `/calendar` payload
+- [x] Per-day calendar aggregation and a bounded `/calendar` payload —
+      `GET /calendar?group=day` returns one row per non-empty day with its
+      outcome breakdown, both modes cap at 5,000 rows per collection, and every
+      response reports the bound it applied and whether it hit it
 - [ ] Signed & notarized desktop builds
 - [ ] Kubernetes / cloud execution targets beyond Docker
 - [ ] SSO / SCIM for enterprise deployments

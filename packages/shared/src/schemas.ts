@@ -218,6 +218,30 @@ export const DeliveryConfig = z.object({
       secretRef: z.string().optional(),
     })
     .optional(),
+  /**
+   * Slack (T-310): presence opts the task in; `enabled: false` keeps the row
+   * while the channel is off. No URL lives here on purpose — a Slack incoming
+   * webhook URL *is* the credential (anyone holding it can post to the
+   * channel), so it stays with the Telegram bot token in `delivery-creds.json`
+   * / `CLOCKWORK_DELIVER_SLACK_WEBHOOK_URL` and never in SQLite. One workspace
+   * webhook posts to one Slack channel, which is Slack's own model — a
+   * per-task destination would need a second webhook, not a field here.
+   */
+  slack: z
+    .object({
+      enabled: z.boolean().default(true),
+    })
+    .optional(),
+  /**
+   * Email (T-310). Recipients are not secrets, so they belong to the task;
+   * the SMTP endpoint (with its password) does not and lives in
+   * `delivery-creds.json` as `smtpUrl`/`smtpFrom`.
+   */
+  email: z
+    .object({
+      to: z.array(z.string().email()).min(1).max(20),
+    })
+    .optional(),
 });
 
 /**

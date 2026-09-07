@@ -7,18 +7,9 @@
     "frontendDist": "../packages/ui/dist"
   },
   "app": {
-    "windows": [
-      {
-        "title": "Clockwork",
-        "width": 1280,
-        "height": 820,
-        "minWidth": 940,
-        "minHeight": 600,
-        "url": "http://127.0.0.1:4747"
-      }
-    ],
+    "windows": [],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; font-src 'self'; object-src 'none'"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:4747; font-src 'self'; object-src 'none'"
     }
   },
   "bundle": {

@@ -8,16 +8,27 @@ use std::net::TcpStream;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+const DAEMON_ADDR: &str = "127.0.0.1:4747";
+const DAEMON_URL: &str = "http://127.0.0.1:4747";
+
 fn daemon_up() -> bool {
     TcpStream::connect_timeout(
-        &"127.0.0.1:4747".parse().expect("valid addr"),
+        &DAEMON_ADDR.parse().expect("valid addr"),
         Duration::from_millis(500),
     )
     .is_ok()
 }
 
 /// Best-effort: try the installed launcher, then a bare `node` fallback.
-/// The UI itself shows "daemon down" honestly when neither works (T-125).
+///
+/// Both branches are long shots on a machine that only installed the .app. The
+/// launcher exists only after `clockworkd install` (packages/daemon/src/cli.ts),
+/// which needs a source checkout; `~/clockwork/daemon.mjs` is a path nothing in
+/// this repo writes, so it answers only for someone who placed it there. And a
+/// GUI process launched from Finder inherits launchd's PATH, not a shell's, so
+/// `command -v node` misses Homebrew and nvm installs even when Node is
+/// genuinely present. When neither branch lands, the window falls back to
+/// `daemon-down.html` (see `run`) rather than showing nothing.
 fn ensure_daemon() {
     if daemon_up() {
         return;
@@ -48,6 +59,30 @@ fn ensure_daemon() {
 pub fn run() {
     ensure_daemon();
     tauri::Builder::default()
+        .setup(|app| {
+            // The window used to carry `url: http://127.0.0.1:4747` in
+            // tauri.conf.json, which meant a dead daemon produced a WHITE
+            // EMPTY WINDOW: the webview had no document, the bundled
+            // frontendDist was never consulted because an absolute `url`
+            // overrides it, and the daemon-down notice the UI carries could
+            // not appear — that notice is served BY the daemon, so it exists
+            // only once the thing it reports on is already working.
+            //
+            // Deciding the URL here instead keeps the happy path identical
+            // (straight to the daemon, no flash of a placeholder) and gives
+            // the failure an explanation the user can act on.
+            let url = if daemon_up() {
+                tauri::WebviewUrl::External(DAEMON_URL.parse().expect("valid daemon url"))
+            } else {
+                tauri::WebviewUrl::App("daemon-down.html".into())
+            };
+            tauri::WebviewWindowBuilder::new(app, "main", url)
+                .title("Clockwork")
+                .inner_size(1280.0, 820.0)
+                .min_inner_size(940.0, 600.0)
+                .build()?;
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

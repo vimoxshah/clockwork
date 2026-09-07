@@ -34,6 +34,61 @@ Dispositions: `fired` · `coalesced` · `skipped` · `missed`.
 
 Zones: schedules follow their stored IANA zone, never the system zone (S-22).
 
+## Recurrence expansion — the anchor, and the one ceiling
+
+A rule you save without a `DTSTART` gets one synthesized, because `rrule` would
+otherwise anchor at construction-time "now", which breaks historical and
+fake-clock expansion. The anchor used to be 1970-01-01, and that was the whole
+of the calendar's cost: `RRule.between()` is a replay, not a search — it walks
+forward from the anchor one period at a time and only then starts accepting
+dates — so every request replayed 56 years of occurrences per schedule, and grew
+by another year of replay every calendar year.
+
+`packages/daemon/src/recurrence.ts` now advances that synthetic anchor forward by
+a **whole number of `INTERVAL` periods in the rule's own `FREQ` unit**, kept one
+period below the window it was asked about. That yields exactly the old
+occurrence set with the part below the anchor removed, and the part below the
+anchor is entirely below the window. Measured on an Apple M4, 2026-09-07:
+
+| rule | measurement | before | after |
+| --- | --- | --- | --- |
+| `FREQ=DAILY;BYHOUR=9;BYMINUTE=0` | month view | 25.76 ms | 0.092–0.167 ms |
+| `FREQ=WEEKLY;BYDAY=MO,WE,FR` | month view | 6.18 ms | 0.038–0.065 ms |
+| `FREQ=HOURLY` | one next-fire, 8-day horizon | 1,347 ms | 2.0 ms |
+| `FREQ=MINUTELY` | one next-fire, 8-day horizon | 78,941 ms | 87.6 ms |
+
+The two kinds of measurement are different and the column says which is which.
+The month-view "after" figures are the range across three full test runs on
+2026-09-07; the next-fire pairs are the before/after recorded in
+`packages/daemon/test/recurrence-anchor.test.ts`.
+
+The bottom row is why this was a correctness problem and not a tuning one: a
+per-minute rule is a rule you can type, and 79 seconds of expansion blocked the
+save request and then the tick that touched the schedule.
+
+Four kinds of rule keep the 1970 anchor on purpose, because the advance is not
+provably set-preserving for them: a rule with a stated `COUNT`, a sub-daily rule
+whose counter can leave its own `INTERVAL` grid, a degenerate `INTERVAL`, and
+`YEARLY` (56 iterations is not a hazard, so it was left where it was).
+`packages/daemon/test/recurrence-anchor.test.ts` expands every shape both ways
+— across every DST transition, in two zones, over the 732-day next-fire horizon
+— and requires the two occurrence lists to be **identical**. Speed without that
+equivalence would be worthless here: this module owns the DST rules above.
+
+**`COUNT` is capped at 100,000 at save time.** A `COUNT` rule keeps the epoch
+anchor, and its cost is linear in `COUNT`: 34 ms at 10,000, 277 ms at 100,000,
+2.6 s at 1,000,000, and 79 seconds at 40,000,000. A larger `COUNT` is refused
+with a named error that tells you to drop `COUNT` and use `UNTIL`. The ceiling
+refuses nothing real — at 100,000 a per-minute rule still fires for 69 days and
+a daily one for 274 years.
+
+**Known defect, upstream and not fixed.** A rule whose coarser `BY` part cannot
+be reached from its own `INTERVAL` grid — the clearest is
+`FREQ=HOURLY;INTERVAL=2;BYHOUR=3`, whose hours stay even — does not terminate
+inside `rrule` 2.8.1's skip loop. It behaved that way at the 1970 anchor and it
+behaves that way at the advanced one, because the reachable hours depend only on
+`gcd(INTERVAL, 24)`. Clockwork does not refuse such a rule yet.
+
 ## Sleep, wake, and missed runs
 
 - Machine asleep at fire time → the next tick after wake runs a catch-up sweep

@@ -8,9 +8,10 @@
  * existing convention in telegram-approvals.test.ts, so the request URL
  * (which embeds the bot token) is genuinely exercised rather than mocked.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import http from 'node:http';
+import net from 'node:net';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -41,6 +42,9 @@ describe('loadDeliveryCreds (env + file bridge)', () => {
     delete process.env.CLOCKWORK_DELIVER_TELEGRAM_BOT_TOKEN;
     delete process.env.CLOCKWORK_DELIVER_WEBHOOK_SECRET;
     delete process.env.CLOCKWORK_DELIVER_WEBHOOK_URL;
+    delete process.env.CLOCKWORK_DELIVER_SLACK_WEBHOOK_URL;
+    delete process.env.CLOCKWORK_DELIVER_SMTP_URL;
+    delete process.env.CLOCKWORK_DELIVER_SMTP_FROM;
   });
 
   it('loads a camelCase field from a SCREAMING_SNAKE env var (the bug: k.toLowerCase() alone produced telegram_bot_token, which never matched)', () => {
@@ -55,6 +59,19 @@ describe('loadDeliveryCreds (env + file bridge)', () => {
     const creds = loadDeliveryCreds(dir);
     expect(creds.webhookUrl).toBe('https://example.test/hook');
     expect(creds.webhookSecret).toBe('env-whsec');
+  });
+
+  // The three T-310 credentials ride the same SCREAMING_SNAKE -> camelCase
+  // bridge, so an install that keeps its secrets in the environment (no file
+  // on disk) reaches Slack and SMTP too.
+  it('maps SLACK_WEBHOOK_URL, SMTP_URL and SMTP_FROM to their camelCase fields', () => {
+    process.env.CLOCKWORK_DELIVER_SLACK_WEBHOOK_URL = 'https://hooks.slack.com/services/T0/B0/envsecret';
+    process.env.CLOCKWORK_DELIVER_SMTP_URL = 'smtp://user:pw@relay.example.com:587';
+    process.env.CLOCKWORK_DELIVER_SMTP_FROM = 'env@example.com';
+    const creds = loadDeliveryCreds(dir);
+    expect(creds.slackWebhookUrl).toBe('https://hooks.slack.com/services/T0/B0/envsecret');
+    expect(creds.smtpUrl).toBe('smtp://user:pw@relay.example.com:587');
+    expect(creds.smtpFrom).toBe('env@example.com');
   });
 
   it('the delivery-creds.json file still wins over env on the same key, and merges keys the env does not set', () => {
@@ -181,6 +198,108 @@ class TelegramStub {
   }
 }
 
+// ---------- a REAL loopback SMTP relay standing in for the user's own ----------
+//
+// Small on purpose: the protocol itself (STARTTLS, split replies, multi-line
+// continuations, dot-stuffing) is hammered in smtp-delivery.test.ts. What this
+// one exists to prove is that POST /delivery-config/test-smtp actually reaches
+// a socket with the stored credential, and what it reports back when the relay
+// says no.
+interface FakeSmtp {
+  port: number;
+  /** every command line the client sent, in order */
+  log: string[];
+  /** each accepted DATA payload, un-terminated */
+  mail: string[];
+  close: () => Promise<void>;
+}
+
+function startFakeSmtp(
+  opts: {
+    /** EHLO capability lines (after the greeting line) */
+    caps?: string[];
+    /** first matching prefix wins; the value is written verbatim */
+    reply?: Array<[string, string]>;
+  } = {},
+): Promise<FakeSmtp> {
+  const log: string[] = [];
+  const mail: string[] = [];
+  const caps = opts.caps ?? ['SIZE 10240000'];
+  const sockets = new Set<net.Socket>();
+
+  const server = net.createServer((sock) => {
+    sockets.add(sock);
+    sock.on('error', () => {});
+    let buf = '';
+    let inData = false;
+    let dataBuf = '';
+    const write = (s: string): void => void sock.write(s + '\r\n');
+
+    const handle = (line: string): void => {
+      for (const [prefix, forced] of opts.reply ?? []) {
+        if (line.toUpperCase().startsWith(prefix.toUpperCase())) return write(forced);
+      }
+      const upper = line.toUpperCase();
+      if (upper.startsWith('EHLO')) {
+        write('250-relay.test at your service');
+        for (const [i, c] of caps.entries()) write(i === caps.length - 1 ? `250 ${c}` : `250-${c}`);
+        return;
+      }
+      if (upper.startsWith('AUTH PLAIN')) return write('235 2.7.0 Authentication successful');
+      if (upper.startsWith('MAIL FROM') || upper.startsWith('RCPT TO')) return write('250 2.1.0 Ok');
+      if (upper.startsWith('DATA')) {
+        inData = true;
+        return write('354 End data with <CR><LF>.<CR><LF>');
+      }
+      if (upper.startsWith('QUIT')) {
+        write('221 2.0.0 Bye');
+        sock.end();
+        return;
+      }
+      write('502 5.5.2 Command not implemented');
+    };
+
+    write('220 relay.test ESMTP ready');
+    sock.on('data', (chunk) => {
+      buf += chunk.toString('utf8');
+      for (;;) {
+        const i = buf.indexOf('\r\n');
+        if (i < 0) break;
+        const line = buf.slice(0, i);
+        buf = buf.slice(i + 2);
+        if (inData) {
+          if (line === '.') {
+            inData = false;
+            mail.push(dataBuf);
+            dataBuf = '';
+            write('250 2.0.0 Ok: queued as FAKE1');
+          } else {
+            dataBuf += line + '\r\n';
+          }
+          continue;
+        }
+        log.push(line);
+        handle(line);
+      }
+    });
+  });
+
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      resolve({
+        port: (server.address() as AddressInfo).port,
+        log,
+        mail,
+        close: () =>
+          new Promise((done) => {
+            for (const s of sockets) s.destroy();
+            server.close(() => done());
+          }),
+      });
+    });
+  });
+}
+
 // ---------- integration: GET/PUT /delivery-config, POST .../test-telegram ----------
 describe('delivery-config API', () => {
   let db: DB;
@@ -232,14 +351,29 @@ describe('delivery-config API', () => {
     expect(
       (await app.inject({ method: 'POST', url: '/delivery-config/test-telegram', payload: { chatId: 'x' } })).statusCode,
     ).toBe(401);
+    // The two newer self-tests spend a stored credential, so they are the same
+    // class of route and must be behind the same token.
+    expect((await app.inject({ method: 'POST', url: '/delivery-config/test-slack' })).statusCode).toBe(401);
+    expect(
+      (await app.inject({ method: 'POST', url: '/delivery-config/test-smtp', payload: { to: 'a@b.test' } })).statusCode,
+    ).toBe(401);
   });
 
+  // INTENT: code does return telegram/webhook/slack/smtp from
+  // readDeliveryConfigStatus / check expects toEqual({telegram, webhook}) —
+  // an exhaustive shape assertion that predates the two new channels / spec
+  // says the T-310 wiring contract (delivery lane snippet 3) adds `slack` and
+  // `smtp` to this response. Resolved in the spec's favour by EXTENDING the
+  // expected object — still `toEqual`, not `toMatchObject`, so the assertion
+  // stays exhaustive and a fifth channel appearing here would still fail it.
   it('GET with no creds configured', async () => {
     const res = await app.inject(auth({ method: 'GET', url: '/delivery-config' }));
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({
       telegram: { configured: false, botTokenMasked: null },
       webhook: { configured: false },
+      slack: { configured: false, webhookUrlMasked: null },
+      smtp: { configured: false, endpointMasked: null, from: null },
     });
   });
 
@@ -365,6 +499,273 @@ describe('delivery-config API', () => {
       expect(body.error).toContain('[redacted]');
       expect(body.error).not.toContain(TEST_TOKEN);
       expect(JSON.stringify(body)).not.toContain(TEST_TOKEN);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Slack incoming webhook + SMTP relay (T-310), wired the same way as the
+  // bot token: the credential lands in the 0600 file, GET returns only a
+  // mask, and the test-send route reports the provider's own refusal rather
+  // than a generic failure. The two channels differ in exactly one way that
+  // shows up at the route boundary — a Slack incoming webhook already names
+  // its destination, so test-slack takes no body, while an email needs a
+  // recipient.
+  // -------------------------------------------------------------------------
+  describe('PUT /delivery-config — Slack webhook URL', () => {
+    const HOOK = 'https://hooks.slack.com/services/T01ABCDEF/B02GHIJKL/ZzYyXxWwVvUuTtSsRrQq';
+
+    it('stores the URL at 0600 and reports it masked — no path segment whole', async () => {
+      const put = await app.inject(auth({ method: 'PUT', url: '/delivery-config', payload: { slackWebhookUrl: HOOK } }));
+      expect(put.statusCode).toBe(200);
+      expect(put.json().slack.configured).toBe(true);
+
+      const filePath = path.join(dir, 'delivery-creds.json');
+      expect(statSync(filePath).mode & 0o777).toBe(0o600);
+      expect(JSON.parse(readFileSync(filePath, 'utf8')).slackWebhookUrl).toBe(HOOK);
+
+      const body = (await app.inject(auth({ method: 'GET', url: '/delivery-config' }))).json();
+      expect(body.slack.webhookUrlMasked).toContain('hooks.slack.com');
+      // The path IS the credential, so no segment of it may be readable.
+      expect(body.slack.webhookUrlMasked).not.toContain('ZzYyXxWwVvUuTtSsRrQq');
+      expect(body.slack.webhookUrlMasked).not.toContain('B02GHIJKL');
+      expect(JSON.stringify(body)).not.toContain(HOOK);
+    });
+
+    it('refuses an http:// webhook with 422 and leaves the stored one alone', async () => {
+      const res = await app.inject(
+        auth({ method: 'PUT', url: '/delivery-config', payload: { slackWebhookUrl: 'http://hooks.slack.com/services/a/b/ccccccccc' } }),
+      );
+      expect(res.statusCode).toBe(422);
+      const body = (await app.inject(auth({ method: 'GET', url: '/delivery-config' }))).json();
+      expect(body.slack.configured).toBe(true); // the https one from the previous test survived
+    });
+
+    it('refuses a value that is not a URL at all with 422', async () => {
+      const res = await app.inject(auth({ method: 'PUT', url: '/delivery-config', payload: { slackWebhookUrl: 'T01ABCDEF/B02GHIJKL' } }));
+      expect(res.statusCode).toBe(422);
+    });
+
+    it('records set/cleared in the audit log and never the URL itself', () => {
+      const rows = db
+        .prepare("SELECT detail_json FROM audit_log WHERE action = 'delivery-config.update' ORDER BY at DESC, rowid DESC LIMIT 20")
+        .all() as Array<{ detail_json: string }>;
+      const details = rows.map((r) => r.detail_json);
+      expect(details.length).toBeGreaterThan(0);
+      expect(details.some((d) => JSON.parse(d).slackWebhookUrl === 'set')).toBe(true);
+      for (const d of details) {
+        expect(d).not.toContain(HOOK);
+        expect(d).not.toContain('ZzYyXxWwVvUuTtSsRrQq');
+      }
+    });
+
+    it('PUT null clears it', async () => {
+      const put = await app.inject(auth({ method: 'PUT', url: '/delivery-config', payload: { slackWebhookUrl: null } }));
+      expect(put.statusCode).toBe(200);
+      expect(put.json().slack).toEqual({ configured: false, webhookUrlMasked: null });
+    });
+  });
+
+  describe('POST /delivery-config/test-slack', () => {
+    const HOOK = 'https://hooks.slack.com/services/T09ZZZZZZ/B08YYYYYY/QqWwEeRrTtYyUuIiOoPp';
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    /** The Slack channel talks to `fetch`; an https loopback stub would need a keypair. */
+    function stubFetch(impl: () => Promise<unknown> | never): ReturnType<typeof vi.fn> {
+      const fn = vi.fn(impl as () => Promise<unknown>);
+      vi.stubGlobal('fetch', fn);
+      return fn;
+    }
+
+    it('takes no body at all — the credential already names the channel', async () => {
+      await app.inject(auth({ method: 'PUT', url: '/delivery-config', payload: { slackWebhookUrl: HOOK } }));
+      const fetchMock = stubFetch(async () => ({ ok: true, status: 200, text: async () => 'ok' }));
+      const res = await app.inject(auth({ method: 'POST', url: '/delivery-config/test-slack' }));
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: true });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0] as [string, { method: string; body: string }];
+      expect(url).toBe(HOOK);
+      expect(init.method).toBe('POST');
+      expect(JSON.parse(init.body).text).toBe('Clockwork test message — this webhook can reach this channel.');
+    });
+
+    it('ok:false with no webhook configured, without touching the network', async () => {
+      await app.inject(auth({ method: 'PUT', url: '/delivery-config', payload: { slackWebhookUrl: null } }));
+      const fetchMock = stubFetch(async () => ({ ok: true, status: 200, text: async () => 'ok' }));
+      const res = await app.inject(auth({ method: 'POST', url: '/delivery-config/test-slack' }));
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: false, error: 'no slack webhook url configured' });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("surfaces Slack's own refusal text, truncated, with the URL never in it", async () => {
+      await app.inject(auth({ method: 'PUT', url: '/delivery-config', payload: { slackWebhookUrl: HOOK } }));
+      stubFetch(async () => ({ ok: false, status: 403, text: async () => 'invalid_token' }));
+      const res = await app.inject(auth({ method: 'POST', url: '/delivery-config/test-slack' }));
+      const body = res.json();
+      expect(body.ok).toBe(false);
+      expect(body.error).toBe('invalid_token');
+      expect(body.error.length).toBeLessThanOrEqual(200);
+      expect(JSON.stringify(body)).not.toContain(HOOK);
+    });
+
+    // Measured, not assumed: SlackChannel.post already redacts before it
+    // throws, so deleting the route's own `.split(url).join('[redacted]')`
+    // leaves this green (verified by mutation). What this test pins is the
+    // OUTCOME — the response body never carries the webhook URL — not which
+    // of the two layers produced it. The route's scrub stays for the same
+    // belt-and-braces reason the Telegram route has one.
+    it('the response never carries the webhook URL, even when the transport error quotes it', async () => {
+      await app.inject(auth({ method: 'PUT', url: '/delivery-config', payload: { slackWebhookUrl: HOOK } }));
+      stubFetch(() => {
+        throw new Error(`request to ${HOOK} failed, reason: ECONNREFUSED`);
+      });
+      const res = await app.inject(auth({ method: 'POST', url: '/delivery-config/test-slack' }));
+      const body = res.json();
+      expect(body.ok).toBe(false);
+      expect(body.error).toContain('[redacted]');
+      expect(body.error).not.toContain('QqWwEeRrTtYyUuIiOoPp');
+      expect(JSON.stringify(body)).not.toContain(HOOK);
+    });
+  });
+
+  describe('PUT /delivery-config — SMTP relay', () => {
+    const SMTP_URL = 'smtp://clockwork%40example.com:sup3r-s3cret@smtp.example.com:2525';
+
+    it('stores the URL at 0600 and reports an endpoint without the password', async () => {
+      const put = await app.inject(
+        auth({ method: 'PUT', url: '/delivery-config', payload: { smtpUrl: SMTP_URL, smtpFrom: 'clockwork@example.com' } }),
+      );
+      expect(put.statusCode).toBe(200);
+      const body = put.json();
+      expect(body.smtp.configured).toBe(true);
+      expect(body.smtp.endpointMasked).toBe('smtp://clockwork@example.com@smtp.example.com:2525');
+      expect(body.smtp.from).toBe('clockwork@example.com');
+      expect(body.smtp.endpointMasked).not.toContain('sup3r-s3cret');
+      expect(JSON.stringify(body)).not.toContain('sup3r-s3cret');
+
+      const filePath = path.join(dir, 'delivery-creds.json');
+      expect(statSync(filePath).mode & 0o777).toBe(0o600);
+      expect(JSON.parse(readFileSync(filePath, 'utf8')).smtpUrl).toBe(SMTP_URL);
+    });
+
+    it('refuses a non-smtp scheme with 422', async () => {
+      const res = await app.inject(auth({ method: 'PUT', url: '/delivery-config', payload: { smtpUrl: 'https://smtp.example.com:2525' } }));
+      expect(res.statusCode).toBe(422);
+    });
+
+    it('refuses a from address that is not an email with 422', async () => {
+      const res = await app.inject(auth({ method: 'PUT', url: '/delivery-config', payload: { smtpFrom: 'postmaster' } }));
+      expect(res.statusCode).toBe(422);
+    });
+
+    it('never puts the SMTP password in the audit log', () => {
+      const rows = db
+        .prepare("SELECT detail_json FROM audit_log WHERE action = 'delivery-config.update' ORDER BY at DESC, rowid DESC LIMIT 30")
+        .all() as Array<{ detail_json: string }>;
+      expect(rows.length).toBeGreaterThan(0);
+      expect(rows.some((r) => JSON.parse(r.detail_json).smtpUrl === 'set')).toBe(true);
+      for (const r of rows) expect(r.detail_json).not.toContain('sup3r-s3cret');
+    });
+
+    it('PUT null clears the relay and the from address independently', async () => {
+      const cleared = await app.inject(auth({ method: 'PUT', url: '/delivery-config', payload: { smtpFrom: null } }));
+      expect(cleared.json().smtp).toEqual({
+        configured: true,
+        endpointMasked: 'smtp://clockwork@example.com@smtp.example.com:2525',
+        from: null,
+      });
+      const gone = await app.inject(auth({ method: 'PUT', url: '/delivery-config', payload: { smtpUrl: null } }));
+      expect(gone.json().smtp).toEqual({ configured: false, endpointMasked: null, from: null });
+    });
+  });
+
+  describe('POST /delivery-config/test-smtp', () => {
+    it('422 on a missing or malformed recipient', async () => {
+      expect((await app.inject(auth({ method: 'POST', url: '/delivery-config/test-smtp', payload: {} }))).statusCode).toBe(422);
+      expect(
+        (await app.inject(auth({ method: 'POST', url: '/delivery-config/test-smtp', payload: { to: 'not-an-address' } }))).statusCode,
+      ).toBe(422);
+    });
+
+    it('ok:false with no relay configured', async () => {
+      await app.inject(auth({ method: 'PUT', url: '/delivery-config', payload: { smtpUrl: null } }));
+      const res = await app.inject(auth({ method: 'POST', url: '/delivery-config/test-smtp', payload: { to: 'dana@example.com' } }));
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: false, error: 'no smtp url configured' });
+    });
+
+    it('ok:true against a real relay, which received the fixed test body', async () => {
+      const relay = await startFakeSmtp();
+      try {
+        await app.inject(
+          auth({
+            method: 'PUT',
+            url: '/delivery-config',
+            payload: { smtpUrl: `smtp://127.0.0.1:${relay.port}`, smtpFrom: 'clockwork@example.com' },
+          }),
+        );
+        const res = await app.inject(auth({ method: 'POST', url: '/delivery-config/test-smtp', payload: { to: 'dana@example.com' } }));
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual({ ok: true });
+        expect(relay.log).toContain('MAIL FROM:<clockwork@example.com>');
+        expect(relay.log).toContain('RCPT TO:<dana@example.com>');
+        expect(relay.mail.length).toBe(1);
+        // The body is base64 UTF-8 (every Clockwork message opens with an emoji).
+        const decoded = Buffer.from(relay.mail[0]!.split('\r\n\r\n')[1]!.replace(/\r\n/g, ''), 'base64').toString('utf8');
+        expect(decoded).toContain('Clockwork test message — your SMTP relay accepted this mail.');
+      } finally {
+        await relay.close();
+      }
+    });
+
+    it("surfaces the relay's own rejection text", async () => {
+      const relay = await startFakeSmtp({ reply: [['RCPT TO', '550 5.1.1 <dana@example.com>: Recipient address rejected']] });
+      try {
+        await app.inject(
+          auth({
+            method: 'PUT',
+            url: '/delivery-config',
+            payload: { smtpUrl: `smtp://127.0.0.1:${relay.port}`, smtpFrom: 'clockwork@example.com' },
+          }),
+        );
+        const res = await app.inject(auth({ method: 'POST', url: '/delivery-config/test-smtp', payload: { to: 'dana@example.com' } }));
+        expect(res.statusCode).toBe(200);
+        const body = res.json();
+        expect(body.ok).toBe(false);
+        expect(body.error).toContain('Recipient address rejected');
+        expect(body.error.length).toBeLessThanOrEqual(200);
+      } finally {
+        await relay.close();
+      }
+    });
+
+    it('never returns the relay password, even when the relay refuses the login', async () => {
+      const relay = await startFakeSmtp({ caps: ['SIZE 10240000', 'AUTH PLAIN'], reply: [['AUTH PLAIN', '535 5.7.8 Error: authentication failed']] });
+      try {
+        await app.inject(
+          auth({
+            method: 'PUT',
+            url: '/delivery-config',
+            // ?allowInsecureAuth=1 is what a loopback relay needs; without it
+            // the client refuses to send credentials in the clear at all.
+            payload: {
+              smtpUrl: `smtp://clockwork%40example.com:sup3r-s3cret@127.0.0.1:${relay.port}?allowInsecureAuth=1`,
+              smtpFrom: 'clockwork@example.com',
+            },
+          }),
+        );
+        const res = await app.inject(auth({ method: 'POST', url: '/delivery-config/test-smtp', payload: { to: 'dana@example.com' } }));
+        const body = res.json();
+        expect(body.ok).toBe(false);
+        expect(body.error).toContain('authentication failed');
+        expect(JSON.stringify(body)).not.toContain('sup3r-s3cret');
+      } finally {
+        await relay.close();
+      }
     });
   });
 });

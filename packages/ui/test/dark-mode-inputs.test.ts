@@ -36,6 +36,15 @@ describe('dark-mode themed input selector (styles.css)', () => {
     expect(el.matches(selector)).toBe(true);
   });
 
+  // Same class of miss as `password`: SettingsView's SMTP "From address" and
+  // "Send test email to" fields are type='email' (browser-validated), and an
+  // unlisted type is the light-grey box this rule exists to prevent.
+  it('covers email inputs (e.g. SettingsView SMTP From address / test recipient)', () => {
+    const el = document.createElement('input');
+    el.setAttribute('type', 'email');
+    expect(el.matches(selector)).toBe(true);
+  });
+
   it('covers typeless inputs (e.g. AgentPicker search box, SettingsView ICS URL/label)', () => {
     const el = document.createElement('input');
     expect(el.hasAttribute('type')).toBe(false);

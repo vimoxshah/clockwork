@@ -574,36 +574,49 @@ Test: `packages/daemon/test/proof-of-work.test.ts`.
 
 ## Performance note (T-307 bench)
 
-`packages/daemon/test/workforce-bench.test.ts` measures F10/F11 (above) and
-the pre-existing `/calendar` route under a seeded, deterministic 5,000-run
-corpus. All numbers on this page and in `plan/STATUS.md` were captured on an
-Apple M4 MacBook Pro (10 cores, 16GB, Node v24.13.1) — **not** on the base M1
-Air that `plan/05-execution-plan.md` names as T-307's acceptance machine.
+`packages/daemon/test/workforce-bench.test.ts` measures F10/F11 (above) and the
+pre-existing `/calendar` route under a seeded, deterministic 5,000-run corpus;
+`packages/daemon/test/calendar-aggregate-bench.test.ts` measures the per-day
+fold against the event-level view on one corpus in one process. All numbers on
+this page and in `plan/STATUS.md` were captured on an Apple M4 MacBook Pro
+(10 cores, 16GB, Node v24.13.1) — **not** on the base M1 Air that
+`plan/05-execution-plan.md` names as T-307's acceptance machine. Nothing has
+been measured on the acceptance machine at all.
 
-**The bench measures by default and only asserts on request.** Every
-wall-clock bound in that file goes through `assertLatency`
+**The bench measures by default and only asserts on request.** Every wall-clock
+bound in those files goes through `assertLatency`
 (`packages/daemon/test/helpers/bench-gate.ts`): during a normal `pnpm test` it
 prints the number and the verdict against the bound and does not fail; with
-`CLOCKWORK_BENCH_ASSERT=1` it asserts. Correctness assertions — corpus size,
-row counts, HTTP status, response shape — are never gated. One session on
-2026-09-06 is the whole argument: six gated runs of this bench, one laptop,
-one commit, 90 minutes, split three red and three green. The red runs came at
-`uptime` load averages of 12.5–27.1, the green ones at 7.4–7.9: machine load
-is the only variable that moved. The default `pnpm test` was green
-across all 54 files in both conditions. A red build that means "your laptop
-was busy" is worse than no build signal at all.
+`CLOCKWORK_BENCH_ASSERT=1` it asserts. Correctness assertions — corpus size, row
+counts, payload bytes, HTTP status, response shape — are never gated. One
+session on 2026-09-06 is the whole argument: six gated runs of the workforce
+bench, one laptop, one commit, 90 minutes, split three red and three green. The
+red runs came at `uptime` load averages of 12.5–27.1, the green ones at 7.4–7.9:
+machine load was the only variable that moved. The default `pnpm test` was green
+in both conditions, across all 54 files the suite held at that commit. A red
+build that means "your laptop was busy" is worse than no build signal at all.
 
-T-113's FTS numbers cleared their 100ms bound in all ten runs — medians
-3.24–5.58ms with the bench alone, 3.46–27.58ms inside the full suite — so
-hardware is not a live risk there even though the number itself moved 8x.
-T-307's calendar numbers are the opposite: year-view medians of 623.17 /
-684.26 / 579.59ms loaded and 383.93 / 376.56 / 349.59ms quiet, against a
-500ms ceiling — **met in six of ten runs, missed in the other four**, with p95
-above the ceiling in seven of ten (429.41–1163.14ms). An independent
-review run measured 585.49ms, in the loaded band. **No headroom multiple is
-claimed**: an earlier revision of this page read one off the quiet runs alone,
-which is the claim being corrected. Nothing has been measured on the
-acceptance hardware at all. See `plan/STATUS.md` and
-`docs/architecture/scalability.md` for the full breakdown, including the root
-cause of the calendar's cost (RRULE expansion from a synthetic 1970 anchor
-date, not the SQL query).
+**What the T-307 numbers were, and what they are.** In that 2026-09-06 session
+the year-view medians were 623.17 / 684.26 / 579.59ms loaded and 383.93 /
+376.56 / 349.59ms quiet, against a 500ms ceiling — **met in six of ten runs,
+missed in the other four** — with p95 above the ceiling in seven of ten
+(429.41–1163.14ms). An independent review run measured 585.49ms, in the loaded
+band. **No headroom multiple was claimed then and none is claimed now**: an
+earlier revision of this page read one off the quiet runs alone, which is the
+claim that was corrected. Since then the root cause has been removed —
+`recurrence.ts` no longer anchors a `DTSTART`-less RRULE at 1970, so
+`RRule.between()` no longer replays 56 years of occurrences per schedule before
+reaching the window — and the same measurement reads **40.82–42.17ms median,
+52.90–67.14ms p95** (n=15 each) across three full-suite runs on 2026-09-07. The gate has not moved with
+it, because the gate was never about the size of the margin: a wall-clock
+assertion inside the default test command makes the build's colour a property of
+the machine at any margin.
+
+T-113's FTS numbers cleared their 100ms bound in all ten runs of that session —
+medians 3.24–5.58ms with the bench alone, 3.46–27.58ms inside the full suite,
+and 5.81–6.46ms in the three 2026-09-07 runs — so hardware was never a live
+risk there even though the number itself moved 8x on one machine.
+
+See `plan/STATUS.md` (T-307) and `docs/architecture/scalability.md` for the full
+breakdown, including the equivalence testing that had to come with the anchor
+change and the one recurrence shape that still does not terminate.

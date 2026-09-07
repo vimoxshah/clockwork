@@ -15,7 +15,7 @@ import { Switch } from './ui/switch';
 import { AgentPicker } from './AgentPicker';
 import { DateTimePicker } from './ui/datetime-picker';
 import { Badge } from './ui/card';
-import { Zap, FolderGit2, Bot, Wallet, CalendarClock, AlertCircle, GitBranch, Bell } from 'lucide-react';
+import { Zap, FolderGit2, Bot, Wallet, CalendarClock, AlertCircle, GitBranch, Bell, Send } from 'lucide-react';
 import { cn } from '../lib/cn';
 import { FolderBrowserDialog } from './FolderBrowserDialog';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from './ui/dialog';
@@ -47,6 +47,15 @@ export const BUDGET_GUARDS_SURFACE = registerFeatureSurface({
 });
 
 
+/**
+ * How far ahead an ASAP booking is placed. `POST /tasks` refuses a `once`
+ * schedule whose `runAt` is already behind `Date.now()` at validation time, and
+ * the clock moves while the request is in flight, so "now" cannot be sent
+ * literally. Small enough that ASAP still means ASAP: the 30s scheduler sweep
+ * dominates the wait either way.
+ */
+const ASAP_LEAD_MS = 15_000;
+
 function defaultSlot(): Date {
   const d = new Date(Date.now() + 60 * 60_000);
   d.setMinutes(0, 0, 0);
@@ -55,28 +64,39 @@ function defaultSlot(): Date {
 
 /**
  * Assemble the task's `delivery` object (DeliveryConfig, packages/shared/src/schemas.ts)
- * from the composer's Telegram fields. Exported (pure, no component state) so
- * the "unchanged when blank" and group allow-list rules are unit-testable
- * without mounting the composer.
+ * from the composer's per-task delivery fields. Exported (pure, no component
+ * state) so the "unchanged when blank" and group allow-list rules are
+ * unit-testable without mounting the composer.
  *
- * - No chat id: sends exactly `{ osNotify: true }` — the object shipped before
- *   per-task Telegram existed, so existing behaviour is unchanged.
+ * - Nothing filled in: sends exactly `{ osNotify: true }` — the object shipped
+ *   before per-task delivery existed, so existing behaviour is unchanged.
  * - A chat id in a non-group chat: no allow-list needed — there's only one
  *   person on the other end.
  * - A chat id marked as a group: always attaches `allowedUserIds`, even when
  *   the list is empty. An empty list in a group is the honest "refuse every
  *   press" state (ADR-036), not an unset one, so it must be sent, not omitted.
+ * - Slack carries no URL: the incoming-webhook URL is the credential and lives
+ *   in Settings, so the task row only holds the opt-in.
+ * - Email carries recipients only, for the same reason — the relay password is
+ *   a credential and stays in Settings.
+ *
+ * `extra` is a fourth, optional parameter rather than three more positional
+ * ones so the existing three-argument call sites and tests read unchanged.
  */
 export function buildTaskDelivery(
   chatIdRaw: string,
   isGroup: boolean,
   allowedUserIdsRaw: string,
+  extra: { slack?: boolean; emailToRaw?: string } = {},
 ): Record<string, unknown> {
   const chatId = chatIdRaw.trim();
-  if (!chatId) return { osNotify: true };
-  return {
-    osNotify: true,
-    telegram: {
+  const emailTo = (extra.emailToRaw ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const delivery: Record<string, unknown> = { osNotify: true };
+  if (chatId) {
+    delivery.telegram = {
       chatId,
       ...(isGroup
         ? {
@@ -86,8 +106,11 @@ export function buildTaskDelivery(
               .filter(Boolean),
           }
         : {}),
-    },
-  };
+    };
+  }
+  if (extra.slack) delivery.slack = { enabled: true };
+  if (emailTo.length > 0) delivery.email = { to: emailTo };
+  return delivery;
 }
 
 interface ProfileRow {
@@ -158,7 +181,12 @@ export default function ComposerView({
     maxUsd: '2',
     maxTurns: '50',
     timeoutSec: '3600',
-    kind: 'once' as 'once' | 'rrule' | 'queue',
+    // 'asap' is a COMPOSER kind, not a daemon one. It saves as a `once`
+    // schedule a few seconds out; see `submit`. The daemon's own 'queue' kind
+    // is a different thing — the review gate for imported tasks, plan-execute
+    // and repo-jobs — and this option used to reuse it, which is why an "ASAP"
+    // task never ran.
+    kind: 'once' as 'once' | 'rrule' | 'asap',
     runAt: prefill ? new Date(prefill.runAtLocal) : defaultSlot(),
     rruleFreq: 'WEEKLY' as 'DAILY' | 'WEEKLY' | 'MONTHLY',
     rruleByDay: 'MO',
@@ -168,6 +196,8 @@ export default function ComposerView({
     telegramChatId: '',
     telegramIsGroup: false,
     telegramAllowedUserIds: '',
+    slackEnabled: false,
+    emailTo: '',
   }));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -218,8 +248,17 @@ export default function ComposerView({
     let schedule: Record<string, unknown>;
     if (form.kind === 'once') {
       schedule = { kind: 'once', runAt: form.runAt.getTime(), tz: form.tz };
-    } else if (form.kind === 'queue') {
-      schedule = { kind: 'queue', tz: form.tz };
+    } else if (form.kind === 'asap') {
+      // A `queue`-kind row is stored `enabled=0, next_fire=NULL` (repo.ts), so
+      // `Scheduler.tick` — which needs `enabled=1 AND next_fire IS NOT NULL` —
+      // could never fire it, and the calendar skips the kind outright. "ASAP"
+      // therefore sat on the tray forever and only ran when a human pressed
+      // run. A near-future `once` fires on the next 30s sweep, joins the
+      // run-manager's slot queue, and shows up on the calendar.
+      //
+      // The lead is not slack: /tasks rejects `runAt` already in the past, and
+      // the clock moves between building this payload and validating it.
+      schedule = { kind: 'once', runAt: Date.now() + ASAP_LEAD_MS, tz: form.tz };
     } else {
       const [hh, mm] = form.rruleTime.split(':').map(Number);
       if (!Number.isInteger(hh) || !Number.isInteger(mm)) return setError('Pick a valid recurrence time.');
@@ -235,7 +274,10 @@ export default function ComposerView({
       schedule = { kind: 'rrule', rrule, tz: form.tz };
     }
 
-    const delivery = buildTaskDelivery(form.telegramChatId, form.telegramIsGroup, form.telegramAllowedUserIds);
+    const delivery = buildTaskDelivery(form.telegramChatId, form.telegramIsGroup, form.telegramAllowedUserIds, {
+      slack: form.slackEnabled,
+      emailToRaw: form.emailTo,
+    });
 
     setBusy(true);
     try {
@@ -545,7 +587,7 @@ export default function ComposerView({
                 options={[
                   { value: 'once', label: 'One-off' },
                   { value: 'rrule', label: 'Recurring' },
-                  { value: 'queue', label: 'ASAP', title: 'Work the queue as soon as a slot is free' },
+                  { value: 'asap', label: 'ASAP', title: 'Start on the next sweep, then wait only for a free slot' },
                 ]}
               />
 
@@ -627,11 +669,11 @@ export default function ComposerView({
                     </div>
                   </div>
                 )}
-                {form.kind === 'queue' && (
+                {form.kind === 'asap' && (
                   <div className="flex items-start gap-2 text-xs text-muted">
                     <Badge variant="info">ASAP</Badge>
-                    Starts as soon as a concurrency slot <em>and</em> its repo are free — position shown
-                    in the Tasks queue lane.
+                    Books a one-off for the next scheduler sweep (within 30s), then starts as soon as a
+                    concurrency slot <em>and</em> its repo are free — position shown in the Tasks queue lane.
                   </div>
                 )}
               </div>
@@ -686,6 +728,66 @@ export default function ComposerView({
                   )}
                 </div>
               )}
+            </section>
+
+            {/*
+              A separate section from Telegram approvals on purpose — but the
+              reason inverted. Both sections now receive the approval REQUEST:
+              run-manager.ts fans it out through the shared deliverApproval, so
+              the channel list is the one the run REPORT already used. What
+              Telegram alone carries is the DECISION — approve/deny buttons
+              behind an inbound poller. Slack and email can only point at the
+              Inbox, so heading this section "approvals" is still the
+              overclaim, the other way round: it would promise an answer path
+              that is not there.
+
+              Neither field takes a URL or a password. A Slack incoming-webhook
+              URL and an SMTP relay password are credentials, so they live in
+              Settings and never in a task row (DeliveryConfig, schemas.ts).
+            */}
+            <section>
+              <div className="mb-3 flex items-center gap-2">
+                <span className="flex h-6 w-6 items-center justify-center rounded-md bg-surface-active text-dim [&_svg]:h-3.5 [&_svg]:w-3.5">
+                  <Send />
+                </span>
+                <h3 className="text-compact font-semibold">Slack and email (optional)</h3>
+              </div>
+              {/* The decision sentence sits unwrapped on its own source line so
+                  the honesty guard in delivery-channels-ui.test.tsx can pin the
+                  whole sentence instead of a fragment. JSX joins two adjacent
+                  text lines with a single space, so the paragraph still reads
+                  as one — the test asserts that on the DOM as well. */}
+              <p className="mb-2 text-xs text-dim">
+                Where the outcome goes when this task finishes — and where a notice goes if the run
+                stops to ask for your OK.
+                Approving or denying still happens in this app or in Telegram.
+              </p>
+              <div className="flex items-center gap-2">
+                <Switch
+                  id="c-slack"
+                  checked={form.slackEnabled}
+                  onCheckedChange={(v) => setForm({ ...form, slackEnabled: v })}
+                />
+                <Label htmlFor="c-slack" className="mb-0">
+                  Post to Slack
+                </Label>
+              </div>
+              <p className="mt-1 text-xxs text-dim">
+                Uses the workspace webhook from Settings → Notifications &amp; delivery. One webhook
+                posts to one channel, so every task that opts in posts to that same channel.
+              </p>
+              <Label htmlFor="c-email-to" style={{ marginTop: 10 }}>
+                Email to (comma-separated)
+              </Label>
+              <Input
+                id="c-email-to"
+                placeholder="dana@example.com, marcus@example.com"
+                value={form.emailTo}
+                onChange={(e) => setForm({ ...form, emailTo: e.target.value })}
+              />
+              <p className="mt-1 text-xxs text-dim">
+                Plain text, sent through the SMTP relay in Settings. Up to 20 recipients.
+              </p>
             </section>
           </div>
         </CardContent>

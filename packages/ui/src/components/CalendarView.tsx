@@ -1,9 +1,22 @@
 /**
- * Calendar view (T-122): MONTH grid by default, week toggle, real data from
- * GET /calendar (runs + expanded recurring bookings), day selection with a
- * detail panel, event click → detail dialog, overflow handling.
+ * Calendar view (T-122): MONTH grid by default, week and YEAR toggles, real
+ * data from GET /calendar (runs + expanded recurring bookings), day selection
+ * with a detail panel, event click → detail dialog, overflow handling.
+ *
+ * TWO WAYS OF ASKING, AND WHY (S-64)
+ *   Month and week draw NAMED CHIPS, so they need events: `api.calendar()`.
+ *   Year draws 365 cells that only have to carry a count and a colour, and a
+ *   year over 5,000 runs is 5,000 events — so it asks for the per-day fold
+ *   instead: `api.calendarDays()`, ~300 rows. Clicking a day in year mode then
+ *   fetches THAT DAY's events, one local day wide. Aggregate to see the shape
+ *   of the year, detail to read a day: the summary never replaces the runs.
+ *
+ * WHAT THE YEAR VIEW DOES NOT FIX. It is a payload and row-count win, not a
+ * latency win. The daemon's `/calendar` cost is dominated by RRULE expansion
+ * (see the route's own note in packages/daemon/src/api.ts), which both modes
+ * pay in full. A year view is not faster to arrive; it is smaller when it does.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { api } from '../api';
 import { useAsync } from '../useAsync';
 import {
@@ -13,10 +26,34 @@ import {
   todayMidnight,
   type GridCell,
 } from '../calendar';
-import type { CalendarEvent } from '../api';
+import type { CalendarDayT, CalendarDetailT, CalendarEvent, CalendarLimitsT } from '../api';
 
 const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const MAX_PER_CELL = 4;
+const MONTHS_IN_YEAR = 12;
+/** Widest month; short ones render the tail as spacers. */
+const DAYS_IN_WIDEST_MONTH = 31;
+
+type CalMode = 'month' | 'week' | 'year';
+
+const pad2 = (n: number): string => String(n).padStart(2, '0');
+
+/** The `YYYY-MM-DD` key the daemon's per-day fold uses — a LOCAL calendar day. */
+function dayKey(year: number, month: number, day: number): string {
+  return `${year}-${pad2(month + 1)}-${pad2(day)}`;
+}
+
+/**
+ * The last millisecond of the local day containing `ts`.
+ *
+ * Built from calendar fields, not by adding 86_400_000: across a DST change a
+ * day is 23 or 25 hours long, and a fixed-millisecond day would ask for the
+ * wrong window twice a year.
+ */
+function endOfLocalDay(ts: number): number {
+  const d = new Date(ts);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime() - 1;
+}
 
 export interface ComposerPrefill {
   runAtLocal: string;
@@ -30,6 +67,37 @@ function stateClass(state?: string): string {
   if (['running', 'queued', 'preparing', 'finalizing'].includes(state)) return 'st-running';
   if (['waiting_approval', 'awaiting_user'].includes(state)) return 'st-needsyou';
   return 'st-cancelled';
+}
+
+/**
+ * Flatten one detail response into the events a grid cell or a day panel
+ * draws. Shared by the month/week window fetch and by the year view's
+ * single-day fetch, so a run reads the same however it was asked for.
+ */
+function toEvents(data: CalendarDetailT | null): CalendarEvent[] {
+  const out: CalendarEvent[] = [];
+  for (const r of data?.runs ?? []) {
+    const at = r.scheduled_for ?? r.started_at ?? r.ended_at;
+    if (at == null) continue;
+    out.push({
+      kind: 'run',
+      id: r.id,
+      taskId: String(r.task_id),
+      name: r.task_name ?? '(task)',
+      at,
+      state: String(r.state),
+      costUsd: Number(r.cost_usd ?? 0),
+      outcomeReason: r.outcome_reason ?? null,
+    });
+  }
+  for (const b of data?.bookings ?? []) {
+    out.push({ kind: 'booking', id: `b-${b.taskId}-${b.at}`, taskId: b.taskId, name: b.name, at: b.at });
+  }
+  // human events from subscribed ICS calendars (read-only overlay)
+  for (const h of data?.humans ?? []) {
+    out.push({ kind: 'human', id: `h-${h.uid}`, taskId: '', name: h.name, at: h.at, allDay: h.allDay });
+  }
+  return out.sort((a, b) => a.at - b.at);
 }
 
 function timeLabel(ts: number): string {
@@ -50,13 +118,19 @@ export default function CalendarView({
   onBookOnDate: (prefill: { runAtLocal: string }) => void;
   onOpenTask: () => void;
 }): JSX.Element {
-  const [mode, setMode] = useState<'month' | 'week'>(() =>
-    localStorage.getItem('clockwork.calview') === 'week' ? 'week' : 'month',
-  );
+  const [mode, setMode] = useState<CalMode>(() => {
+    const saved = localStorage.getItem('clockwork.calview');
+    return saved === 'week' || saved === 'year' ? saved : 'month';
+  });
   const now = new Date();
   const [view, setView] = useState(() => ({ year: now.getFullYear(), month: now.getMonth() }));
   const [weekAnchorTs, setWeekAnchorTs] = useState(() => todayMidnight());
-  const [selectedTs, setSelectedTs] = useState<number | null>(() => todayMidnight());
+  // Year mode opens with NOTHING selected, on purpose: the year is one
+  // aggregate request, and pre-selecting today would fire a second,
+  // event-level request for a day the reader never asked about.
+  const [selectedTs, setSelectedTs] = useState<number | null>(() =>
+    localStorage.getItem('clockwork.calview') === 'year' ? null : todayMidnight(),
+  );
   const [detailEvent, setDetailEvent] = useState<CalendarEvent | null>(null);
 
   /**
@@ -78,6 +152,14 @@ export default function CalendarView({
 
   // visible window: generous padding around the current view
   const range = useMemo(() => {
+    if (mode === 'year') {
+      // The whole calendar year, edge to edge. Built from calendar fields so
+      // the window is exactly the year the header names in every zone.
+      return {
+        from: new Date(view.year, 0, 1).getTime(),
+        to: new Date(view.year + 1, 0, 1).getTime() - 1,
+      };
+    }
     if (mode === 'month') {
       const first = new Date(view.year, view.month, 1);
       const start = new Date(first);
@@ -87,55 +169,64 @@ export default function CalendarView({
     return { from: weekStartTs - 86_400_000, to: weekStartTs + 8 * 86_400_000 };
   }, [mode, view, weekStartTs]);
 
+  // Exactly one of these two ever hits the network; the other resolves null.
+  // Month and week need events for their named chips; a year needs counts.
   const cal = useAsync(
-    () => api.calendar(range.from, range.to),
-    [range.from, range.to, version],
+    () => (mode === 'year' ? Promise.resolve(null) : api.calendar(range.from, range.to)),
+    [mode, range.from, range.to, version],
   );
+  const yearDays = useAsync(
+    () => (mode === 'year' ? api.calendarDays(range.from, range.to) : Promise.resolve(null)),
+    [mode, range.from, range.to, version],
+  );
+  // The year view's detail half: one local day, fetched only once a reader
+  // picks a day. This is what keeps "click a day and see its runs" true when
+  // the grid itself only ever received counts.
+  const dayDetail = useAsync(
+    () =>
+      mode === 'year' && selectedTs != null
+        ? api.calendar(selectedTs, endOfLocalDay(selectedTs))
+        : Promise.resolve(null),
+    [mode, selectedTs, version],
+  );
+
+  /** Whichever request draws the grid in the current mode. */
+  const source = mode === 'year' ? yearDays : cal;
+  const limits: CalendarLimitsT | undefined =
+    (mode === 'year' ? yearDays.data?.limits : cal.data?.limits) ?? undefined;
 
   const eventsByDay = useMemo(() => {
     const map = new Map<number, CalendarEvent[]>();
-    const push = (e: CalendarEvent): void => {
+    for (const e of toEvents(cal.data)) {
       const dayTs = todayMidnight(new Date(e.at));
       const arr = map.get(dayTs) ?? [];
       arr.push(e);
       map.set(dayTs, arr);
-    };
-    for (const r of cal.data?.runs ?? []) {
-      const at = (r.scheduled_for ?? r.started_at ?? r.ended_at) as number | null;
-      if (at == null) continue;
-      push({
-        kind: 'run',
-        id: r.id as string,
-        taskId: String(r.task_id),
-        name: r.task_name ?? '(task)',
-        at: at as number,
-        state: String(r.state),
-        costUsd: Number(r.cost_usd ?? 0),
-        outcomeReason: (r.outcome_reason as string) ?? null,
-      });
-    }
-    for (const b of cal.data?.bookings ?? []) {
-      push({ kind: 'booking', id: `b-${b.taskId}-${b.at}`, taskId: b.taskId, name: b.name, at: b.at });
-    }
-    // human events from subscribed ICS calendars (read-only overlay)
-    for (const h of (cal.data as any)?.humans ?? []) {
-      push({ kind: 'human', id: `h-${h.uid}`, taskId: '', name: h.name, at: h.at, allDay: h.allDay });
     }
     for (const [, arr] of map) arr.sort((a, b) => a.at - b.at);
     return map;
   }, [cal.data]);
 
-  const setModePersist = (m: 'month' | 'week'): void => {
+  const setModePersist = (m: CalMode): void => {
     localStorage.setItem('clockwork.calview', m);
     setMode(m);
+    // Only the YEAR transitions touch the selection. Year opens with nothing
+    // picked so it does not fetch a day nobody clicked, and leaving year needs
+    // a day again because month and week always show a panel. A month<->week
+    // switch keeps whatever the reader had selected, exactly as it did before
+    // year mode existed — `mode` here is still the mode being left.
+    if (m === 'year') setSelectedTs(null);
+    else if (mode === 'year') setSelectedTs(todayMidnight());
   };
 
   const goPrev = (): void => {
-    if (mode === 'month') setView((v) => shiftMonth(v.year, v.month, -1));
+    if (mode === 'year') setView((v) => ({ ...v, year: v.year - 1 }));
+    else if (mode === 'month') setView((v) => shiftMonth(v.year, v.month, -1));
     else setWeekAnchorTs((t) => t - 7 * 86_400_000);
   };
   const goNext = (): void => {
-    if (mode === 'month') setView((v) => shiftMonth(v.year, v.month, 1));
+    if (mode === 'year') setView((v) => ({ ...v, year: v.year + 1 }));
+    else if (mode === 'month') setView((v) => shiftMonth(v.year, v.month, 1));
     else setWeekAnchorTs((t) => t + 7 * 86_400_000);
   };
   const goToday = (): void => {
@@ -146,21 +237,40 @@ export default function CalendarView({
   };
 
   const title =
-    mode === 'month'
-      ? buildMonthGrid(now, view.year, view.month).title
-      : `${dayLabel(weekStartTs)} – ${dayLabel(weekEndTs)}`;
+    mode === 'year'
+      ? String(view.year)
+      : mode === 'month'
+        ? buildMonthGrid(now, view.year, view.month).title
+        : `${dayLabel(weekStartTs)} – ${dayLabel(weekEndTs)}`;
 
   const cells: GridCell[] =
     mode === 'month' ? buildMonthGrid(new Date(), view.year, view.month).cells : weekDays;
 
-  const selectedEvents = selectedTs != null ? eventsByDay.get(selectedTs) ?? [] : [];
+  // In year mode the panel reads its own single-day fetch; the grid never had
+  // the events to give it.
+  //
+  // The filter is not redundant. `/calendar` admits a run when ANY of
+  // `scheduled_for`/`started_at`/`ended_at` lands in the window, so a
+  // one-day-wide request legitimately returns a run that STRADDLED midnight —
+  // scheduled 23:55 yesterday, ended 00:05 today. The aggregate files that run
+  // under `COALESCE(scheduled_for, ...)`, i.e. yesterday, and counts it in
+  // yesterday's cell. Without this filter the cell would say four items and
+  // the panel would then list five, one of them stamped the previous night.
+  // Same rule as `eventsByDay` above, so both panels agree with their cells.
+  const selectedEvents =
+    mode === 'year'
+      ? toEvents(dayDetail.data).filter(
+          (e) => selectedTs != null && todayMidnight(new Date(e.at)) === selectedTs,
+        )
+      : selectedTs != null
+        ? eventsByDay.get(selectedTs) ?? []
+        : [];
 
   const bookOn = (ts: number): void => {
     const d = new Date(ts);
     d.setHours(d.getHours() + 1, 0, 0, 0);
-    const p2 = (n: number): string => String(n).padStart(2, '0');
     onBookOnDate({
-      runAtLocal: `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}T${p2(d.getHours())}:00`,
+      runAtLocal: `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:00`,
     });
   };
 
@@ -173,6 +283,9 @@ export default function CalendarView({
           </button>
           <button role="tab" aria-selected={mode === 'week'} className={mode === 'week' ? 'on' : ''} onClick={() => setModePersist('week')}>
             Week
+          </button>
+          <button role="tab" aria-selected={mode === 'year'} className={mode === 'year' ? 'on' : ''} onClick={() => setModePersist('year')}>
+            Year
           </button>
         </div>
         <button className="btn small" onClick={goPrev} aria-label="Previous">
@@ -191,26 +304,28 @@ export default function CalendarView({
         </button>
       </div>
 
-      {cal.loading && (
+      {source.loading && (
         <div className="state-line">
           <span className="spinner" /> Loading calendar…
         </div>
       )}
-      {cal.error && (
+      {source.error && (
         <div className="error-banner" role="alert">
-          Couldn’t load the calendar: {cal.error}
+          Couldn’t load the calendar: {source.error}
           <div>
-            <button className="btn small" style={{ marginTop: 8 }} onClick={cal.reload}>
+            <button className="btn small" style={{ marginTop: 8 }} onClick={source.reload}>
               Retry
             </button>
           </div>
         </div>
       )}
 
-      {!cal.loading && !cal.error && (
+      <TruncationNotice limits={limits} />
+
+      {!source.loading && !source.error && (
         <div className={`cal-wrap ${selectedTs == null ? 'no-side' : ''}`}>
           <div>
-            <div className="cal-grid" style={mode === 'week' ? { display: 'none' } : undefined} aria-hidden={mode !== 'month'}>
+            <div className="cal-grid" style={mode !== 'month' ? { display: 'none' } : undefined} aria-hidden={mode !== 'month'}>
               {DOW.map((d) => (
                 <div key={d} className="cal-dow">
                   {d}
@@ -263,16 +378,37 @@ export default function CalendarView({
                 })}
               </div>
             )}
+
+            {mode === 'year' && (
+              <YearGrid
+                year={view.year}
+                days={yearDays.data?.days ?? []}
+                selectedTs={selectedTs}
+                onSelect={setSelectedTs}
+              />
+            )}
           </div>
 
           {selectedTs != null && (
             <aside className="day-panel">
               <h3>{new Date(selectedTs).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</h3>
               <div className="sub">
-                {selectedEvents.length === 0
-                  ? 'Nothing scheduled.'
-                  : `${selectedEvents.length} item${selectedEvents.length > 1 ? 's' : ''}`}
+                {mode === 'year' && dayDetail.loading
+                  ? 'Loading that day…'
+                  : selectedEvents.length === 0
+                    ? 'Nothing scheduled.'
+                    : `${selectedEvents.length} item${selectedEvents.length > 1 ? 's' : ''}`}
               </div>
+              {mode === 'year' && dayDetail.error && (
+                <div className="error-banner" role="alert">
+                  Couldn’t load that day: {dayDetail.error}
+                  <div>
+                    <button className="btn small" style={{ marginTop: 8 }} onClick={dayDetail.reload}>
+                      Retry
+                    </button>
+                  </div>
+                </div>
+              )}
               {selectedEvents.map((ev) => (
                 <div key={ev.id} className="ev-row" onClick={() => setDetailEvent(ev)} role="button" tabIndex={0}
                   onKeyDown={(e) => e.key === 'Enter' && setDetailEvent(ev)}>
@@ -301,6 +437,156 @@ export default function CalendarView({
           }}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * The bound, made visible (S-64).
+ *
+ * `/calendar` caps every collection it returns, so a wide window can come back
+ * partial. Saying nothing here would be the worst of both worlds: a reader
+ * would see a complete-looking calendar that is missing runs. The notice names
+ * what arrived, what exists, and what to do about it.
+ *
+ * `limits` and each of its members are optional: a daemon older than the field
+ * answers without it, and then there is nothing honest to say.
+ */
+function TruncationNotice({ limits }: { limits?: CalendarLimitsT }): JSX.Element | null {
+  if (!limits?.truncated) return null;
+  const parts: string[] = [];
+  const say = (c: { returned: number; total: number; truncated: boolean } | undefined, noun: string): void => {
+    if (c?.truncated) parts.push(`${c.returned} of ${c.total} ${noun}`);
+  };
+  say(limits.days, 'days');
+  say(limits.runs, 'runs');
+  say(limits.bookings, 'booked occurrences');
+  say(limits.humans, 'calendar events');
+  return (
+    <p className="hint" role="status" data-testid="calendar-truncated">
+      This window is capped at {limits.rowLimit} rows, so you are seeing {parts.join(', ')}. Narrow
+      the range to see the rest.
+    </p>
+  );
+}
+
+/** Fixed geometry for a year cell — 372 of them have to fit on one screen. */
+const YEAR_CELL: CSSProperties = {
+  padding: 0,
+  width: '100%',
+  height: 17,
+  lineHeight: '17px',
+  fontSize: 10,
+  textAlign: 'center',
+};
+
+/**
+ * Which colour a whole day gets, from its outcome counts.
+ *
+ * WORST-FIRST, deliberately. A day with nine completions and one failure is
+ * drawn as a failure: a summary that averaged the news would hide exactly the
+ * thing a reader opened the year view to find. The class names are the ones
+ * `stateClass()` above puts on a single event, so a year cell and a month chip
+ * mean the same colour.
+ */
+function dayClass(d: CalendarDayT | undefined): string {
+  if (d === undefined) return '';
+  if (d.outcomes.needsYou > 0) return 'st-needsyou';
+  if (d.outcomes.failed > 0) return 'st-failed';
+  if (d.outcomes.running > 0) return 'st-running';
+  if (d.outcomes.completed > 0) return 'st-completed';
+  // `other` is whatever the daemon could not group (today: `scheduled`), and
+  // `stateClass` draws that with the same fallback.
+  if (d.outcomes.cancelled > 0 || d.outcomes.other > 0) return 'st-cancelled';
+  if (d.bookings > 0) return 'booking';
+  if (d.humans > 0) return 'human';
+  return '';
+}
+
+/** What a year cell says out loud — a count is not self-explanatory. */
+function describeDay(d: CalendarDayT | undefined): string {
+  if (d === undefined) return 'nothing scheduled';
+  const parts: string[] = [];
+  if (d.runs > 0) parts.push(`${d.runs} run${d.runs > 1 ? 's' : ''}`);
+  if (d.bookings > 0) parts.push(`${d.bookings} booked`);
+  if (d.humans > 0) parts.push(`${d.humans} calendar event${d.humans > 1 ? 's' : ''}`);
+  if (d.outcomes.failed > 0) parts.push(`${d.outcomes.failed} failed`);
+  if (d.outcomes.needsYou > 0) parts.push(`${d.outcomes.needsYou} waiting on you`);
+  return parts.length > 0 ? parts.join(', ') : 'nothing scheduled';
+}
+
+/**
+ * Twelve rows of day cells, fed by the per-day aggregate (S-64).
+ *
+ * Every cell carries a count and a colour and nothing else — that is the whole
+ * bargain that makes a year view cheap. Clicking one selects the day, and the
+ * panel fetches that day's real events.
+ *
+ * Layout is inline because this component ships no new stylesheet rules; the
+ * COLOURS come from the existing `.cal-event` state classes, so the year grid
+ * cannot drift away from the palette the rest of the calendar uses.
+ */
+function YearGrid({
+  year,
+  days,
+  selectedTs,
+  onSelect,
+}: {
+  year: number;
+  days: CalendarDayT[];
+  selectedTs: number | null;
+  onSelect: (ts: number) => void;
+}): JSX.Element {
+  const byDay = new Map(days.map((d) => [d.day, d]));
+  return (
+    <div className="year-grid" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      {Array.from({ length: MONTHS_IN_YEAR }, (_, m) => {
+        const label = new Date(year, m, 1).toLocaleDateString(undefined, { month: 'short' });
+        const lastDay = new Date(year, m + 1, 0).getDate();
+        return (
+          <div key={m} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span className="cal-dow" style={{ width: 46, padding: 0 }}>
+              {label}
+            </span>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: `repeat(${DAYS_IN_WIDEST_MONTH}, minmax(0, 1fr))`,
+                gap: 3,
+                flex: 1,
+              }}
+            >
+              {Array.from({ length: DAYS_IN_WIDEST_MONTH }, (_, i) => {
+                const dayNum = i + 1;
+                // February's tail: a spacer, not a clickable day that does not exist.
+                if (dayNum > lastDay) return <span key={dayNum} aria-hidden="true" />;
+                const key = dayKey(year, m, dayNum);
+                const row = byDay.get(key);
+                const ts = new Date(year, m, dayNum).getTime();
+                const total = row === undefined ? 0 : row.runs + row.bookings + row.humans;
+                const label = `${new Date(ts).toLocaleDateString()}, ${describeDay(row)}`;
+                return (
+                  <button
+                    key={dayNum}
+                    className={`cal-event ${dayClass(row)}`}
+                    style={{
+                      ...YEAR_CELL,
+                      border: row === undefined ? '1px solid var(--border)' : undefined,
+                      outline: selectedTs === ts ? '2px solid var(--accent)' : undefined,
+                    }}
+                    data-testid={`year-day-${key}`}
+                    title={label}
+                    aria-label={label}
+                    onClick={() => onSelect(ts)}
+                  >
+                    {total > 0 ? total : ''}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

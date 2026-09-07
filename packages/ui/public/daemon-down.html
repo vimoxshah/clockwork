@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Clockwork — daemon not running</title>
+    <style>
+      /* Self-contained on purpose: this page has to render when the daemon
+         that serves the real stylesheet is the thing that is down. No imports,
+         no webfonts, no assets. Palette tracks packages/ui/src/styles.css. */
+      :root {
+        color-scheme: dark;
+        --bg: #0c0e14;
+        --surface: #141824;
+        --fg: #e9ebf3;
+        --muted: #9ba1b6;
+        --dim: #838ba4;
+        --border: #232a3d;
+        --accent: #e8a33d;
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          color-scheme: light;
+          --bg: #f6f7fa;
+          --surface: #ffffff;
+          --fg: #191d27;
+          --muted: #575e70;
+          --dim: #667082;
+          --border: #e2e5ec;
+          --accent: #b57308;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 32px;
+        background: var(--bg);
+        color: var(--fg);
+        font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      }
+      main { width: 100%; max-width: 620px; }
+      .brand {
+        font-size: 12px;
+        letter-spacing: 0.18em;
+        color: var(--dim);
+        margin-bottom: 20px;
+      }
+      .brand b { color: var(--fg); font-weight: 700; }
+      .brand span { color: var(--accent); font-weight: 700; }
+      h1 { font-size: 21px; margin: 0 0 10px; letter-spacing: -0.01em; }
+      p { margin: 0 0 14px; color: var(--muted); }
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 20px 22px;
+      }
+      h2 {
+        font-size: 11px;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+        color: var(--dim);
+        margin: 22px 0 8px;
+      }
+      pre {
+        margin: 0 0 6px;
+        padding: 11px 13px;
+        overflow-x: auto;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        font: 12.5px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: var(--fg);
+      }
+      code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+      pre em { color: var(--accent); font-style: italic; }
+      .note { font-size: 12.5px; color: var(--dim); margin: 0 0 4px; }
+      .status {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin-top: 22px;
+        padding-top: 18px;
+        border-top: 1px solid var(--border);
+        font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: var(--muted);
+      }
+      .dot {
+        width: 8px;
+        height: 8px;
+        flex: none;
+        border-radius: 50%;
+        background: var(--accent);
+        animation: pulse 1.6s ease-in-out infinite;
+      }
+      @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+      @media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
+      button {
+        margin-left: auto;
+        flex: none;
+        padding: 6px 13px;
+        font: 600 12px/1 inherit;
+        font-family: inherit;
+        color: var(--fg);
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        cursor: pointer;
+      }
+      button:hover { border-color: var(--accent); color: var(--accent); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="brand"><b>CLOCK</b><span>WORK</span></div>
+      <div class="card">
+        <h1>The daemon isn't running.</h1>
+        <p>
+          This window is a native frame around Clockwork's local daemon, which serves both the
+          interface and the API on <code>127.0.0.1:4747</code>. Nothing is answering there, so there
+          is nothing to draw — that is what a blank window means.
+        </p>
+        <p class="note">
+          The app bundle does not contain the daemon. It is installed separately, from source.
+        </p>
+
+        <h2>Start it</h2>
+        <pre>cd <em>your-clockwork-checkout</em> &amp;&amp; node packages/daemon/dist/main.js</pre>
+        <p class="note">
+          Or, if you installed the background service: <code>launchctl kickstart -k gui/$(id -u)/com.clockwork.daemon</code>
+        </p>
+
+        <h2>If it starts and then dies</h2>
+        <pre>tail -30 ~/.clockwork/daemon.log.err</pre>
+        <p class="note">
+          A <code>NODE_MODULE_VERSION</code> mismatch there means <code>better-sqlite3</code> was
+          built against a different Node than the one now running it — switching Node versions after
+          install does that. Re-run <code>pnpm install</code> with the Node you start the daemon
+          with. <code>EADDRINUSE</code> means another daemon already holds the port, which is fine.
+        </p>
+
+        <h2>Never installed it?</h2>
+        <pre>git clone https://github.com/vimoxshah/clockwork &amp;&amp; cd clockwork
+pnpm install &amp;&amp; pnpm build
+node packages/daemon/dist/main.js</pre>
+        <p class="note">Needs Node 22 or newer, pnpm, and git.</p>
+
+        <div class="status">
+          <span class="dot" id="dot"></span>
+          <span id="msg">Watching 127.0.0.1:4747…</span>
+          <button id="retry" type="button">Check now</button>
+        </div>
+      </div>
+    </main>
+    <script>
+      // The daemon sets no CORS headers, so a readable cross-origin fetch from
+      // tauri://localhost is impossible. `no-cors` is enough: the answer we
+      // need is "is anything listening", and an opaque response means yes
+      // while a refused connection rejects. Nothing is read off the response.
+      var DAEMON = 'http://127.0.0.1:4747';
+      var msg = document.getElementById('msg');
+      var dot = document.getElementById('dot');
+      var retry = document.getElementById('retry');
+      var checking = false;
+      var tries = 0;
+
+      function probe() {
+        if (checking) return;
+        checking = true;
+        tries++;
+        msg.textContent = 'Checking 127.0.0.1:4747…';
+        fetch(DAEMON + '/health', { mode: 'no-cors', cache: 'no-store' })
+          .then(function () {
+            msg.textContent = 'Daemon is up — loading Clockwork…';
+            dot.style.animation = 'none';
+            window.location.replace(DAEMON);
+          })
+          .catch(function () {
+            checking = false;
+            msg.textContent = 'Not running yet — retrying (' + tries + ')';
+          });
+      }
+
+      retry.addEventListener('click', probe);
+      setInterval(probe, 2000);
+      probe();
+    </script>
+  </body>
+</html>

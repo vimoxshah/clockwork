@@ -39,13 +39,12 @@ import type { Clock } from './clock.js';
 import type { ChildToDaemon } from './runner-protocol.js';
 import { ByokStore, keychainGet } from './byok.js';
 import { buildJobSpec } from './scheduler.js';
-import {
-  channelFor,
-  withRetry,
-  loadDeliveryCreds,
-  formatApprovalText,
-  type ApprovalNotifyPayload,
-} from './delivery.js';
+// `formatApprovalText` is still needed here for the OS notification body —
+// deps.notify() takes a string, not a payload — but no channel adapter is
+// reached from this module any more: delivery-dispatch.ts owns the fan-out
+// (and with it channelFor/withRetry/loadDeliveryCreds) for both directions.
+import { formatApprovalText, type ApprovalNotifyPayload } from './delivery.js';
+import { deliverApproval } from './delivery-dispatch.js';
 
 /** Reachable approvals (ADR-036): where a decision on an approval came from. */
 export type RespondSource = { kind: 'api' } | { kind: 'telegram'; userId: string; chatId: string };
@@ -525,10 +524,19 @@ export class RunManager {
 
   /**
    * Reachable approvals (outbound half, FR-18 sibling): push the permission
-   * request itself to every configured channel, reusing the DeliveryChannel
-   * adapters (delivery.ts) that already carry run-outcome reports. Never
-   * awaited from the permission hold's hot path (see call site); failures are
-   * logged, never surfaced to the run or the decision path (S-43 pattern).
+   * request itself to every configured channel, through the SAME fan-out that
+   * carries run-outcome reports — `deliverApproval` in delivery-dispatch.ts.
+   *
+   * This method used to hold its own copy of that fan-out, hand-wired to
+   * telegram and webhook. Slack and email then shipped into the shared one, so
+   * they carried reports and silently dropped approvals: a task could watch
+   * its reports land in Slack and never learn a run was waiting on it. One
+   * channel list is the fix — a channel added to `selectedChannels` is now
+   * reachable for both directions or neither.
+   *
+   * Never awaited from the permission hold's hot path (see call site); a
+   * failing channel becomes a receipt recorded against the run and is never
+   * surfaced to the run's outcome or the decision path (S-43 pattern).
    */
   private async notifyApprovalRequest(
     runId: string,
@@ -565,37 +573,16 @@ export class RunManager {
     // config currently gates it (see note on DeliveryConfig.osNotify).
     this.deps.notify('approval_requested', `Clockwork: ${spec.taskName} needs you`, text);
 
-    // Telegram/webhook: same per-task DeliveryConfig used for outcome reports.
-    let cfg: { telegram?: { chatId: string }; webhook?: { url: string } } = {};
-    try {
-      cfg = JSON.parse(taskDeliveryJsonOf(this.deps.db, spec.taskId) || '{}');
-    } catch {}
-    const creds = loadDeliveryCreds(this.deps.dataDir);
-    const jobs: Array<Promise<void>> = [];
-    const failed: Array<{ channel: string; error: string | null }> = [];
-    if (cfg.telegram?.chatId) {
-      const ch = channelFor('telegram');
-      if (ch) {
-        const chatId = cfg.telegram.chatId;
-        jobs.push(
-          withRetry(() => ch.sendApproval(payload, chatId, creds)).then((r) => {
-            if (!r.ok) failed.push({ channel: 'telegram', error: r.error });
-          }),
-        );
-      }
-    }
-    if (cfg.webhook?.url) {
-      const ch = channelFor('webhook');
-      if (ch) {
-        const url = cfg.webhook.url;
-        jobs.push(
-          withRetry(() => ch.sendApproval(payload, url, creds)).then((r) => {
-            if (!r.ok) failed.push({ channel: 'webhook', error: r.error });
-          }),
-        );
-      }
-    }
-    await Promise.all(jobs);
+    // Every other channel: the shared fan-out over this task's own
+    // DeliveryConfig — the same row and the same channel list the outcome
+    // report uses. It parses a corrupt row and retries each transport itself,
+    // and it never throws, so there is nothing to guard here.
+    const receipts = await deliverApproval(
+      this.deps.dataDir,
+      taskDeliveryJsonOf(this.deps.db, spec.taskId),
+      payload,
+    );
+    const failed = receipts.filter((r) => !r.ok);
     if (failed.length > 0) {
       this.recordEvent(this.deps.clock.now(), runId, 'note', { approvalNotifyFailed: failed });
     }
