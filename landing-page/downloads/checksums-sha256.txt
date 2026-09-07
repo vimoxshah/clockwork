@@ -1,1 +1,1 @@
-54ee82e450869cbff1386c327021c695d2768a86ec68823c22b490cd25ba169c  Clockwork_0.8.0_aarch64.dmg
+020a36b9dfa0631c4cdc88306eec7cbe6c6e0d9b1d1c6295405fec101a4dbffd  Clockwork_0.9.0_aarch64.dmg
