@@ -482,7 +482,7 @@ footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--i
 <section class="real">
   <div class="wrap">
     <div class="head rv">
-      <h2>This is the app, at version 0.4.0.</h2>
+      <h2>This is the app, at version <span data-ver>0.9.0</span>.</h2>
     </div>
     <div class="grid rv">
       <figure class="c1-8"><img class="shot" src="screens/01-calendar-month-1600.webp" srcset="screens/01-calendar-month-1200.webp 1200w, screens/01-calendar-month-1600.webp 1600w, screens/01-calendar-month-2400.webp 2400w, screens/01-calendar-month-3200.webp 3200w" sizes="(max-width: 900px) calc(100vw - 40px), 803px" width="3200" height="2000" alt="Clockwork month view with recurring agent jobs booked across September" loading="lazy"></figure>
@@ -531,7 +531,7 @@ footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--i
   <div class="wrap">
     <div class="head rv">
       <h2>The spec sheet.</h2>
-      <p class="sub">Everything below ships in version 0.4.0. Where something is still in beta, the row says so.</p>
+      <p class="sub">Everything below ships in version <span data-ver>0.9.0</span>. Where something is still in beta, the row says so.</p>
     </div>
     <dl class="spec rv">
       <div><dt>Engines</dt><dd>Claude Code, Codex CLI, OpenCode and Hermes Agent, on the logins you already have. Switch per task.</dd></div>
@@ -541,10 +541,20 @@ footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--i
       <div><dt>Where it runs</dt><dd>A macOS Seatbelt sandbox around a fresh git worktree, or an ephemeral Docker container with no network by default and CPU, memory and process caps.</dd></div>
       <div><dt>Chains</dt><dd>Sequence agents: scan, fix, test, open a PR. Each stage waits for its upstream and receives that report as <code>{{previous.report}}</code>.</dd></div>
       <div><dt>Budgets</dt><dd>A dollar cap, a turn cap and a wall-clock timeout, enforced by the supervisor outside the model. Cost and reliability analytics by task, provider and day.</dd></div>
-      <div><dt>Approvals</dt><dd>Risky actions pause the run and ask. Silence for two minutes is a no. A plan mode exists for jobs that read untrusted input.</dd></div>
+      <div><dt>Approvals</dt><dd>Risky actions pause the run and ask, and the run holds for the rest of its wall-clock budget rather than a fixed two minutes. Answer from the inbox or from Telegram. A plan mode exists for jobs that read untrusted input.</dd></div>
       <div><dt>Delivery</dt><dd>macOS notifications. Telegram and an HMAC-signed webhook that fronts Slack, Discord, ntfy or anything else are shipped and in beta.</dd></div>
+      <div><dt>Plan, then execute</dt><dd>One booking becomes two runs: the agent plans at a human hour, you approve that specific plan, and only then does the execute half run. Nothing else can start it — not run-now, not re-enabling the task.</dd></div>
+      <div><dt>Shift handoff</dt><dd>A recurring task carries memory between occurrences: what it tried, what blocked it, what to check next. It stops starting cold every morning, and you can add a note yourself.</dd></div>
+      <div><dt>Office hours</dt><dd>Declare when you can answer, and tasks that might need a human defer into those windows instead of asking at 3am. It fails open, so a broken window config delays work rather than silently stopping it.</dd></div>
+      <div><dt>Sentinels</dt><dd>A cheap, frequent check books the expensive run only when it actually trips.</dd></div>
+      <div><dt>Repo-shipped jobs</dt><dd>A repository can ship recommended jobs. You review the security preview and import; the task arrives switched off, and the file cannot carry a permission mode, an engine or a budget, so pointing Clockwork at a hostile repo escalates nothing.</dd></div>
+      <div><dt>Earned autonomy</dt><dd>A profile starts in plan mode and is offered a higher rung after a run of accepted outcomes. Offered, never granted: you accept it, and enrolment is opt-in so nothing you already have is moved without asking.</dd></div>
+      <div><dt>Self-healing</dt><dd>After repeated failures a task books a diagnostic run, and that run's output is a proposal you apply. The agent never edits its own prompt.</dd></div>
+      <div><dt>Timesheets and reviews</dt><dd>Hours worked, spend, accepted outcomes and an effective hourly rate per agent, plus a scorecard per profile. Rows touched by a daemon restart are flagged rather than presented as exact.</dd></div>
+      <div><dt>Proof of work</dt><dd>Export a run report as one redacted, self-contained page you host yourself. Nothing is uploaded anywhere.</dd></div>
+      <div><dt>What is not built</dt><dd>Quiet hours, history retention, container execution and outbound webhook delivery have daemon support and no screen. The capability list inside the app shows no tick for them rather than implying you can use them, and it earns that tick only when a screen registers itself.</dd></div>
       <div><dt>Your data</dt><dd>SQLite in one folder in your home directory. The API listens on loopback only. Thirty days of history on the free tier. Verified at one thousand scheduled tasks.</dd></div>
-      <div><dt>Requires</dt><dd>macOS 14 or newer on Apple silicon, Node 22, and at least one engine CLI on your PATH. The download is 3.4 MB.</dd></div>
+      <div><dt>Requires</dt><dd>macOS 14 or newer on Apple silicon, Node 22, and at least one engine CLI on your PATH. The download is <span data-size>3.6 MB</span>.</dd></div>
     </dl>
   </div>
 </section>
@@ -563,8 +573,9 @@ footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--i
 
 <span class="c"># or by hand: download the DMG, then</span>
 <span class="p">$</span> shasum -a 256 -c checksums-sha256.txt
-<span class="c"># expected for 0.4.0:</span>
-<span class="c"># 75dd370e40412222ad731bd23f9f6fc1200c1af7196914a767639301afd8e93a  Clockwork_0.4.0_aarch64.dmg</span>
+<span class="c"># the checksums file is the source of truth — a hash pasted</span>
+<span class="c"># here would go stale every release and a mismatch would look</span>
+<span class="c"># like tampering when it was only out of date</span>
 <span class="p">$</span> open -a Clockwork</pre>
       </div>
       <div class="c8-12">
@@ -658,7 +669,7 @@ footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--i
           <a class="btn primary dl" href="https://github.com/vimoxshah/clockwork/releases/latest/download/Clockwork_aarch64.dmg" download type="application/octet-stream">Download for Mac</a>
           <a class="btn" href="https://github.com/vimoxshah/clockwork">Read the source</a>
         </div>
-        <p class="fine">Apple silicon, macOS 14 or newer, <span data-size>3.4 MB</span>. Version <span data-ver>0.4.0</span>.</p>
+        <p class="fine">Apple silicon, macOS 14 or newer, <span data-size>3.6 MB</span>. Version <span data-ver>0.9.0</span>.</p>
       </div>
     </div>
   </div>
@@ -700,7 +711,7 @@ footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--i
     </div>
     <div class="ft-bottom">
       <span>&copy; 2026 Vimox Shah. Clockwork is proprietary, source-available software. Free for personal use.</span>
-      <span class="mono">Version <span data-ver>0.4.0</span> for macOS 14 or newer, Apple silicon</span>
+      <span class="mono">Version <span data-ver>0.9.0</span> for macOS 14 or newer, Apple silicon</span>
     </div>
   </div>
 </footer>
@@ -817,8 +828,9 @@ footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--i
     scroller.scrollLeft = Math.max(0, 56 + col * todayIdx - (scroller.clientWidth - 56) / 2 - col / 2);
   }
 
-  /* Keep every download link on the newest DMG. The hard-coded 0.4.0 URL is
-     the fallback when this fetch fails or the API is rate-limited. */
+  /* Keep every download link on the newest DMG. The markup already points at
+     /releases/latest/download/, which GitHub redirects to the current release,
+     so a failed or rate-limited fetch degrades to the right file anyway. */
   if (window.fetch) {
     fetch('https://api.github.com/repos/vimoxshah/clockwork/releases/latest', { headers: { Accept: 'application/vnd.github+json' } })
       .then(function (r) { return r.ok ? r.json() : null; })
