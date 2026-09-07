@@ -16,7 +16,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { openDatabase, createMigrator, loadMigrationsFrom, type DB } from '../src/db.js';
 import { TaskRepo } from '../src/repo.js';
-import { newId } from '@clockwork/shared';
 import type { TaskCreate, TaskPatch } from '@clockwork/shared';
 
 function freshDb(): { db: DB; dir: string } {
