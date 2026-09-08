@@ -240,7 +240,8 @@ xattr -dr com.apple.quarantine /Applications/Clockwork.app
 open -a Clockwork
 ```
 
-**That is the whole install.** The app carries the daemon and its own Node, so
+**That is the whole install** (a 51 MB download; 192 MB once installed, most of
+it the Node runtime). The app carries the daemon and its own Node, so
 there is no checkout, no `pnpm`, no Node to install, and no token to paste. On
 first launch Clockwork registers its background service with launchd, which is
 what keeps scheduled runs firing after you close the window and after a reboot,

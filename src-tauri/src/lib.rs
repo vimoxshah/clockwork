@@ -35,6 +35,22 @@ struct Bundle {
     entry: PathBuf,
     /// `dist/cli.js` — `clockworkd install|uninstall|doctor`.
     cli: PathBuf,
+    /// `packages/daemon/package.json` — the version `/health` will report.
+    daemon_pkg: PathBuf,
+}
+
+/// The version the BUNDLED daemon will report on `/health`.
+///
+/// Read from the daemon's own package.json, not from `CARGO_PKG_VERSION`.
+/// Those are two files — `src-tauri/Cargo.toml` and
+/// `packages/daemon/package.json` — that nothing in this repo keeps in step.
+/// Comparing the shell's version to the daemon's would mean that one missed
+/// bump makes `restart_if_stale` fire `kickstart -k` on EVERY launch, killing
+/// the daemon and any run in flight, and then waiting for it to come back.
+fn bundled_daemon_version(b: &Bundle) -> Option<String> {
+    let text = std::fs::read_to_string(&b.daemon_pkg).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    v.get("version")?.as_str().map(str::to_string)
 }
 
 /// Locate the bundled pair, or None when running unbundled (`tauri dev`).
@@ -56,8 +72,9 @@ fn bundle() -> Option<Bundle> {
         .join("dist");
     let entry = daemon_dist.join("main.js");
     let cli = daemon_dist.join("cli.js");
+    let daemon_pkg = daemon_dist.parent()?.join("package.json");
     if node.is_file() && entry.is_file() && cli.is_file() {
-        Some(Bundle { node, entry, cli })
+        Some(Bundle { node, entry, cli, daemon_pkg })
     } else {
         None
     }
@@ -102,7 +119,24 @@ fn running_daemon_version() -> Option<String> {
 /// `packages/daemon/src/cli.ts:plistXml`, whose shape is fixed and whose first
 /// `<string>` after the ProgramArguments key is the Node path by construction.
 fn agent_node_path() -> Option<String> {
-    let xml = std::fs::read_to_string(home().join(PLIST_REL)).ok()?;
+    parse_agent_node_path(&std::fs::read_to_string(home().join(PLIST_REL)).ok()?)
+}
+
+/// Split out from the file read so it is testable at all.
+///
+/// The comment here used to say the shape is fixed because
+/// `packages/daemon/src/cli.ts:plistXml` writes it. That is not true of an
+/// installed plist: launchd and `plutil` normalize the file — the one on this
+/// machine came back tab-indented with alphabetized keys and each key on its
+/// own line, none of which `plistXml` emits. So this parses the STRUCTURE
+/// (the first `<string>` after the ProgramArguments key) rather than a
+/// spelling, and the tests below feed it both shapes.
+///
+/// It still cannot read a binary plist. That failure is silent-ish rather than
+/// silent: `ensure_launch_agent` re-installs, which is wasteful but correct,
+/// and `diagnosis` would misreport the service as unregistered. Converting to
+/// binary is not something anything in this repo does.
+fn parse_agent_node_path(xml: &str) -> Option<String> {
     let after = xml.split_once("<key>ProgramArguments</key>")?.1;
     let open = after.find("<string>")? + "<string>".len();
     let close = after[open..].find("</string>")?;
@@ -155,11 +189,11 @@ fn wait_for_daemon(attempts: u32) -> bool {
 /// memory, and nothing restarts it — the user updates, sees the stale-page
 /// notice, and has no way to act on it. `kickstart -k` is the same command
 /// `clockworkd doctor` already prescribes for a wedged service.
-fn restart_if_stale() {
-    let Some(running) = running_daemon_version() else {
+fn restart_if_stale(b: &Bundle) {
+    let (Some(running), Some(bundled)) = (running_daemon_version(), bundled_daemon_version(b)) else {
         return;
     };
-    if running == env!("CARGO_PKG_VERSION") {
+    if running == bundled {
         return;
     }
     let Some(uid) = current_uid() else { return };
@@ -212,7 +246,7 @@ fn ensure_daemon() {
                 // asynchronous; give it the same grace the unbundled path got.
                 wait_for_daemon(20);
             }
-            restart_if_stale();
+            restart_if_stale(&b);
         }
         None => {
             if !daemon_up() {
@@ -251,8 +285,22 @@ fn api_token() -> Option<String> {
 /// Tauri IPC command instead would mean granting IPC to a remote origin, and
 /// that grant would belong to every page the daemon serves.
 fn pairing_script(token: &str) -> String {
+    // Guarded on the origin, for two reasons that both matter.
+    //
+    // An initialization script becomes a WKUserScript, and a user script re-runs
+    // on EVERY navigation in the web view. That is what makes it work at all
+    // here: daemon-down.html does `location.replace(DAEMON_URL)` once the port
+    // answers, and without a script that survives that navigation the recovered
+    // window lands on the pairing screen — the one manual step this removes.
+    //
+    // The same re-run is why the origin check is not decoration. Nothing in the
+    // shipped UI navigates off 127.0.0.1:4747, but an unguarded script would
+    // write a live bearer token into the localStorage of any origin the window
+    // ever reached, and that would be true the day someone adds the first
+    // external link rather than the day they notice.
     format!(
-        "try{{localStorage.setItem('clockwork.token',{});}}catch(e){{}}",
+        "try{{if(location.origin==={}){{localStorage.setItem('clockwork.token',{});}}}}catch(e){{}}",
+        serde_json::to_string(DAEMON_URL).unwrap_or_else(|_| "\"\"".into()),
         serde_json::to_string(token).unwrap_or_else(|_| "\"\"".into())
     )
 }
@@ -268,7 +316,13 @@ fn pairing_script(token: &str) -> String {
 fn diagnosis() -> String {
     let bundled = bundle().is_some();
     let agent = agent_node_path();
-    let log = home().join(".clockwork").join("daemon.log.err");
+    // Same resolution as `api_token` and cli.ts:44. Hardcoding ~/.clockwork
+    // here would print a path that does not exist whenever CLOCKWORK_HOME is
+    // set, and `recent` would then always be false.
+    let log = std::env::var("CLOCKWORK_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| home().join(".clockwork"))
+        .join("daemon.log.err");
     // The tail, not the file: this log accumulates across every crash the
     // daemon has ever had, and the only interesting part is the last one.
     let tail = std::fs::read_to_string(&log)
@@ -291,12 +345,15 @@ fn diagnosis() -> String {
     } else if agent.is_none() {
         "the background service is not registered with launchd"
     } else if recent {
-        if tail.contains("NODE_MODULE_VERSION") {
-            "the daemon's native database module was built for a different Node"
-        } else if tail.contains("EADDRINUSE") {
-            "another process already holds 127.0.0.1:4747"
-        } else {
-            "the background service started and exited — see the log below"
+        // By RECENCY, not by a fixed order. KeepAlive appends every crash to
+        // one file, so a 25-line tail can straddle two eras: an old ABI
+        // crash-loop above today's EADDRINUSE. A fixed order would then name
+        // the older cause and send the reader to file a bug about a native
+        // module that is fine.
+        match last_marker(&tail) {
+            Some("NODE_MODULE_VERSION") => "the daemon's native database module was built for a different Node",
+            Some("EADDRINUSE") => "another process already holds 127.0.0.1:4747",
+            _ => "the background service started and exited — see the log below",
         }
     } else {
         "the background service is registered but is not answering"
@@ -311,6 +368,19 @@ fn diagnosis() -> String {
         "version": env!("CARGO_PKG_VERSION"),
     })
     .to_string()
+}
+
+/// Whichever known failure marker appears LAST in the tail.
+fn last_marker(tail: &str) -> Option<&'static str> {
+    let mut found: Option<&'static str> = None;
+    for line in tail.lines() {
+        if line.contains("NODE_MODULE_VERSION") {
+            found = Some("NODE_MODULE_VERSION");
+        } else if line.contains("EADDRINUSE") {
+            found = Some("EADDRINUSE");
+        }
+    }
+    found
 }
 
 /// Hand the fallback page what this shell already knows, as a global rather
@@ -346,11 +416,16 @@ pub fn run() {
                 .title("Clockwork")
                 .inner_size(1280.0, 820.0)
                 .min_inner_size(940.0, 600.0);
-            if up {
-                if let Some(token) = api_token() {
-                    builder = builder.initialization_script(&pairing_script(&token));
-                }
-            } else {
+            // Pairing goes in whether or not the daemon is up right now.
+            // daemon-down.html navigates to the daemon as soon as the port
+            // answers, and that navigation is where the token is needed; the
+            // origin guard inside the script is what makes it safe to always
+            // carry. Injecting it only on the happy path meant a cold start
+            // slower than the ~6s wait below ended on the paste screen.
+            if let Some(token) = api_token() {
+                builder = builder.initialization_script(&pairing_script(&token));
+            }
+            if !up {
                 builder = builder.initialization_script(&diagnosis_script(&diagnosis()));
             }
             builder.build()?;
@@ -363,24 +438,6 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn agent_node_path_reads_the_first_program_argument() {
-        // The exact shape packages/daemon/src/cli.ts:plistXml emits.
-        let xml = "<dict>\n  <key>Label</key><string>com.clockwork.daemon</string>\n  \
-                   <key>ProgramArguments</key>\n  <array>\n    \
-                   <string>/Apps/Clockwork.app/Contents/MacOS/node</string>\n    \
-                   <string>/Apps/Clockwork.app/Contents/Resources/app/packages/daemon/dist/main.js</string>\n  \
-                   </array>\n</dict>";
-        let after = xml.split_once("<key>ProgramArguments</key>").unwrap().1;
-        let open = after.find("<string>").unwrap() + "<string>".len();
-        let close = after[open..].find("</string>").unwrap();
-        assert_eq!(
-            &after[open..open + close],
-            "/Apps/Clockwork.app/Contents/MacOS/node",
-            "the Label's <string> must not be mistaken for ProgramArguments[0]"
-        );
-    }
 
     #[test]
     fn pairing_script_escapes_the_token() {
@@ -422,6 +479,62 @@ mod tests {
         let js = diagnosis_script("{\"cause\":\"x\"}");
         assert!(js.starts_with("window.__CLOCKWORK_DIAGNOSIS__ = {"));
         assert!(js.ends_with(";"));
+    }
+
+
+    #[test]
+    fn parses_a_plist_that_launchd_normalized() {
+        // Not the spelling `plistXml` emits: tab-indented, keys alphabetized,
+        // key and string on separate lines. This is what the installed file
+        // actually looked like on a real machine, and the old comment claiming
+        // the shape is fixed was wrong about it.
+        let xml = "<dict>\n\t<key>KeepAlive</key>\n\t<true/>\n\t<key>Label</key>\n\t<string>com.clockwork.daemon</string>\n\t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>/Applications/Clockwork.app/Contents/MacOS/node</string>\n\t\t<string>/Applications/Clockwork.app/Contents/Resources/app/packages/daemon/dist/main.js</string>\n\t</array>\n</dict>";
+        assert_eq!(
+            parse_agent_node_path(xml).as_deref(),
+            Some("/Applications/Clockwork.app/Contents/MacOS/node"),
+        );
+    }
+
+    #[test]
+    fn parses_the_shape_cli_ts_actually_writes() {
+        let xml = "<dict>\n  <key>Label</key><string>com.clockwork.daemon</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>/A/Clockwork.app/Contents/MacOS/node</string>\n    <string>/A/main.js</string>\n  </array>\n</dict>";
+        assert_eq!(parse_agent_node_path(xml).as_deref(), Some("/A/Clockwork.app/Contents/MacOS/node"));
+    }
+
+    #[test]
+    fn does_not_mistake_the_label_for_the_first_program_argument() {
+        // Label comes FIRST in the file cli.ts writes, and it is a <string>.
+        let xml = "<key>Label</key><string>com.clockwork.daemon</string>\
+<key>ProgramArguments</key><array><string>/n/node</string></array>";
+        assert_eq!(parse_agent_node_path(xml).as_deref(), Some("/n/node"));
+    }
+
+    #[test]
+    fn a_plist_without_program_arguments_is_none_not_a_guess() {
+        assert_eq!(parse_agent_node_path("<dict><key>Label</key><string>x</string></dict>"), None);
+        assert_eq!(parse_agent_node_path(""), None);
+    }
+
+    #[test]
+    fn the_last_failure_in_the_log_wins_not_the_first() {
+        // One file accumulates every crash since install, so a 25-line tail can
+        // straddle two eras. Naming the older one sends the reader to file a
+        // bug about a native module that is fine.
+        let tail = "Error: NODE_MODULE_VERSION 137 requires 147\nrestarting\nError: listen EADDRINUSE 127.0.0.1:4747";
+        assert_eq!(last_marker(tail), Some("EADDRINUSE"));
+        let other = "Error: listen EADDRINUSE\nrestarting\nError: NODE_MODULE_VERSION 137";
+        assert_eq!(last_marker(other), Some("NODE_MODULE_VERSION"));
+        assert_eq!(last_marker("nothing familiar here"), None);
+    }
+
+    #[test]
+    fn the_pairing_script_only_writes_on_the_daemon_origin() {
+        // A WKUserScript re-runs on every navigation, including one to a remote
+        // origin. Without this guard the token would be written into whatever
+        // origin the window reached.
+        let js = pairing_script("tok");
+        assert!(js.contains("location.origin===\"http://127.0.0.1:4747\""), "{js}");
+        assert!(js.contains("localStorage.setItem('clockwork.token'"), "{js}");
     }
 
     #[test]

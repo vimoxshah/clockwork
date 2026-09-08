@@ -33,6 +33,10 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm build
           pnpm test
+          # The Tauri shell is where the daemon supervision lives — the plist
+          # parser, the version-skew restart, the failure diagnosis. None of it
+          # is reachable from vitest.
+          cd src-tauri && cargo test && cd ..
 
       - name: Import signing identity (if configured)
         if: env.APPLE_CERT_P12 != ''
@@ -76,17 +80,30 @@ jobs:
 
       - name: Verify the bundle can actually run
         run: |
-          APP="src-tauri/target/release/bundle/macos/Clockwork.app"
+          # ABSOLUTE, and that is load-bearing rather than tidy. `require()`
+          # treats anything not starting with ./ or / as a BARE SPECIFIER and
+          # resolves it through node_modules, so a relative path here fails
+          # with MODULE_NOT_FOUND on every run — while the step blames an ABI
+          # mismatch that does not exist.
+          APP="$PWD/src-tauri/target/release/bundle/macos/Clockwork.app"
           NODE="$APP/Contents/MacOS/node"
           ENTRY="$APP/Contents/Resources/app/packages/daemon/dist/main.js"
-          # These three FAIL the build. A DMG that ships without its daemon
-          # looks perfect in every other check and is useless on the machine
-          # it lands on, which is precisely why it must not be informational.
+          SQLITE="$APP/Contents/Resources/app/packages/daemon/node_modules/better-sqlite3"
+          # These FAIL the build. A DMG that ships without its daemon looks
+          # perfect in every other check and is useless on the machine it
+          # lands on, which is precisely why it must not be informational.
           test -x "$NODE"  || { echo "::error::no bundled node at $NODE"; exit 1; }
           test -f "$ENTRY" || { echo "::error::no daemon entry at $ENTRY"; exit 1; }
-          "$NODE" -e "new (require('$APP/Contents/Resources/app/packages/daemon/node_modules/better-sqlite3'))(':memory:')" \
+          test -d "$SQLITE" || { echo "::error::better-sqlite3 missing from the bundle at $SQLITE"; exit 1; }
+          # Opening a database, not merely requiring it: better-sqlite3 loads
+          # its binding lazily, so require alone exits 0 under a Node whose ABI
+          # the compiled .node cannot satisfy.
+          "$NODE" -e "new (require('$SQLITE'))(':memory:')" \
             || { echo "::error::the bundled node cannot open a database — ABI mismatch"; exit 1; }
-          echo "bundled node: $("$NODE" -v), daemon entry present"
+          # And that the daemon itself loads, which the probe above does not say.
+          "$NODE" --input-type=module -e "await import('$ENTRY')" >/dev/null 2>&1 \
+            || { echo "::error::the bundled daemon entry does not import cleanly"; exit 1; }
+          echo "bundled node: $("$NODE" -v); daemon entry imports; better-sqlite3 opens"
 
       - name: Report signing state (informational)
         run: |
@@ -128,10 +145,16 @@ jobs:
           ### Install
           1. Download Clockwork_${VER}_aarch64.dmg (Apple Silicon; Clockwork_aarch64.dmg is the same file under a stable name)
           2. Open the DMG and drag Clockwork to Applications
-          3. Launch — pair with your local daemon using ~/.clockwork/api-token
+          3. Launch. That is the whole install — the app carries the daemon and
+             its own Node, registers its background service so scheduled runs
+             survive quitting and rebooting, and pairs itself. No checkout, no
+             pnpm, no Node to install, no token to paste.
 
           ### Requirements
-          - macOS 14+ · Apple Silicon · Node 22 + one provider CLI (claude/codex/opencode/hermes)
+          - macOS 14+ · Apple Silicon
+          - git, and one provider CLI you are already logged in to
+            (claude/codex/opencode/hermes). These are yours and cannot be bundled;
+            \`clockworkd doctor\` names either one when it is missing.
 
           ### Signature status
           See checksums-sha256.txt to verify integrity. If this build is unsigned,
