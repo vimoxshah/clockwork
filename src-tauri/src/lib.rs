@@ -11,7 +11,7 @@
  */
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -257,6 +257,69 @@ fn pairing_script(token: &str) -> String {
     )
 }
 
+/// What to tell the user when the daemon did not come up.
+///
+/// The fallback page used to say "the app bundle does not contain the daemon,
+/// it is installed separately, from source" and then print `git clone`. That
+/// stopped being true the moment the daemon moved inside the bundle, and a
+/// failure page that explains the wrong system is worse than a blank one — it
+/// sends the user off to fix something that is not broken. So the page now
+/// gets the actual state of THIS install, gathered here where it is knowable.
+fn diagnosis() -> String {
+    let bundled = bundle().is_some();
+    let agent = agent_node_path();
+    let log = home().join(".clockwork").join("daemon.log.err");
+    // The tail, not the file: this log accumulates across every crash the
+    // daemon has ever had, and the only interesting part is the last one.
+    let tail = std::fs::read_to_string(&log)
+        .map(|t| t.lines().rev().take(25).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n"))
+        .unwrap_or_default();
+    // "Fresh" means this launch, near enough. Five minutes is generous for a
+    // crash that happened while the user was double-clicking the icon, and
+    // tight enough that last month's failure cannot masquerade as this one.
+    let recent = std::fs::metadata(&log)
+        .and_then(|m| m.modified())
+        .and_then(|t| t.elapsed().map_err(|e| std::io::Error::other(e)))
+        .map(|age| age < Duration::from_secs(300))
+        .unwrap_or(false);
+    // Ordered by what is KNOWN before what is INFERRED. The log is the last
+    // thing consulted and only when it is fresh: it accumulates across every
+    // crash since install, so a months-old EADDRINUSE sitting at the bottom
+    // would otherwise be reported as today's cause with full confidence.
+    let cause = if !bundled {
+        "this is a development build, which does not carry a daemon"
+    } else if agent.is_none() {
+        "the background service is not registered with launchd"
+    } else if recent {
+        if tail.contains("NODE_MODULE_VERSION") {
+            "the daemon's native database module was built for a different Node"
+        } else if tail.contains("EADDRINUSE") {
+            "another process already holds 127.0.0.1:4747"
+        } else {
+            "the background service started and exited — see the log below"
+        }
+    } else {
+        "the background service is registered but is not answering"
+    };
+    serde_json::json!({
+        "bundled": bundled,
+        "agentNode": agent,
+        "logPath": log.to_string_lossy(),
+        "cause": cause,
+        "tail": tail,
+        "logIsRecent": recent,
+        "version": env!("CARGO_PKG_VERSION"),
+    })
+    .to_string()
+}
+
+/// Hand the fallback page what this shell already knows, as a global rather
+/// than over IPC — the page is local, static and read-only, and granting it an
+/// IPC channel would grant one to every page the daemon serves.
+fn diagnosis_script(diag: &str) -> String {
+    format!("window.__CLOCKWORK_DIAGNOSIS__ = {diag};")
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     ensure_daemon();
@@ -273,7 +336,8 @@ pub fn run() {
             // Deciding the URL here instead keeps the happy path identical
             // (straight to the daemon, no flash of a placeholder) and gives
             // the failure an explanation the user can act on.
-            let url = if daemon_up() {
+            let up = daemon_up();
+            let url = if up {
                 tauri::WebviewUrl::External(DAEMON_URL.parse().expect("valid daemon url"))
             } else {
                 tauri::WebviewUrl::App("daemon-down.html".into())
@@ -282,8 +346,12 @@ pub fn run() {
                 .title("Clockwork")
                 .inner_size(1280.0, 820.0)
                 .min_inner_size(940.0, 600.0);
-            if let Some(token) = api_token() {
-                builder = builder.initialization_script(&pairing_script(&token));
+            if up {
+                if let Some(token) = api_token() {
+                    builder = builder.initialization_script(&pairing_script(&token));
+                }
+            } else {
+                builder = builder.initialization_script(&diagnosis_script(&diagnosis()));
             }
             builder.build()?;
             Ok(())
@@ -328,6 +396,34 @@ mod tests {
         assert!(pairing_script("tok").contains("'clockwork.token'"));
     }
 
+
+    #[test]
+    fn diagnosis_is_json_the_page_can_read() {
+        let d = diagnosis();
+        let v: serde_json::Value = serde_json::from_str(&d).expect("diagnosis must be JSON");
+        assert!(v.get("cause").and_then(|c| c.as_str()).is_some());
+        assert!(v.get("logPath").and_then(|c| c.as_str()).is_some());
+        assert_eq!(v.get("bundled").and_then(|b| b.as_bool()), Some(false), "the test binary is not a bundle");
+    }
+
+    #[test]
+    fn diagnosis_names_the_dev_build_rather_than_blaming_launchd() {
+        // Running unbundled, the honest cause is "this is a development
+        // build", not "the service is not registered" — the old page's
+        // failure was exactly this kind of confident wrong explanation.
+        let v: serde_json::Value = serde_json::from_str(&diagnosis()).unwrap();
+        assert_eq!(
+            v["cause"], "this is a development build, which does not carry a daemon",
+        );
+    }
+
+    #[test]
+    fn diagnosis_script_defines_the_global_the_page_reads() {
+        let js = diagnosis_script("{\"cause\":\"x\"}");
+        assert!(js.starts_with("window.__CLOCKWORK_DIAGNOSIS__ = {"));
+        assert!(js.ends_with(";"));
+    }
+
     #[test]
     fn bundle_is_none_outside_an_app_bundle() {
         // The dev binary lives in target/debug, not Contents/MacOS, so the
@@ -338,12 +434,12 @@ mod tests {
 
     #[test]
     fn bundle_paths_hang_off_the_executable() {
-        let exe = Path::new("/Apps/Clockwork.app/Contents/MacOS/Clockwork");
+        let exe = std::path::Path::new("/Apps/Clockwork.app/Contents/MacOS/Clockwork");
         let macos = exe.parent().unwrap();
-        assert_eq!(macos.join("node"), Path::new("/Apps/Clockwork.app/Contents/MacOS/node"));
+        assert_eq!(macos.join("node"), std::path::Path::new("/Apps/Clockwork.app/Contents/MacOS/node"));
         assert_eq!(
             macos.parent().unwrap().join("Resources").join("app").join("packages").join("daemon").join("dist").join("main.js"),
-            Path::new("/Apps/Clockwork.app/Contents/Resources/app/packages/daemon/dist/main.js")
+            std::path::Path::new("/Apps/Clockwork.app/Contents/Resources/app/packages/daemon/dist/main.js")
         );
     }
 }
