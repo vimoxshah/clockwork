@@ -119,6 +119,23 @@ function defaultSlot(): Date {
 }
 
 /**
+ * Move a start time forward when it has already gone.
+ *
+ * The Calendar's "Book a run this day" hands the composer midnight on the day
+ * you clicked, which is in the past for every hour of today after 00:00. The
+ * form then opened already showing "This time is in the past — pick a future
+ * slot", so the first thing a new task said was that it was wrong, about a
+ * value the user had not chosen. Clicking today should mean "today", not
+ * "today, an hour that is gone".
+ *
+ * A future instant is returned untouched, so clicking a day next week keeps
+ * exactly the hour the Calendar chose.
+ */
+export function notInThePast(d: Date, now = new Date()): Date {
+  return d.getTime() > now.getTime() ? d : defaultSlot();
+}
+
+/**
  * Assemble the task's `delivery` object (DeliveryConfig, packages/shared/src/schemas.ts)
  * from the composer's per-task delivery fields. Exported (pure, no component
  * state) so the "unchanged when blank" and group allow-list rules are
@@ -243,7 +260,7 @@ export default function ComposerView({
     // and repo-jobs — and this option used to reuse it, which is why an "ASAP"
     // task never ran.
     kind: 'once' as 'once' | 'rrule' | 'asap',
-    runAt: prefill ? new Date(prefill.runAtLocal) : defaultSlot(),
+    runAt: prefill ? notInThePast(new Date(prefill.runAtLocal)) : defaultSlot(),
     rruleFreq: 'WEEKLY' as 'INTERVAL' | 'DAILY' | 'WEEKLY' | 'MONTHLY',
     // Multi-day, where it used to be one day. `BYDAY=MO,WE,FR` was always legal
     // in the rule; only the picker was single-select.
@@ -278,7 +295,7 @@ export default function ComposerView({
   // Calendar "Book a run this day" prefill arrives after mount.
   useEffect(() => {
     if (prefill?.runAtLocal) {
-      setForm((f) => ({ ...f, kind: 'once', runAt: new Date(prefill.runAtLocal) }));
+      setForm((f) => ({ ...f, kind: 'once', runAt: notInThePast(new Date(prefill.runAtLocal)) }));
     }
   }, [prefill]);
 
