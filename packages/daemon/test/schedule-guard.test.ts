@@ -12,8 +12,10 @@
  */
 import { describe, it, expect } from 'vitest';
 import { guardSchedule } from '../src/schedule-guard.js';
+import { occurrencesBetween } from '../src/recurrence.js';
 
 const MAX = 100_000;
+const TZ = 'America/New_York';
 const guard = (rrule: string): ReturnType<typeof guardSchedule> => guardSchedule('rrule', rrule, MAX);
 
 describe('unreachable BY parts — the hang, refused by arithmetic', () => {
@@ -61,31 +63,50 @@ describe('unreachable BY parts — the hang, refused by arithmetic', () => {
       .toEqual({ safe: true });
   });
 
-  it('a coarser BY part is checked on the WALK\'s grid, not on its own field', () => {
-    // The hole this closes. A MINUTELY rule has no hour counter: it walks
-    // minutes and re-tests BYHOUR at each one, so reachability is a question
-    // about minutes-of-day. Every row below was verified out of process against
-    // rrule 2.8.1 with a watchdog.
+  it('refuses a sub-daily rule with a coarser BY part instead of analysing it', () => {
+    // Every row here was killed by an out-of-process watchdog against rrule
+    // 2.8.1, and every one of them was passed by an EARLIER version of this
+    // guard. Two models of `addMinutes`'s inner `addHours` skip loop were
+    // written and both were wrong:
     //
-    //   INTERVAL=120 from midnight reaches minutes 0,120,240… and hour 3 is
-    //   minutes 180-239, so it never lands — killed at 457 SECONDS.
-    expect(guard('DTSTART:20260908T000000Z\nFREQ=MINUTELY;INTERVAL=120;BYHOUR=3'))
+    //   the 24-hour grid passed  INTERVAL=120;BYHOUR=3      (457 SECONDS)
+    //   the minute-of-day grid passed INTERVAL=288;BYHOUR=9,10 and
+    //                                 INTERVAL=1441;BYHOUR=3 (both killed at 20s)
+    //
+    // so the combination is refused outright. No arithmetic, nothing to get
+    // wrong a third time.
+    const dt = 'DTSTART:20260908T000000Z\n';
+    for (const rule of [
+      `${dt}FREQ=MINUTELY;INTERVAL=120;BYHOUR=3`,
+      `${dt}FREQ=MINUTELY;INTERVAL=288;BYHOUR=9,10`,
+      `${dt}FREQ=MINUTELY;INTERVAL=1441;BYHOUR=3`,
+      `${dt}FREQ=MINUTELY;INTERVAL=1440;BYHOUR=10`,
+      `${dt}FREQ=SECONDLY;INTERVAL=120;BYMINUTE=1`,
+      'FREQ=MINUTELY;INTERVAL=15;BYHOUR=9',
+    ]) {
+      expect(guard(rule), rule).toMatchObject({ safe: false, reason: 'unreachable' });
+    }
+  });
+
+  it('and says plainly which working rules that costs', () => {
+    // These answer in 11-15ms and are refused anyway. Disclosed, not hidden:
+    // it is the price of a refusal that cannot be wrong, and nothing the
+    // composer emits is in this shape.
+    const dt = 'DTSTART:20260908T000000Z\n';
+    expect(guard(`${dt}FREQ=MINUTELY;INTERVAL=288;BYHOUR=8`))
       .toMatchObject({ safe: false, reason: 'unreachable' });
-    expect(guard('DTSTART:20260908T000000Z\nFREQ=MINUTELY;INTERVAL=1440;BYHOUR=10'))
-      .toMatchObject({ safe: false, reason: 'unreachable' });
-    expect(guard('DTSTART:20260908T000000Z\nFREQ=SECONDLY;INTERVAL=120;BYMINUTE=1'))
+    expect(guard(`${dt}FREQ=MINUTELY;INTERVAL=90;BYHOUR=3`))
       .toMatchObject({ safe: false, reason: 'unreachable' });
   });
 
-  it('and the neighbouring interval that DOES land is left alone', () => {
-    // gcd(90, 1440) = 90, and 180 is a multiple of 90, so minute 180 — the
-    // first minute of hour 3 — is on the walk. Measured: 15ms, answers.
-    // A blanket ban on MINUTELY+BYHOUR would have refused this.
-    expect(guard('DTSTART:20260908T000000Z\nFREQ=MINUTELY;INTERVAL=90;BYHOUR=3')).toEqual({ safe: true });
-    // gcd(60, 1440) = 60: every hour boundary is on the walk.
-    expect(guard('DTSTART:20260908T000000Z\nFREQ=MINUTELY;INTERVAL=60;BYHOUR=3')).toEqual({ safe: true });
-    // Any interval that does not divide the day reaches every minute of it.
-    expect(guard('DTSTART:20260908T000000Z\nFREQ=MINUTELY;INTERVAL=7;BYHOUR=3;BYMINUTE=0')).toEqual({ safe: true });
+  it('leaves a sub-daily rule with no coarser part on its own exact arithmetic', () => {
+    // With BYHOUR absent both inner loops break immediately, so the walk really
+    // is `anchor + k*INTERVAL (mod 60)` and the gcd is exact.
+    const dt = 'DTSTART:20260908T000000Z\n';
+    expect(guard(`${dt}FREQ=MINUTELY;INTERVAL=15;BYMINUTE=0,15,30,45`)).toEqual({ safe: true });
+    expect(guard(`${dt}FREQ=MINUTELY;INTERVAL=7;BYMINUTE=0`)).toEqual({ safe: true });
+    expect(guard('DTSTART:20260908T100700Z\nFREQ=MINUTELY;INTERVAL=15;BYMINUTE=0,15,30,45'))
+      .toMatchObject({ safe: false, reason: 'unreachable' });
   });
 
   it('reachable hours pass: INTERVAL=2 reaches even hours', () => {
@@ -94,7 +115,7 @@ describe('unreachable BY parts — the hang, refused by arithmetic', () => {
     expect(guard('FREQ=HOURLY;INTERVAL=1;BYHOUR=9')).toEqual({ safe: true });
   });
 
-  it('reachability is measured from the anchor, not from midnight', () => {
+  it('HOURLY reachability is measured from the anchor, and that grid IS exact', () => {
     // Anchored at 01:00, INTERVAL=2 reaches ODD hours — so 3 is fine and 4 is not.
     expect(guard('DTSTART:20260901T010000Z\nFREQ=HOURLY;INTERVAL=2;BYHOUR=3')).toEqual({ safe: true });
     expect(guard('DTSTART:20260901T010000Z\nFREQ=HOURLY;INTERVAL=2;BYHOUR=4'))
@@ -103,24 +124,29 @@ describe('unreachable BY parts — the hang, refused by arithmetic', () => {
 });
 
 describe('the epoch-anchor cliff — slow, and only without a DTSTART', () => {
-  it('an off-grid INTERVAL with a coarser BY part and no DTSTART is the cliff', () => {
-    // 60 % 7 !== 0, so `skipStaysOnGrid` fails and the anchor stays at 1970 —
-    // recurrence.ts's own `FREQ=MINUTELY;INTERVAL=7;BYHOUR=5` case. It is
-    // REACHABLE (gcd(7,1440)=1 reaches every minute), so it falls through the
-    // hang check to this one: slow, not infinite, and the two must not be
-    // reported as the same thing.
-    expect(guard('FREQ=MINUTELY;INTERVAL=7;BYHOUR=5'))
+  it('an off-grid INTERVAL with a same-unit BY part and no DTSTART is the cliff', () => {
+    // 60 % 7 !== 0, so `skipStaysOnGrid` fails and the anchor stays at 1970.
+    // BYMINUTE is the rule's own unit, so it is not refused as a hang and falls
+    // through to this: slow, not infinite. The two must not be reported alike.
+    expect(guard('FREQ=MINUTELY;INTERVAL=7;BYMINUTE=5'))
       .toMatchObject({ safe: false, reason: 'slow_anchor' });
   });
 
-  it('a whole-day filter is the harder refusal and wins over the cliff', () => {
+  it('a whole-day filter is a hang, not a cliff, and is reported as one', () => {
     expect(guard('FREQ=MINUTELY;INTERVAL=15;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9,10;BYMINUTE=0,15,30,45'))
       .toMatchObject({ safe: false, reason: 'unreachable' });
   });
 
-  it('without a whole-day filter the anchor advances, so no DTSTART is needed', () => {
-    // `skipStaysOnGrid` holds: 60 % 15 === 0 and nothing rejects a whole day.
-    expect(guard('FREQ=MINUTELY;INTERVAL=15;BYHOUR=9,10;BYMINUTE=0,15,30,45')).toEqual({ safe: true });
+  it('BYHOUR now decides this before the cliff can, and that is a change', () => {
+    // This rule used to be classified safe here: `skipStaysOnGrid` holds
+    // (60 % 15 === 0, no whole-day filter) so the anchor advances and it is
+    // NOT slow. It is refused now anyway, because BYHOUR on a MINUTELY walk is
+    // the shape whose termination could not be modelled correctly twice. A
+    // deliberate narrowing, not a regression — and the reason must be the hang
+    // one, not the cliff one, or the message would tell the caller to add a
+    // DTSTART that will not help.
+    expect(guard('FREQ=MINUTELY;INTERVAL=15;BYHOUR=9,10;BYMINUTE=0,15,30,45'))
+      .toMatchObject({ safe: false, reason: 'unreachable' });
   });
 
   it('COUNT pins a sub-daily rule to the epoch anchor whatever else it states', () => {
@@ -157,4 +183,85 @@ describe('what the guard deliberately does not judge', () => {
   it('a degenerate INTERVAL is left to the path that already handles it', () => {
     expect(guard('FREQ=MINUTELY;INTERVAL=0;BYHOUR=9')).toEqual({ safe: true });
   });
+});
+
+describe('the sweep: no rule the guard passes may fail to terminate', () => {
+  /**
+   * Two rounds of adversarial review each found a hang by GENERATING rules
+   * rather than reasoning about them, and each time the three regression rows
+   * added afterwards would not have caught the next one. So the check is the
+   * generation, kept in CI.
+   *
+   * WHAT A FAILURE LOOKS LIKE. A non-terminating rule blocks the event loop, so
+   * vitest cannot interrupt it and this file will HANG rather than report a
+   * clean assertion failure. That is still a failing run, and it is the only
+   * honest way to test for non-termination in-process. If this file ever hangs,
+   * the last rule it was building is the witness — narrow `intervals` and
+   * re-run.
+   *
+   * The window is one hour, not the eight days the sweep used out of process:
+   * enough for every terminating rule here to answer in single-digit
+   * milliseconds, and a rule that does not terminate does not terminate at any
+   * width.
+   */
+  const ANCHORS = ['', 'DTSTART:20260908T000000Z\n', 'DTSTART:20260908T100700Z\n', 'DTSTART:20260908T032959Z\n'];
+  const INTERVALS = [1, 2, 5, 7, 15, 30, 60, 61, 90, 120, 288, 359, 720, 1440, 1441, 2880];
+  const BY_HOUR = [null, '3', '8', '9,10', '0,12'];
+  const BY_MINUTE = [null, '0', '0,30', '0,15,30,45', '7', '13,41', '59'];
+  const BY_SECOND = [null, '0', '0,30', '17', '59'];
+  const WHOLE_DAY = [null, 'BYDAY=MO', 'BYDAY=MO,TU,WE,TH,FR', 'BYMONTHDAY=15'];
+
+  it('holds across every sub-daily shape a caller can write', () => {
+    const FROM = Date.UTC(2026, 8, 8, 12, 0, 0);
+    let generated = 0;
+    let passed = 0;
+    let worstMs = 0;
+    for (const anchor of ANCHORS) {
+      for (const interval of INTERVALS) {
+        for (const wholeDay of WHOLE_DAY) {
+          for (const byHour of BY_HOUR) {
+            const build = (freq: string, tail: string | null, part: string): string => {
+              const parts = [`FREQ=${freq};INTERVAL=${interval}`];
+              if (wholeDay) parts.push(wholeDay);
+              if (byHour) parts.push(`BYHOUR=${byHour}`);
+              if (tail) parts.push(`${part}=${tail}`);
+              return anchor + parts.join(';');
+            };
+            for (const byMinute of BY_MINUTE) {
+              const rule = build('MINUTELY', byMinute, 'BYMINUTE');
+              generated++;
+              if (!guardSchedule('rrule', rule, MAX).safe) continue;
+              passed++;
+              const t0 = performance.now();
+              try { occurrencesBetween({ kind: 'rrule', rrule: rule, tz: TZ }, FROM, FROM + 3_600_000, 5); } catch { /* throwing is fine; hanging is not */ }
+              worstMs = Math.max(worstMs, performance.now() - t0);
+            }
+            for (const bySecond of BY_SECOND) {
+              const rule = build('SECONDLY', bySecond, 'BYSECOND');
+              generated++;
+              if (!guardSchedule('rrule', rule, MAX).safe) continue;
+              passed++;
+              const t0 = performance.now();
+              try { occurrencesBetween({ kind: 'rrule', rrule: rule, tz: TZ }, FROM, FROM + 3_600_000, 5); } catch { /* as above */ }
+              worstMs = Math.max(worstMs, performance.now() - t0);
+            }
+          }
+        }
+      }
+    }
+    // Reaching this line at all is the assertion. The rest guards against the
+    // sweep quietly generating nothing, or the guard turning into a blanket
+    // "refuse everything" that would also make it pass.
+    expect(generated).toBeGreaterThan(10_000);
+    expect(passed).toBeGreaterThan(300);
+    // 5s, not a tight bound: the point of this number is to catch a regression
+    // into NON-termination, not to police speed. The slowest terminating rule
+    // in the sweep is `FREQ=SECONDLY;INTERVAL=1` — a per-second rule, which
+    // genuinely has ~3,600 occurrences to generate for a one-hour window and
+    // measured 2.2s out of process and 3.0s under a loaded vitest pool. It is
+    // legal, it is not reachable from the composer, and it is slow on its own
+    // merits rather than because anything here is wrong. If a per-second rule
+    // should be refused outright that is a product call, not a guard bug.
+    expect(worstMs).toBeLessThan(5_000);
+  }, 300_000);
 });

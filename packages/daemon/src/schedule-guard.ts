@@ -101,45 +101,14 @@ function numericPart(props: Map<string, string>, name: string): number[] | null 
  * `anchorOffset` around a cycle of `period` units? It can iff some target is
  * congruent to the anchor modulo `gcd(INTERVAL, period)` — the step's orbit.
  *
- * The unit is the rule's OWN FREQ unit and the period is one full day in that
- * unit, NOT the field the BY part names. That distinction is the whole of the
- * defect this replaces: checking `FREQ=MINUTELY;BYHOUR=...` on the 24-hour grid
- * asks whether the HOUR counter can reach hour 3, and there is no hour counter —
- * a MINUTELY rule walks minutes, and BYHOUR is a filter it re-tests at each one.
- * `FREQ=MINUTELY;INTERVAL=120;BYHOUR=3` from midnight reaches minutes-of-day
- * 0, 120, 240 …, none of which is inside hour 3 (minutes 180-239), and it spins
- * forever: measured killed at 457 SECONDS. `INTERVAL=90` reaches minute 180 and
- * answers in 15ms, so the refusal has to be this arithmetic and not a blanket
- * ban on coarser BY parts.
+ * ONLY sound where the walk is a single loop with a constant step: HOURLY's
+ * `addHours`, and MINUTELY/SECONDLY with no coarser BY part to make the inner
+ * skip loop run. Every other case is refused below rather than computed — see
+ * the comment there for the two models that got this wrong.
  */
 function anyReachable(targets: number[], anchorOffset: number, interval: number, period: number): boolean {
   const step = gcd(interval, period);
   return targets.some((v) => mod(v - anchorOffset, step) === 0);
-}
-
-/** `[0, 1, … n-1]`, or the stated list when there is one. */
-function statedOrAll(values: number[] | null, n: number): number[] {
-  return values ?? Array.from({ length: n }, (_, i) => i);
-}
-
-/**
- * Every offset-within-the-day, in `unit` units, that the rule's BY parts admit.
- * An unstated part admits its whole range, because the rule does not narrow it.
- */
-function admittedOffsets(
-  unit: 'minute' | 'second',
-  byHour: number[] | null,
-  byMinute: number[] | null,
-  bySecond: number[] | null,
-): number[] {
-  const out: number[] = [];
-  for (const h of statedOrAll(byHour, 24)) {
-    for (const m of statedOrAll(byMinute, 60)) {
-      if (unit === 'minute') { out.push(h * 60 + m); continue; }
-      for (const sec of statedOrAll(bySecond, 60)) out.push(h * 3600 + m * 60 + sec);
-    }
-  }
-  return out;
 }
 
 /**
@@ -198,28 +167,63 @@ export function guardSchedule(
       + `Pick an interval that divides ${period}, or a start time on the same grid.`,
   });
 
-  // HOURLY walks hours, so its grid is the 24 hours of the day and BYMINUTE
-  // cannot constrain it — `addHours` generates every matching minute inside an
-  // accepted hour.
+  // HOURLY walks hours with ONE loop and a constant step — `addHours` does
+  // `this.hour += INTERVAL` and re-tests BYHOUR each time (rrule datetime.js:87)
+  // — so its reachable set really is `anchorHour + k*INTERVAL (mod 24)` and the
+  // gcd is exact. This is the documented `INTERVAL=2;BYHOUR=3` case.
   if (freq === 'HOURLY' && byHour && !anyReachable(byHour, anchorHour, interval, 24)) {
     return unreachable('BYHOUR', byHour, anchorHour, 24);
   }
-  // MINUTELY and SECONDLY walk a finer unit, so EVERY coarser BY part is a
-  // filter on the same walk and they are checked together, on that walk's own
-  // grid. Checking each part against its own field was the hole: it left
-  // MINUTELY+BYHOUR and SECONDLY+BYMINUTE/BYHOUR untested.
-  if (freq === 'MINUTELY' && (byHour || byMinute)) {
-    const admitted = admittedOffsets('minute', byHour, byMinute, null);
-    if (!anyReachable(admitted, anchorHour * 60 + anchorMinute, interval, 1440)) {
-      return unreachable('BYHOUR/BYMINUTE', [...(byHour ?? []), ...(byMinute ?? [])], anchorHour * 60 + anchorMinute, 1440);
-    }
+
+  // MINUTELY and SECONDLY are NOT one loop, and that is why a coarser BY part
+  // is refused outright rather than analysed.
+  //
+  // `addMinutes` (datetime.js:103) adds INTERVAL to the minute, and on a carry
+  // calls `addHours(hourDiv, false, byhour)` — a SECOND unbounded loop whose
+  // step is `hourDiv = floor((minute + INTERVAL) / 60)`, not INTERVAL. Two
+  // models of that were written here and both were wrong, in both directions:
+  //
+  //   * modelling BYHOUR on the 24-hour grid passed
+  //     `FREQ=MINUTELY;INTERVAL=120;BYHOUR=3` — killed at 457 SECONDS;
+  //   * modelling it on the minute-of-day grid `gcd(INTERVAL, 1440)` passed
+  //     `INTERVAL=288;BYHOUR=9,10` and `INTERVAL=1441;BYHOUR=3` — both killed
+  //     at 20s — AND refused `INTERVAL=288;BYHOUR=8`, which answers in 11ms.
+  //     Wrong in both directions is the proof the grid was misidentified rather
+  //     than the analysis being incomplete.
+  //
+  // A third model would need `gcd(hourDiv, 24)` and its SECONDLY equivalent
+  // through `addSeconds -> addMinutes -> addHours`, and nothing here can show
+  // that one is right where two were wrong. So the combination is refused. That
+  // is sound BY CONSTRUCTION — no arithmetic to get wrong — and the cost is
+  // bounded and disclosed: a hand-written rule like the `INTERVAL=288;BYHOUR=8`
+  // above is refused even though it works. Nothing the composer can emit is
+  // affected (it emits FREQ=HOURLY, asserted over all 377,040 reachable control
+  // states), and the alternative is a wedged daemon — Fastify is
+  // single-threaded, so one such request takes the whole process with it.
+  const coarser = freq === 'MINUTELY'
+    ? (byHour ? 'BYHOUR' : null)
+    : freq === 'SECONDLY'
+      ? (byHour ? 'BYHOUR' : byMinute ? 'BYMINUTE' : null)
+      : null;
+  if (coarser) {
+    return {
+      safe: false,
+      reason: 'unreachable',
+      detail:
+        `FREQ=${freq} with ${coarser} cannot be checked for termination: the minute counter carries into a `
+        + 'second, independent skip loop over hours, and a rule whose filter that loop can never satisfy spins '
+        + 'forever inside rrule 2.8.1. Express the schedule as FREQ=HOURLY with BYMINUTE instead — every 15 '
+        + 'minutes is BYMINUTE=0,15,30,45.',
+    };
   }
-  if (freq === 'SECONDLY' && (byHour || byMinute || bySecond)) {
-    const admitted = admittedOffsets('second', byHour, byMinute, bySecond);
-    const anchorSod = anchorHour * 3600 + anchorMinute * 60 + anchorSecond;
-    if (!anyReachable(admitted, anchorSod, interval, 86_400)) {
-      return unreachable('BYHOUR/BYMINUTE/BYSECOND', [...(byHour ?? []), ...(byMinute ?? []), ...(bySecond ?? [])], anchorSod, 86_400);
-    }
+
+  // With no coarser part stated, both inner loops break immediately, so the
+  // walk IS plain arithmetic on its own unit and the gcd is exact again.
+  if (freq === 'MINUTELY' && byMinute && !anyReachable(byMinute, anchorMinute, interval, 60)) {
+    return unreachable('BYMINUTE', byMinute, anchorMinute, 60);
+  }
+  if (freq === 'SECONDLY' && bySecond && !anyReachable(bySecond, anchorSecond, interval, 60)) {
+    return unreachable('BYSECOND', bySecond, anchorSecond, 60);
   }
 
   // --- 2. a sub-daily counter fighting a whole-day filter: the second hang ---
@@ -242,8 +246,10 @@ export function guardSchedule(
   // the composer emits, so nothing a user can build in the app is refused here.
   // A caller writing MINUTELY+BYDAY by hand is told exactly what to write.
   const filtersWholeDays = WHOLE_DAY_PARTS.some((p) => (props.get(p) ?? '').trim() !== '');
-  const statesCoarser = freq === 'MINUTELY' ? byHour != null : byHour != null || byMinute != null;
-  if ((freq === 'MINUTELY' || freq === 'SECONDLY') && filtersWholeDays && statesCoarser) {
+  // The BYHOUR/BYMINUTE half of this is already refused above; what is left is a
+  // whole-day filter on its own, which makes the counter jump a whole day and
+  // is its own non-termination.
+  if ((freq === 'MINUTELY' || freq === 'SECONDLY') && filtersWholeDays) {
     return {
       safe: false,
       reason: 'unreachable',
@@ -260,7 +266,7 @@ export function guardSchedule(
   // it is NOT moved for a sub-daily rule whose counter can leave the grid.
   if (anchor === null && (freq === 'MINUTELY' || freq === 'SECONDLY')) {
     const skipStaysOnGrid = 60 % interval === 0 && !filtersWholeDays;
-    if ((statesCoarser && !skipStaysOnGrid) || countRaw != null) {
+    if ((byMinute != null && !skipStaysOnGrid) || countRaw != null) {
       return {
         safe: false,
         reason: 'slow_anchor',

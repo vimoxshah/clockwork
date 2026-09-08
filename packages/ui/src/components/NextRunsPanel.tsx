@@ -50,8 +50,14 @@ export function NextRunsPanel({ rrule, localError, tz }: NextRunsPanelProps): JS
           // sentence arrives HERE. Reporting it as "could not reach the daemon"
           // would be a false connectivity claim about a daemon that answered,
           // and would bury the one line saying what is wrong with the rule.
-          if (e instanceof ApiError && e.status === 422) setState({ error: e.message });
-          else setState({ error: `Could not reach the daemon: ${String(e)}` });
+          // A 422 is the guard's own sentence. Any other status means the
+          // daemon answered and something else went wrong, which is still not a
+          // connectivity failure — only a rejection with no status is.
+          if (e instanceof ApiError) {
+            setState({ error: e.status === 422 ? e.message : `The daemon could not preview this rule (${e.status}): ${e.message}` });
+          } else {
+            setState({ error: `Could not reach the daemon: ${String(e)}` });
+          }
         });
     }, DEBOUNCE_MS);
     return () => clearTimeout(timer);

@@ -122,12 +122,21 @@ describe('the page is one grid, not a stack with two-column islands', () => {
     // SET-1's first clause. Every section heading opens a card, so there is no
     // run of full-width single-column content before the grid begins — which is
     // what made the second column appear mid-page.
-    const headings = [...VIEW.matchAll(/<h3 className="section-title/g)];
-    expect(headings.length).toBeGreaterThanOrEqual(14);
-    for (const h of headings) {
-      const before = VIEW.slice(Math.max(0, h.index! - 200), h.index!);
-      expect(before, `heading at ${h.index} is not inside a card`).toMatch(/<section className="settings-card/);
+    // Walk the file once, in order, instead of grepping a window behind each
+    // heading — a fixed lookback matches a card opened for a DIFFERENT section
+    // and would pass on a page that had drifted back into islands.
+    const tokens = [...VIEW.matchAll(/<section className="settings-card|<\/section>|<h3 className="section-title/g)];
+    let depth = 0;
+    let headings = 0;
+    for (const t of tokens) {
+      if (t[0].startsWith('<section')) depth++;
+      else if (t[0] === '</section>') depth = Math.max(0, depth - 1);
+      else {
+        headings++;
+        expect(depth, `the heading at ${t.index} is not inside a settings-card`).toBeGreaterThan(0);
+      }
     }
+    expect(headings).toBeGreaterThanOrEqual(14);
   });
 
   it('collapses to one column by track floor rather than a breakpoint', () => {

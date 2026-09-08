@@ -246,6 +246,11 @@
       "rrule": "FREQ=HOURLY;BYDAY=MO;BYHOUR=22,23;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
     },
     {
+      "id": "interval-5-MO-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO;BYHOUR=3;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
       "id": "interval-5-TU-0to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=TU;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
@@ -264,6 +269,11 @@
       "id": "interval-5-TU-22to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=TU;BYHOUR=22,23;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-TU-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TU;BYHOUR=3;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
     },
     {
       "id": "interval-5-WE-0to24",
@@ -286,6 +296,11 @@
       "rrule": "FREQ=HOURLY;BYDAY=WE;BYHOUR=22,23;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
     },
     {
+      "id": "interval-5-WE-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=WE;BYHOUR=3;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
       "id": "interval-5-TH-0to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=TH;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
@@ -304,6 +319,11 @@
       "id": "interval-5-TH-22to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=TH;BYHOUR=22,23;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-TH-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TH;BYHOUR=3;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
     },
     {
       "id": "interval-5-FR-0to24",
@@ -326,6 +346,11 @@
       "rrule": "FREQ=HOURLY;BYDAY=FR;BYHOUR=22,23;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
     },
     {
+      "id": "interval-5-FR-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=FR;BYHOUR=3;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
       "id": "interval-5-SA-0to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=SA;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
@@ -344,6 +369,11 @@
       "id": "interval-5-SA-22to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=SA;BYHOUR=22,23;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-SA-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA;BYHOUR=3;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
     },
     {
       "id": "interval-5-SU-0to24",
@@ -366,6 +396,11 @@
       "rrule": "FREQ=HOURLY;BYDAY=SU;BYHOUR=22,23;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
     },
     {
+      "id": "interval-5-SU-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SU;BYHOUR=3;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
       "id": "interval-5-MOWEFR-0to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=MO,WE,FR;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
@@ -384,6 +419,11 @@
       "id": "interval-5-MOWEFR-22to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=MO,WE,FR;BYHOUR=22,23;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-MOWEFR-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,WE,FR;BYHOUR=3;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
     },
     {
       "id": "interval-5-SASU-0to24",
@@ -406,6 +446,11 @@
       "rrule": "FREQ=HOURLY;BYDAY=SA,SU;BYHOUR=22,23;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
     },
     {
+      "id": "interval-5-SASU-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA,SU;BYHOUR=3;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
       "id": "interval-5-MOTUWETHFR-0to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
@@ -424,6 +469,11 @@
       "id": "interval-5-MOTUWETHFR-22to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=22,23;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-MOTUWETHFR-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=3;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
     },
     {
       "id": "interval-5-MOTUWETHFRSASU-0to24",
@@ -446,6 +496,11 @@
       "rrule": "FREQ=HOURLY;BYHOUR=22,23;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
     },
     {
+      "id": "interval-5-MOTUWETHFRSASU-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYHOUR=3;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
       "id": "interval-10-MO-0to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=MO;BYMINUTE=0,10,20,30,40,50"
@@ -464,6 +519,11 @@
       "id": "interval-10-MO-22to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=MO;BYHOUR=22,23;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-MO-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO;BYHOUR=3;BYMINUTE=0,10,20,30,40,50"
     },
     {
       "id": "interval-10-TU-0to24",
@@ -486,6 +546,11 @@
       "rrule": "FREQ=HOURLY;BYDAY=TU;BYHOUR=22,23;BYMINUTE=0,10,20,30,40,50"
     },
     {
+      "id": "interval-10-TU-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TU;BYHOUR=3;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
       "id": "interval-10-WE-0to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=WE;BYMINUTE=0,10,20,30,40,50"
@@ -504,6 +569,11 @@
       "id": "interval-10-WE-22to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=WE;BYHOUR=22,23;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-WE-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=WE;BYHOUR=3;BYMINUTE=0,10,20,30,40,50"
     },
     {
       "id": "interval-10-TH-0to24",
@@ -526,6 +596,11 @@
       "rrule": "FREQ=HOURLY;BYDAY=TH;BYHOUR=22,23;BYMINUTE=0,10,20,30,40,50"
     },
     {
+      "id": "interval-10-TH-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TH;BYHOUR=3;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
       "id": "interval-10-FR-0to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=FR;BYMINUTE=0,10,20,30,40,50"
@@ -544,6 +619,11 @@
       "id": "interval-10-FR-22to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=FR;BYHOUR=22,23;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-FR-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=FR;BYHOUR=3;BYMINUTE=0,10,20,30,40,50"
     },
     {
       "id": "interval-10-SA-0to24",
@@ -566,6 +646,11 @@
       "rrule": "FREQ=HOURLY;BYDAY=SA;BYHOUR=22,23;BYMINUTE=0,10,20,30,40,50"
     },
     {
+      "id": "interval-10-SA-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA;BYHOUR=3;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
       "id": "interval-10-SU-0to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=SU;BYMINUTE=0,10,20,30,40,50"
@@ -584,6 +669,11 @@
       "id": "interval-10-SU-22to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=SU;BYHOUR=22,23;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-SU-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SU;BYHOUR=3;BYMINUTE=0,10,20,30,40,50"
     },
     {
       "id": "interval-10-MOWEFR-0to24",
@@ -606,6 +696,11 @@
       "rrule": "FREQ=HOURLY;BYDAY=MO,WE,FR;BYHOUR=22,23;BYMINUTE=0,10,20,30,40,50"
     },
     {
+      "id": "interval-10-MOWEFR-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,WE,FR;BYHOUR=3;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
       "id": "interval-10-SASU-0to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=SA,SU;BYMINUTE=0,10,20,30,40,50"
@@ -624,6 +719,11 @@
       "id": "interval-10-SASU-22to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=SA,SU;BYHOUR=22,23;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-SASU-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA,SU;BYHOUR=3;BYMINUTE=0,10,20,30,40,50"
     },
     {
       "id": "interval-10-MOTUWETHFR-0to24",
@@ -646,6 +746,11 @@
       "rrule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=22,23;BYMINUTE=0,10,20,30,40,50"
     },
     {
+      "id": "interval-10-MOTUWETHFR-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=3;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
       "id": "interval-10-MOTUWETHFRSASU-0to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYMINUTE=0,10,20,30,40,50"
@@ -664,6 +769,11 @@
       "id": "interval-10-MOTUWETHFRSASU-22to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYHOUR=22,23;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-MOTUWETHFRSASU-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYHOUR=3;BYMINUTE=0,10,20,30,40,50"
     },
     {
       "id": "interval-15-MO-0to24",
@@ -686,6 +796,11 @@
       "rrule": "FREQ=HOURLY;BYDAY=MO;BYHOUR=22,23;BYMINUTE=0,15,30,45"
     },
     {
+      "id": "interval-15-MO-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO;BYHOUR=3;BYMINUTE=0,15,30,45"
+    },
+    {
       "id": "interval-15-TU-0to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=TU;BYMINUTE=0,15,30,45"
@@ -704,6 +819,11 @@
       "id": "interval-15-TU-22to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=TU;BYHOUR=22,23;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-TU-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TU;BYHOUR=3;BYMINUTE=0,15,30,45"
     },
     {
       "id": "interval-15-WE-0to24",
@@ -726,6 +846,11 @@
       "rrule": "FREQ=HOURLY;BYDAY=WE;BYHOUR=22,23;BYMINUTE=0,15,30,45"
     },
     {
+      "id": "interval-15-WE-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=WE;BYHOUR=3;BYMINUTE=0,15,30,45"
+    },
+    {
       "id": "interval-15-TH-0to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=TH;BYMINUTE=0,15,30,45"
@@ -744,6 +869,11 @@
       "id": "interval-15-TH-22to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=TH;BYHOUR=22,23;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-TH-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TH;BYHOUR=3;BYMINUTE=0,15,30,45"
     },
     {
       "id": "interval-15-FR-0to24",
@@ -766,6 +896,11 @@
       "rrule": "FREQ=HOURLY;BYDAY=FR;BYHOUR=22,23;BYMINUTE=0,15,30,45"
     },
     {
+      "id": "interval-15-FR-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=FR;BYHOUR=3;BYMINUTE=0,15,30,45"
+    },
+    {
       "id": "interval-15-SA-0to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=SA;BYMINUTE=0,15,30,45"
@@ -784,6 +919,11 @@
       "id": "interval-15-SA-22to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=SA;BYHOUR=22,23;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-SA-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA;BYHOUR=3;BYMINUTE=0,15,30,45"
     },
     {
       "id": "interval-15-SU-0to24",
@@ -806,6 +946,11 @@
       "rrule": "FREQ=HOURLY;BYDAY=SU;BYHOUR=22,23;BYMINUTE=0,15,30,45"
     },
     {
+      "id": "interval-15-SU-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SU;BYHOUR=3;BYMINUTE=0,15,30,45"
+    },
+    {
       "id": "interval-15-MOWEFR-0to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=MO,WE,FR;BYMINUTE=0,15,30,45"
@@ -824,6 +969,11 @@
       "id": "interval-15-MOWEFR-22to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=MO,WE,FR;BYHOUR=22,23;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-MOWEFR-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,WE,FR;BYHOUR=3;BYMINUTE=0,15,30,45"
     },
     {
       "id": "interval-15-SASU-0to24",
@@ -846,6 +996,11 @@
       "rrule": "FREQ=HOURLY;BYDAY=SA,SU;BYHOUR=22,23;BYMINUTE=0,15,30,45"
     },
     {
+      "id": "interval-15-SASU-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA,SU;BYHOUR=3;BYMINUTE=0,15,30,45"
+    },
+    {
       "id": "interval-15-MOTUWETHFR-0to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYMINUTE=0,15,30,45"
@@ -864,6 +1019,11 @@
       "id": "interval-15-MOTUWETHFR-22to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=22,23;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-MOTUWETHFR-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=3;BYMINUTE=0,15,30,45"
     },
     {
       "id": "interval-15-MOTUWETHFRSASU-0to24",
@@ -886,6 +1046,11 @@
       "rrule": "FREQ=HOURLY;BYHOUR=22,23;BYMINUTE=0,15,30,45"
     },
     {
+      "id": "interval-15-MOTUWETHFRSASU-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYHOUR=3;BYMINUTE=0,15,30,45"
+    },
+    {
       "id": "interval-30-MO-0to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=MO;BYMINUTE=0,30"
@@ -904,6 +1069,11 @@
       "id": "interval-30-MO-22to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=MO;BYHOUR=22,23;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-MO-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO;BYHOUR=3;BYMINUTE=0,30"
     },
     {
       "id": "interval-30-TU-0to24",
@@ -926,6 +1096,11 @@
       "rrule": "FREQ=HOURLY;BYDAY=TU;BYHOUR=22,23;BYMINUTE=0,30"
     },
     {
+      "id": "interval-30-TU-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TU;BYHOUR=3;BYMINUTE=0,30"
+    },
+    {
       "id": "interval-30-WE-0to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=WE;BYMINUTE=0,30"
@@ -944,6 +1119,11 @@
       "id": "interval-30-WE-22to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=WE;BYHOUR=22,23;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-WE-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=WE;BYHOUR=3;BYMINUTE=0,30"
     },
     {
       "id": "interval-30-TH-0to24",
@@ -966,6 +1146,11 @@
       "rrule": "FREQ=HOURLY;BYDAY=TH;BYHOUR=22,23;BYMINUTE=0,30"
     },
     {
+      "id": "interval-30-TH-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TH;BYHOUR=3;BYMINUTE=0,30"
+    },
+    {
       "id": "interval-30-FR-0to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=FR;BYMINUTE=0,30"
@@ -984,6 +1169,11 @@
       "id": "interval-30-FR-22to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=FR;BYHOUR=22,23;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-FR-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=FR;BYHOUR=3;BYMINUTE=0,30"
     },
     {
       "id": "interval-30-SA-0to24",
@@ -1006,6 +1196,11 @@
       "rrule": "FREQ=HOURLY;BYDAY=SA;BYHOUR=22,23;BYMINUTE=0,30"
     },
     {
+      "id": "interval-30-SA-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA;BYHOUR=3;BYMINUTE=0,30"
+    },
+    {
       "id": "interval-30-SU-0to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=SU;BYMINUTE=0,30"
@@ -1024,6 +1219,11 @@
       "id": "interval-30-SU-22to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=SU;BYHOUR=22,23;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-SU-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SU;BYHOUR=3;BYMINUTE=0,30"
     },
     {
       "id": "interval-30-MOWEFR-0to24",
@@ -1046,6 +1246,11 @@
       "rrule": "FREQ=HOURLY;BYDAY=MO,WE,FR;BYHOUR=22,23;BYMINUTE=0,30"
     },
     {
+      "id": "interval-30-MOWEFR-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,WE,FR;BYHOUR=3;BYMINUTE=0,30"
+    },
+    {
       "id": "interval-30-SASU-0to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=SA,SU;BYMINUTE=0,30"
@@ -1064,6 +1269,11 @@
       "id": "interval-30-SASU-22to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYDAY=SA,SU;BYHOUR=22,23;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-SASU-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA,SU;BYHOUR=3;BYMINUTE=0,30"
     },
     {
       "id": "interval-30-MOTUWETHFR-0to24",
@@ -1086,6 +1296,11 @@
       "rrule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=22,23;BYMINUTE=0,30"
     },
     {
+      "id": "interval-30-MOTUWETHFR-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=3;BYMINUTE=0,30"
+    },
+    {
       "id": "interval-30-MOTUWETHFRSASU-0to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYMINUTE=0,30"
@@ -1104,6 +1319,11 @@
       "id": "interval-30-MOTUWETHFRSASU-22to24",
       "kind": "rrule",
       "rrule": "FREQ=HOURLY;BYHOUR=22,23;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-MOTUWETHFRSASU-3to4",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYHOUR=3;BYMINUTE=0,30"
     }
   ]
 }

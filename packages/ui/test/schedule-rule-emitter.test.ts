@@ -20,7 +20,11 @@ const DAY_SETS: Array<readonly Weekday[]> = [
   ['MO'], ['TU'], ['WE'], ['TH'], ['FR'], ['SA'], ['SU'],
   ['MO', 'WE', 'FR'], ['SA', 'SU'], ['MO', 'TU', 'WE', 'TH', 'FR'], WEEKDAYS,
 ];
-const HOUR_WINDOWS: Array<[number, number]> = [[0, 24], [9, 17], [8, 20], [22, 24]];
+// [3, 4] is a ONE-hour window: with a one-day BYDAY it is the sparsest rule the
+// composer can emit, which is the shape most likely to make the expander walk a
+// long way for its first five occurrences. It is in the fixture so that walk is
+// TIMED in CI rather than reasoned about.
+const HOUR_WINDOWS: Array<[number, number]> = [[0, 24], [9, 17], [8, 20], [22, 24], [3, 4]];
 
 const fixture = JSON.parse(
   readFileSync(path.resolve(import.meta.dirname, '../../shared/fixtures/emittable-schedules.json'), 'utf8'),

@@ -20,7 +20,9 @@ import { guardSchedule } from '../src/schedule-guard.js';
 import { occurrencesBetween } from '../src/recurrence.js';
 
 const MAX = 100_000;
-const TZ = 'America/New_York';
+// Two zones: one west of UTC, and one at +14 — the largest offset in tzdb, and
+// the one most likely to slide `occurrencesBetween`'s wall-clock window.
+const ZONES = ['America/New_York', 'Pacific/Kiritimati'];
 const DAY = 86_400_000;
 /** A Tuesday and a Saturday. The second is the one that used to be fatal. */
 const START_DAYS = [Date.UTC(2026, 8, 8, 12, 0, 0), Date.UTC(2026, 8, 12, 12, 0, 0)];
@@ -34,7 +36,7 @@ const fixture = JSON.parse(
 
 describe('every rule the composer can emit', () => {
   it('has rows to check at all — an empty fixture would pass everything below', () => {
-    expect(fixture.rows.length).toBeGreaterThan(200);
+    expect(fixture.rows.length).toBeGreaterThan(250);
   });
 
   it('is classified safe by the guard', () => {
@@ -48,14 +50,14 @@ describe('every rule the composer can emit', () => {
     const empty: string[] = [];
     const slow: Array<{ id: string; ms: number }> = [];
     for (const row of fixture.rows) {
-      for (const from of START_DAYS) {
+      for (const from of START_DAYS) for (const tz of ZONES) {
         const t0 = performance.now();
-        const out = occurrencesBetween({ kind: 'rrule', rrule: row.rrule, tz: TZ }, from, from + HORIZON, 5);
+        const out = occurrencesBetween({ kind: 'rrule', rrule: row.rrule, tz }, from, from + HORIZON, 5);
         const ms = performance.now() - t0;
-        if (out.length === 0) empty.push(`${row.id}@${from}`);
+        if (out.length === 0) empty.push(`${row.id}@${from}@${tz}`);
         // 200ms is the budget POST /schedule/preview answers within; the
         // slowest of these measured 15ms, and the shape they replaced hung.
-        if (ms > 200) slow.push({ id: `${row.id}@${from}`, ms: Math.round(ms) });
+        if (ms > 200) slow.push({ id: `${row.id}@${from}@${tz}`, ms: Math.round(ms) });
       }
     }
     expect(empty).toEqual([]);
@@ -83,19 +85,23 @@ describe('the fixture is not vacuously safe', () => {
   });
 });
 
-describe('the converse: any rule with the emitter\'s invariants is safe', () => {
+describe('the emitter\'s invariants, and what they do and do not prove', () => {
   /**
-   * The UI side asserts that every one of its ~377,000 reachable control states
-   * emits a rule with four invariants (no MINUTELY/SECONDLY, no INTERVAL on
-   * HOURLY, no COUNT, no DTSTART). This is the other half of that claim, and
-   * together they cover the whole space rather than the fixture's 221 rows.
+   * HONEST ABOUT WHAT THIS IS. The loop below cannot fail as written: with no
+   * INTERVAL stated the guard defaults it to 1, gcd(1, 24) is 1, and every
+   * BYHOUR value is trivially on the walk — so `{safe: true}` is returned by
+   * construction for all 172,800. It is kept as a CANARY: if a future branch
+   * ever starts refusing plain FREQ=HOURLY, this is what says so before the
+   * composer starts emitting rules the daemon rejects.
    *
-   * The grammar is rebuilt here from those invariants rather than imported,
-   * because the UI is a pure wire client and the packages do not import each
-   * other. The fixture equality test on the UI side is what stops the emitter
-   * drifting away from this grammar.
+   * It is NOT evidence that the emittable space is fast, and after two rounds
+   * of review "the guard says safe" is demonstrably not the same claim as
+   * "rrule terminates quickly". Expansion TIME is carried by the fixture rows
+   * above, which is why the sparsest shapes — one day, one hour, the densest
+   * minute grid — are in the fixture rather than left to this loop.
    */
-  it('across every day subset, hour window and minute grid', () => {
+  it('is a canary for the guard turning against FREQ=HOURLY, not a timing proof', () => {
+
     const DAYS = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'] as const;
     const refused: string[] = [];
     let checked = 0;

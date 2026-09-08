@@ -132,7 +132,11 @@ describe('the guard runs before the expander, not after it', () => {
   });
 
   it('refuses a DTSTART-less sub-daily rule that would replay from 1970', async () => {
-    const res = await preview({ kind: 'rrule', rrule: 'FREQ=MINUTELY;INTERVAL=7;BYHOUR=5', tz: 'UTC' });
+    // BYMINUTE, not BYHOUR: a coarser BY part on a MINUTELY walk is refused as
+    // a HANG before this branch is reached, and the two reasons must stay
+    // distinguishable — one says "add a DTSTART", the other says "you cannot
+    // write this rule at all".
+    const res = await preview({ kind: 'rrule', rrule: 'FREQ=MINUTELY;INTERVAL=7;BYMINUTE=5', tz: 'UTC' });
     expect(res.statusCode).toBe(422);
     expect(res.json().reason).toBe('slow_anchor');
   });
