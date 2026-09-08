@@ -15,8 +15,9 @@
  *
  * The negative is the whole report: zero native controls at every site, with
  * the themed control present so "zero" cannot be satisfied by rendering none.
- * It also measures the frequency tabs, because the tab row was breaking onto
- * two lines inside a 24px-tall button.
+ * It also measures the frequency tablist, because inside the composer's 2/5
+ * side column the four tabs had 250px to share and needed 251, so "Monthly"
+ * broke onto a second row.
  */
 import { webkit } from 'playwright';
 import { readFileSync } from 'node:fs';
@@ -177,6 +178,51 @@ await p.waitForTimeout(400);
   check('settings/office hours end offers 24:00', labels.includes('24:00'),
     `options end with ${JSON.stringify(labels.slice(-3))}`);
   await p.screenshot({ path: '/tmp/tf-oh-hours.png' });
+}
+
+// ── Every tablist, at both widths ──────────────────────────────────────────
+// The nowrap + flex-wrap change to Segmented is global: Provider, Schedule
+// type, Permission mode and the theme switcher all inherit it. A whole tab
+// moving to a second row is better than a label splitting mid-phrase, but it
+// is still a layout change on screens this task never asked about.
+await p.keyboard.press('Escape');
+for (const width of [1440, 430]) {
+  await p.setViewportSize({ width, height: 1000 });
+  // Back to the composer: it carries four of the app's tablists (Provider,
+  // Permission mode, Schedule type, Repeat frequency) on one screen.
+  await p.getByRole('button', { name: /new task/i }).first().click({ timeout: 10000 }).catch(() => {});
+  await p.waitForSelector('#c-prompt', { timeout: 12000 }).catch(() => {});
+  await p.getByRole('tab', { name: 'Recurring' }).click({ timeout: 4000 }).catch(() => {});
+  await p.waitForTimeout(500);
+  const rows = await p.evaluate(() =>
+    [...document.querySelectorAll('[role="tablist"]')].map((l) => {
+      const tabs = [...l.querySelectorAll('[role="tab"]')];
+      const line = tabs.length ? parseFloat(getComputedStyle(tabs[0]).lineHeight) || 16 : 16;
+      return {
+        name: l.getAttribute('aria-label') ?? '(unlabelled)',
+        rows: new Set(tabs.map((e) => Math.round(e.getBoundingClientRect().top))).size,
+        split: tabs
+          .filter((e) => (e.getBoundingClientRect().height - 8) / line > 1.4)
+          .map((e) => e.textContent.trim()),
+        w: Math.round(l.getBoundingClientRect().width),
+      };
+    }),
+  );
+  console.log(`   tablists @${width}px:`, JSON.stringify(rows));
+  await p.screenshot({ path: `/tmp/tf-tablists-${width}.png` });
+  // Two different claims, because they are different faults. At a normal
+  // window every tablist must fit on one row. At 430px the app is deliberately
+  // cramped and a whole tab moving down is the graceful answer — what must
+  // never happen is a LABEL splitting mid-phrase, which is what the old
+  // flex-shrink did to "Every N min".
+  const split = rows.filter((r) => r.split.length > 0);
+  check(`tablists at ${width}px keep labels whole`, split.length === 0,
+    `split labels: ${JSON.stringify(split)}`);
+  if (width >= 1440) {
+    const multi = rows.filter((r) => r.rows > 1);
+    check(`tablists at ${width}px sit on one row`, multi.length === 0,
+      `multi-row: ${JSON.stringify(multi)}`);
+  }
 }
 
 await b.close();

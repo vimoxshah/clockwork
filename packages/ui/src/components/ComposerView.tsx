@@ -14,7 +14,7 @@ import { Select, SelectValue, SelectTrigger, SelectContent, SelectItem } from '.
 import { Switch } from './ui/switch';
 import { AgentPicker } from './AgentPicker';
 import { DateTimePicker } from './ui/datetime-picker';
-import { TimeField, timeStringToMinutes, minutesToTimeString } from './ui/time-field';
+import { TimeField, timeStringToMinutes, minutesToTimeString, hourLabel } from './ui/time-field';
 import { Badge } from './ui/card';
 import { Zap, FolderGit2, Bot, Wallet, CalendarClock, AlertCircle, GitBranch, Bell, Send } from 'lucide-react';
 import { cn } from '../lib/cn';
@@ -774,9 +774,12 @@ export default function ComposerView({
                               onChange={(m) => setForm({ ...form, intervalToHour: String(m / 60) })}
                             />
                           </div>
+                          {/* Built from the same labeller the control uses. A
+                              hard-coded "9 AM to 5 PM" reads wrong under a
+                              24-hour locale, where the field above says "09". */}
                           <p className="mt-1 text-xxs text-dim">
-                            The end hour is exclusive, so 9 AM to 5 PM is a nine-to-five day and
-                            12 AM to 24:00 is all day.
+                            The end hour is exclusive, so {hourLabel(9)} to {hourLabel(17)} is a
+                            nine-to-five day and {hourLabel(0)} to 24:00 is all day.
                           </p>
                         </div>
                       </div>
@@ -833,6 +836,10 @@ export default function ComposerView({
                           id="c-rtime"
                           testIdPrefix="c-rtime"
                           ariaLabelPrefix="At time"
+                          // The fallback is unreachable: `rruleTime` has exactly
+                          // two writers, the '09:00' default and this field's own
+                          // `minutesToTimeString`. It stays because a bad string
+                          // should degrade to a sane time, not blank the composer.
                           value={timeStringToMinutes(form.rruleTime) ?? 9 * 60}
                           onChange={(m) => setForm({ ...form, rruleTime: minutesToTimeString(m) })}
                         />

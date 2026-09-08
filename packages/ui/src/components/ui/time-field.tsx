@@ -29,8 +29,11 @@ const p2 = (n: number): string => String(n).padStart(2, '0');
  * Label an hour through the same locale machinery the rest of the app formats
  * with, so a 12-hour locale reads "2 PM" here and "02:00 PM" on a trigger,
  * rather than "2 PM" here and "14" there.
+ *
+ * Exported because prose ABOUT the hours has to match the control: a hint that
+ * hard-codes "9 AM to 5 PM" sits under a 24-hour locale's "09" and "17".
  */
-function hourLabel(h: number): string {
+export function hourLabel(h: number): string {
   const d = new Date(2000, 0, 1, h, 0, 0, 0);
   return d.toLocaleTimeString(undefined, { hour: 'numeric' });
 }
