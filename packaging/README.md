@@ -7,14 +7,22 @@ surface says so plainly rather than letting Gatekeeper call the app "damaged".
 
 ## Where the DMG lives
 
-`landing-page/downloads/` is published by Cloudflare Pages, so the DMG is served
-from the same origin as the site. GitHub Releases cannot be used for public
-downloads while the repository is private — an anonymous request to a private
-repo's release asset returns 404.
+**The GitHub release is the source of truth.** Every download link on the
+landing page points at `releases/latest/download/Clockwork_aarch64.dmg`, and the
+Homebrew cask installs from the versioned release asset. Both resolve the moment
+a release publishes, with no second host to keep in sync.
 
-The file is committed deliberately. It is 3.4 MB, Cloudflare Pages allows 25 MB
-per file on the free plan, and an experiment with a handful of releases will not
-meaningfully bloat history. Revisit if the release cadence increases.
+`landing-page/downloads/` also carries a copy, served from the same origin as
+the site by GitHub Pages. **This copy is now redundant and is not free:** the
+DMG is 51 MB since the daemon and its Node runtime moved inside it, and every
+release adds another 51 MB to git history permanently. It was committed when
+the repo was private, because an anonymous request to a private repo's release
+asset returns 404 and there was no other way to serve a public download. The
+repo is public now, so that reason is gone.
+
+**Open decision:** drop the vendored copy and let `landing-page/downloads/`
+links point at the release instead. The only thing that would change for a
+visitor is the origin the bytes come from.
 
 ## Cutting a release
 
@@ -22,7 +30,7 @@ meaningfully bloat history. Revisit if the release cadence increases.
 2. `./packaging/stage-release.sh` — copies the DMG plus checksums into
    `landing-page/downloads/` and rewrites the version and hash in the Homebrew
    cask and the landing page.
-3. Commit, merge to `main`, push. Cloudflare Pages redeploys automatically.
+3. Commit, merge to `main`, push. The `pages` workflow redeploys the site.
 4. Push the updated cask to the tap (see below).
 
 ## Homebrew tap
@@ -64,74 +72,63 @@ to be mirrored to a separate public repo so it could be read without exposing
 the product; now that this repository is public, the code IS the audit surface
 and the mirror has been retired.
 
-## Why not GitHub Pages
+## The host is GitHub Pages
 
-GitHub Pages is unavailable here: the repo is private and the account is on the
-free plan, so the API returns "Your current plan does not support GitHub Pages
-for this repository". The `pages` workflow was deleted rather than left to fail
-on every landing-page change — recoverable from git history if the repo ever
-goes public or the plan changes.
+`https://vimoxshah.github.io/clockwork/`, deployed by `.github/workflows/pages.yml`
+on every push to `main` that touches `landing-page/`. It serves the page and
+`/downloads/` alike.
 
-Cloudflare Workers serves the same `landing-page/` directory and deploys on push
-to `main`, so nothing was lost.
+This was not always possible. While the repo was private, the Pages API returned
+"Your current plan does not support GitHub Pages for this repository", so the
+site ran on a Cloudflare Worker instead (`wrangler.jsonc`, `worker/`). The repo
+is public now and Pages works, so the Worker is redundant — it serves only
+static assets, and the one route it owns (`POST /subscribe`, with a KV
+namespace) has no caller: the landing page has no signup form.
+
+**The Worker is still deployed and still serves the old page.** Deleting the
+source here would not change that. Anyone holding a `clockwork.vmoksh-shah179.workers.dev`
+link lands on whatever it last deployed, so delete or redirect the Worker in the
+Cloudflare dashboard rather than leaving a stale copy of the site online.
 
 ## Cost: zero
 
-Cloudflare Pages gives every project a free `<project>.pages.dev` subdomain with
-HTTPS. **No domain purchase is required.** The landing page uses relative links
-(`/downloads/...`) so it works on whatever host serves it; only the Homebrew cask
-needs an absolute URL, and that is set from one variable.
+GitHub Pages is free on a public repo and gives you HTTPS on
+`<user>.github.io/<repo>`. **No domain purchase is required.** The landing page
+uses relative links (`/downloads/...`) so it works on whatever host serves it;
+the Homebrew cask needs an absolute URL and uses the GitHub release directly, so
+it cannot go stale behind a site deploy.
 
 A custom domain is a branding decision, not a functional one. Buy it if the
 experiment gets traction — not before.
 
 ## Before this works publicly
 
-- [ ] Connect this repo to Cloudflare
+- [x] GitHub Pages serving the site and `/downloads/`
 - [x] Public `homebrew-clockwork` tap repo created, cask published
+- [ ] Delete or redirect the old Cloudflare Worker, which still serves a stale
+      copy of the site
 
-### Cloudflare: two flows, both free
+### Site deployment
 
-Cloudflare's dashboard now funnels git-connected projects into **Workers**
-rather than **Pages**. The two look similar but configure differently:
+Nothing to configure by hand: `.github/workflows/pages.yml` uploads
+`landing-page/` and deploys it on every push to `main` that touches that
+directory. `actions/configure-pages` turns Pages on if it is not already, so a
+fresh clone of this setup needs no dashboard step at all.
 
-**Workers (what the dashboard defaults to).** No "build output directory"
-field — the directory is declared in `wrangler.jsonc` at the repo root, which
-is committed. Accept the auto-filled settings:
-
-| Field | Value |
-| --- | --- |
-| Build command | *(leave empty — nothing to compile)* |
-| Deploy command | `npx wrangler deploy` (auto-filled, keep it) |
-| Root directory | `/` (repo root, so wrangler.jsonc is found) |
-
-`wrangler.jsonc` points at `./landing-page` and declares no `main` script, so
-this is a purely static host — nothing executes server-side.
-
-**Pages (if the dashboard still offers it).** Workers & Pages → Create → the
-**Pages** tab → Connect to Git, then:
-
-| Field | Value |
-| --- | --- |
-| Framework preset | None |
-| Build command | *(empty)* |
-| Build output directory | `landing-page` |
-
-Either produces `https://<project>.pages.dev` or `https://<project>.<subdomain>.workers.dev`
-on the free plan. Whichever URL you get, re-point the cask with:
+The landing page uses relative links, so it works unchanged on any host. If you
+ever move it, `BASE_URL` in `stage-release.sh` is the one place that names the
+site:
 
 ```bash
-BASE_URL=https://your-actual-url ./packaging/stage-release.sh
+BASE_URL=https://your-new-host ./packaging/stage-release.sh
 ```
 
-If the Pages project ends up on a different subdomain, re-point everything with
-one command:
-
-```bash
-BASE_URL=https://your-project.pages.dev ./packaging/stage-release.sh
-```
+It sets the cask's `homepage` only — the cask's download url points at the
+GitHub release and deliberately does not follow `BASE_URL`, so moving the site
+can never break `brew install`.
 
 Then copy `packaging/homebrew/clockwork.rb` into the tap repo's `Casks/` and push.
 
-Until Pages is connected, the cask URL will 404 — so do not share the tap link
-until you have run `brew install --cask clockwork` yourself.
+The cask downloads from the GitHub release, so it works as soon as the release
+publishes — it no longer waits on a site deploy. Still run
+`brew install --cask clockwork` yourself once before sharing the tap link.

@@ -10,7 +10,7 @@ Schedule recurring AI agent jobs on a real calendar. Clockwork executes them
 unattended in isolated, sandboxed worktrees — and files a report you can
 actually read.
 
-[Website](https://clockwork.vmoksh-shah179.workers.dev/) · [Download](#-installation) · [Contact](mailto:vmoksh.shah179@gmail.com) · [Agent Library](#-agent-profile-library) · [Agent Workforce](#-agent-workforce) · [Providers](#-providers) · [Security](#%EF%B8%8F-security-model)
+[Website](https://vimoxshah.github.io/clockwork/) · [Download](#-installation) · [Contact](mailto:vmoksh.shah179@gmail.com) · [Agent Library](#-agent-profile-library) · [Agent Workforce](#-agent-workforce) · [Providers](#-providers) · [Security](#%EF%B8%8F-security-model)
 
 ![platform](https://img.shields.io/badge/platform-macOS-black) ![license](https://img.shields.io/badge/license-proprietary-red) ![tests](https://img.shields.io/badge/tests-passing-brightgreen) [![pages](https://img.shields.io/badge/docs-GitHub%20Pages-orange)](https://vimoxshah.github.io/clockwork/)
 
@@ -223,14 +223,15 @@ Routes, refusal paths, per-feature tests and the measured numbers:
 
 ## 📦 Installation
 
-> macOS 14+ (Apple silicon). Free during beta.
+> macOS 13+ (Apple silicon). Free during beta. The app carries the daemon
+> and its own Node runtime — nothing else to install.
 
 ### Download the app
 
 ```bash
 # 1. Verify the bytes BEFORE you trust them
 shasum -a 256 ~/Downloads/Clockwork_*_aarch64.dmg
-curl -s https://clockwork.vmoksh-shah179.workers.dev/downloads/checksums-sha256.txt
+curl -s https://vimoxshah.github.io/clockwork/downloads/checksums-sha256.txt
 # if the two do not match: stop, do not install, report it
 
 # 2. Open the DMG, drag Clockwork to Applications, then clear quarantine

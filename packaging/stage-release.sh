@@ -12,7 +12,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # <project>.pages.dev subdomain with HTTPS, so no domain purchase is required.
 # Override when the project name differs, or once a custom domain is bought:
 #   BASE_URL=https://clockworkd.com ./packaging/stage-release.sh
-BASE_URL="${BASE_URL:-https://clockwork.vmoksh-shah179.workers.dev}"
+BASE_URL="${BASE_URL:-https://vimoxshah.github.io/clockwork}"
 BUNDLE="$ROOT/src-tauri/target/release/bundle/dmg"
 DEST="$ROOT/landing-page/downloads"
 

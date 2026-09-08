@@ -10,7 +10,7 @@ cask "clockwork" do
   url "https://github.com/vimoxshah/clockwork/releases/download/v#{version}/Clockwork_#{version}_aarch64.dmg"
   name "Clockwork"
   desc "Calendar that schedules AI coding agents in sandboxed git worktrees"
-  homepage "https://clockwork.vmoksh-shah179.workers.dev/"
+  homepage "https://vimoxshah.github.io/clockwork/"
 
   # Ventura, matching the app's own LSMinimumSystemVersion (13.0).
   depends_on macos: :ventura
