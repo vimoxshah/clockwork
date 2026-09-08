@@ -393,6 +393,86 @@ label.f { display: block; color: var(--muted); font-size: 12px; margin: 12px 0 4
 .tasklist-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; margin-bottom: 8px; }
 .tasklist-row .grow { flex: 1; min-width: 0; }
 
+/* ---------- credential rows (Settings › Notifications & delivery) ----------
+   Every row here is one credential: a label, a field, a hint, and one to three
+   actions. They used to be .tasklist-row, which is flex with align-items:center
+   and a .grow field taking whatever the buttons left over. Two visible faults
+   came from that, and both are what "see alignment of all buttons" was about:
+
+   - the field's right edge moved with the BUTTON COUNT, so the Slack row (Save
+     · Send test · Clear) ended at x=1213 while the Telegram row ended at 1287;
+   - centring put SMTP's Save/Clear against the middle of a block holding two
+     fields and two hints, so they sat beside the helper text instead of the
+     field they act on.
+
+   A grid with named areas fixes both by construction: the action column is a
+   FIXED width, so every field ends on the same x whatever the row holds, and
+   the actions occupy the `field` row specifically, so a taller hint or a second
+   field below cannot drag them out of line. .tasklist-row is left alone — the
+   Tasks list uses it and wants the centring. */
+.cred-row {
+  display: grid;
+  /* Wide enough for the widest group (Save · Send test · Clear) so that group
+     does not have to shrink and no other row has to match its shrinking. */
+  grid-template-columns: minmax(0, 1fr) 13.5rem;
+  grid-template-areas:
+    "label   ."
+    "field   actions"
+    "hint    ."
+    "extra   .";
+  column-gap: 10px;
+  align-items: start;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  margin-bottom: 8px;
+}
+.cred-row > .cred-label { grid-area: label; margin-top: 0; }
+.cred-row > .cred-field { grid-area: field; width: 100%; }
+.cred-row > .cred-hint { grid-area: hint; margin: 4px 0 0; }
+.cred-row > .cred-extra { grid-area: extra; min-width: 0; }
+/* Save and Clear are COLUMNS, not just a right-aligned group.
+   Right-aligning the group lines up whatever happens to be last — so Clear
+   agreed across rows while Save sat at x=1297 on four rows and x=1213 on the
+   Slack row, which has a third button. Fixed areas mean every Save shares an
+   x and every Clear shares an x whether or not the row has a middle action.
+   The actions sit on the field's row so they need no vertical nudge; a button
+   is shorter than an input, and centring the two reads better than topping. */
+.cred-row > .cred-actions {
+  grid-area: actions;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-areas: "test save clear";
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+}
+.cred-actions > .act-test { grid-area: test; justify-self: end; }
+.cred-actions > .act-save { grid-area: save; }
+.cred-actions > .act-clear { grid-area: clear; }
+/* A row whose only action is a test send has no Save or Clear to line up
+   with, so it takes the whole track rather than sitting in a column that is
+   empty on every other row. */
+.cred-row > .cred-actions--single {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "test";
+}
+@media (max-width: 720px) {
+  /* One column: a 13.5rem action track next to a field is unreadable here, and
+     a squeezed field is exactly the fault this class exists to remove. */
+  .cred-row {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "label" "field" "hint" "actions" "extra";
+  }
+  .cred-row > .cred-actions {
+    grid-template-columns: auto auto auto;
+    grid-template-areas: "save clear test";
+    justify-content: start;
+  }
+  .cred-actions > .act-test { justify-self: start; }
+}
+
 /* Tasks page: use the full window width with a sticky toolbar */
 .tasks-page { width: 100%; max-width: none; margin: 0 auto; }
 .tasks-toolbar {

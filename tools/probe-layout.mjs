@@ -86,14 +86,23 @@ const rows = await page.evaluate(() => {
   const wide = [];
   const rightEdges = new Set();
   for (const card of document.querySelectorAll('.settings-card')) {
+    // Only FULL-WIDTH cards can be compared: the page is an auto-fill grid, so
+    // a narrow card ending earlier than a wide one is the layout working.
     const cr = card.getBoundingClientRect();
-    for (const kid of card.children) {
-      const k = kid.getBoundingClientRect();
-      if (k.width > 0) rightEdges.add(Math.round(k.right));
+    if (cr.width > 900) {
+      for (const kid of card.children) {
+        const k = kid.getBoundingClientRect();
+        if (k.width > 0) rightEdges.add(Math.round(k.right));
+      }
     }
     for (const btn of card.querySelectorAll('button')) {
       const b = btn.getBoundingClientRect();
-      if (b.width > 240) wide.push({ t: (btn.textContent || '').trim().slice(0, 26), w: Math.round(b.width) });
+      // A Radix Select trigger is a <button role="combobox"> and is SUPPOSED
+      // to fill its column — it is a field, not an action. Counting it here
+      // would make this check permanently non-empty and therefore useless.
+      if (b.width > 240 && btn.getAttribute('role') !== 'combobox') {
+        wide.push({ t: (btn.textContent || '').trim().slice(0, 26), w: Math.round(b.width) });
+      }
       // The input this button actually belongs to: the nearest one sharing a row.
       const near = [...card.querySelectorAll('input, textarea')]
         .map((i) => ({ i, r: i.getBoundingClientRect() }))
@@ -111,7 +120,7 @@ const rows = await page.evaluate(() => {
   }
   return { rows: out, wideButtons: wide, cardRightEdges: [...rightEdges].sort((a, b) => a - b) };
 });
-console.log('\ncard right edges (should be one value):', rows.cardRightEdges.filter((e) => e > 900));
+console.log('\nfull-width card content right edges (should be one value):', rows.cardRightEdges);
 console.log('buttons stretched past 240px (should be empty):', JSON.stringify(rows.wideButtons));
 console.log('\naction rows — input right edge, button left edge, offset from its own input:');
 for (const r of rows.rows) {
