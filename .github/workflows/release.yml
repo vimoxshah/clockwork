@@ -60,6 +60,12 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
+          # The .app carries the daemon and its own Node, so this has to run
+          # before the bundler collects resources. Without it the DMG is a
+          # window with nothing behind it — the exact bug this staging step
+          # was added to end. It stages the Node running HERE, and installs
+          # better-sqlite3 with it, so the ABI matches by construction.
+          node tools/stage-bundle.mjs
           cd src-tauri
           if [ -z "$APPLE_CERTIFICATE" ]; then
             unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
@@ -68,11 +74,29 @@ jobs:
           fi
           npx tauri build --bundles dmg
 
-      - name: Verify signature (informational)
+      - name: Verify the bundle can actually run
         run: |
           APP="src-tauri/target/release/bundle/macos/Clockwork.app"
-          codesign -dv "$APP" 2>&1 | head -5 || true
-          spctl -a -vv "$APP" 2>&1 | head -3 || true
+          NODE="$APP/Contents/MacOS/node"
+          ENTRY="$APP/Contents/Resources/app/packages/daemon/dist/main.js"
+          # These three FAIL the build. A DMG that ships without its daemon
+          # looks perfect in every other check and is useless on the machine
+          # it lands on, which is precisely why it must not be informational.
+          test -x "$NODE"  || { echo "::error::no bundled node at $NODE"; exit 1; }
+          test -f "$ENTRY" || { echo "::error::no daemon entry at $ENTRY"; exit 1; }
+          "$NODE" -e "new (require('$APP/Contents/Resources/app/packages/daemon/node_modules/better-sqlite3'))(':memory:')" \
+            || { echo "::error::the bundled node cannot open a database — ABI mismatch"; exit 1; }
+          echo "bundled node: $("$NODE" -v), daemon entry present"
+
+      - name: Report signing state (informational)
+        run: |
+          APP="src-tauri/target/release/bundle/macos/Clockwork.app"
+          codesign -dvvv "$APP" 2>&1 | grep -E "Authority|Signature|flags" || true
+          # Not a gate: without an Apple Developer ID in the repo secrets this
+          # is ad-hoc signed and Gatekeeper WILL refuse it on a fresh Mac.
+          # Failing here would only stop us shipping the unsigned build we
+          # have decided to ship; saying so plainly is the honest half.
+          spctl --assess --type execute -vv "$APP" 2>&1 | head -3 || true
 
       - name: Checksums
         id: sum
