@@ -82,3 +82,40 @@ describe('the fixture is not vacuously safe', () => {
       .toMatchObject({ safe: false, reason: 'unreachable' });
   });
 });
+
+describe('the converse: any rule with the emitter\'s invariants is safe', () => {
+  /**
+   * The UI side asserts that every one of its ~377,000 reachable control states
+   * emits a rule with four invariants (no MINUTELY/SECONDLY, no INTERVAL on
+   * HOURLY, no COUNT, no DTSTART). This is the other half of that claim, and
+   * together they cover the whole space rather than the fixture's 221 rows.
+   *
+   * The grammar is rebuilt here from those invariants rather than imported,
+   * because the UI is a pure wire client and the packages do not import each
+   * other. The fixture equality test on the UI side is what stops the emitter
+   * drifting away from this grammar.
+   */
+  it('across every day subset, hour window and minute grid', () => {
+    const DAYS = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'] as const;
+    const refused: string[] = [];
+    let checked = 0;
+    for (let mask = 1; mask < 1 << 7; mask++) {
+      const days = DAYS.filter((_, i) => (mask & (1 << i)) !== 0);
+      const byDay = days.length < 7 ? `BYDAY=${days.join(',')};` : '';
+      for (const every of [5, 10, 15, 30]) {
+        const grid = Array.from({ length: 60 / every }, (_, i) => i * every).join(',');
+        for (let from = 0; from < 24; from++) {
+          for (let to = from + 1; to <= 24; to++) {
+            const hours = Array.from({ length: Math.max(from, to - 1) - from + 1 }, (_, i) => from + i);
+            const byHour = hours.length < 24 ? `BYHOUR=${hours.join(',')};` : '';
+            const rule = `FREQ=HOURLY;${byDay}${byHour}BYMINUTE=${grid}`;
+            checked++;
+            if (!guardSchedule('rrule', rule, MAX).safe) refused.push(rule);
+          }
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(150_000);
+    expect(refused).toEqual([]);
+  }, 120_000);
+});

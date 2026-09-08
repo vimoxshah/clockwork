@@ -26,10 +26,10 @@
  *      M4, next-fire over the 8-day save rung for `FREQ=MINUTELY;BYDAY=MO..FR;
  *      BYHOUR=9..16`: 1872ms at INTERVAL=5, 628ms at 15, 319ms at 30. That
  *      blocks the request that saves the task and the tick that touches it.
- *      The composer avoids it by emitting a DTSTART (see `composeRrule` in the
- *      UI), which takes the same rule to 17ms/1.0ms/0.5ms with a byte-identical
- *      occurrence set. The API is reachable without the composer, so the check
- *      stays here too.
+ *      The composer does not go near it — `composeIntervalRule` in
+ *      packages/ui/src/lib/schedule-rule.ts emits FREQ=HOURLY, which
+ *      `advancedAnchorMs` advances unconditionally. The API is reachable
+ *      without the composer, so the check stays here.
  *
  * The reachability test is stated against the ANCHOR rather than against
  * midnight, because the composer's DTSTART is what makes the difference between
@@ -97,13 +97,49 @@ function numericPart(props: Map<string, string>, name: string): number[] | null 
 }
 
 /**
- * Can the iterator ever reach one of `values`, stepping by INTERVAL from
- * `anchorValue` within a field of `period` units? It can iff some stated value
- * is congruent to the anchor modulo `gcd(INTERVAL, period)` — the step's orbit.
+ * Can the iterator ever reach one of `targets`, stepping by INTERVAL units from
+ * `anchorOffset` around a cycle of `period` units? It can iff some target is
+ * congruent to the anchor modulo `gcd(INTERVAL, period)` — the step's orbit.
+ *
+ * The unit is the rule's OWN FREQ unit and the period is one full day in that
+ * unit, NOT the field the BY part names. That distinction is the whole of the
+ * defect this replaces: checking `FREQ=MINUTELY;BYHOUR=...` on the 24-hour grid
+ * asks whether the HOUR counter can reach hour 3, and there is no hour counter —
+ * a MINUTELY rule walks minutes, and BYHOUR is a filter it re-tests at each one.
+ * `FREQ=MINUTELY;INTERVAL=120;BYHOUR=3` from midnight reaches minutes-of-day
+ * 0, 120, 240 …, none of which is inside hour 3 (minutes 180-239), and it spins
+ * forever: measured killed at 457 SECONDS. `INTERVAL=90` reaches minute 180 and
+ * answers in 15ms, so the refusal has to be this arithmetic and not a blanket
+ * ban on coarser BY parts.
  */
-function anyReachable(values: number[], anchorValue: number, interval: number, period: number): boolean {
+function anyReachable(targets: number[], anchorOffset: number, interval: number, period: number): boolean {
   const step = gcd(interval, period);
-  return values.some((v) => mod(v - anchorValue, step) === 0);
+  return targets.some((v) => mod(v - anchorOffset, step) === 0);
+}
+
+/** `[0, 1, … n-1]`, or the stated list when there is one. */
+function statedOrAll(values: number[] | null, n: number): number[] {
+  return values ?? Array.from({ length: n }, (_, i) => i);
+}
+
+/**
+ * Every offset-within-the-day, in `unit` units, that the rule's BY parts admit.
+ * An unstated part admits its whole range, because the rule does not narrow it.
+ */
+function admittedOffsets(
+  unit: 'minute' | 'second',
+  byHour: number[] | null,
+  byMinute: number[] | null,
+  bySecond: number[] | null,
+): number[] {
+  const out: number[] = [];
+  for (const h of statedOrAll(byHour, 24)) {
+    for (const m of statedOrAll(byMinute, 60)) {
+      if (unit === 'minute') { out.push(h * 60 + m); continue; }
+      for (const sec of statedOrAll(bySecond, 60)) out.push(h * 3600 + m * 60 + sec);
+    }
+  }
+  return out;
 }
 
 /**
@@ -162,14 +198,28 @@ export function guardSchedule(
       + `Pick an interval that divides ${period}, or a start time on the same grid.`,
   });
 
+  // HOURLY walks hours, so its grid is the 24 hours of the day and BYMINUTE
+  // cannot constrain it — `addHours` generates every matching minute inside an
+  // accepted hour.
   if (freq === 'HOURLY' && byHour && !anyReachable(byHour, anchorHour, interval, 24)) {
     return unreachable('BYHOUR', byHour, anchorHour, 24);
   }
-  if (freq === 'MINUTELY' && byMinute && !anyReachable(byMinute, anchorMinute, interval, 60)) {
-    return unreachable('BYMINUTE', byMinute, anchorMinute, 60);
+  // MINUTELY and SECONDLY walk a finer unit, so EVERY coarser BY part is a
+  // filter on the same walk and they are checked together, on that walk's own
+  // grid. Checking each part against its own field was the hole: it left
+  // MINUTELY+BYHOUR and SECONDLY+BYMINUTE/BYHOUR untested.
+  if (freq === 'MINUTELY' && (byHour || byMinute)) {
+    const admitted = admittedOffsets('minute', byHour, byMinute, null);
+    if (!anyReachable(admitted, anchorHour * 60 + anchorMinute, interval, 1440)) {
+      return unreachable('BYHOUR/BYMINUTE', [...(byHour ?? []), ...(byMinute ?? [])], anchorHour * 60 + anchorMinute, 1440);
+    }
   }
-  if (freq === 'SECONDLY' && bySecond && !anyReachable(bySecond, anchorSecond, interval, 60)) {
-    return unreachable('BYSECOND', bySecond, anchorSecond, 60);
+  if (freq === 'SECONDLY' && (byHour || byMinute || bySecond)) {
+    const admitted = admittedOffsets('second', byHour, byMinute, bySecond);
+    const anchorSod = anchorHour * 3600 + anchorMinute * 60 + anchorSecond;
+    if (!anyReachable(admitted, anchorSod, interval, 86_400)) {
+      return unreachable('BYHOUR/BYMINUTE/BYSECOND', [...(byHour ?? []), ...(byMinute ?? []), ...(bySecond ?? [])], anchorSod, 86_400);
+    }
   }
 
   // --- 2. a sub-daily counter fighting a whole-day filter: the second hang ---
@@ -179,12 +229,18 @@ export function guardSchedule(
   // whole day at a time. When the anchor's own day is one the day filter rejects,
   // the two never resynchronise. Measured out of process with an 8s watchdog on
   // 2026-09-08: `FREQ=MINUTELY;INTERVAL={5,15,30};BYDAY=MO;BYHOUR=9..16` hung at
-  // every interval, and `BYDAY=MO,TU,WE,TH,FR` hung too once anchored on a
-  // Saturday while answering in 15ms anchored on a Tuesday. A DTSTART does not
-  // fix it — it only moves which start days are fatal — so this refusal is
-  // anchor-independent, unlike the cliff below. `FREQ=HOURLY` with the same BY
-  // parts answers in 12-23ms in every one of those cases, which is what the
-  // composer emits instead.
+  // every interval, and `BYDAY=MO,TU,WE,TH,FR` hung once the window started on a
+  // Saturday while answering in 15ms from a Tuesday.
+  //
+  // THIS ONE IS DELIBERATELY CONSERVATIVE, and the false positive is named
+  // rather than hidden: the same MO..FR rule anchored at midnight on a TUESDAY
+  // does answer, in 26ms. Whether it terminates depends on the relationship
+  // between the anchor's weekday, the day filter and the hour skip, and I could
+  // not derive a rule for that the way the modular check above is derived — so
+  // the whole combination is refused. The cost is bounded: FREQ=HOURLY with the
+  // same BY parts answers in 12-23ms in every one of these cases and is what
+  // the composer emits, so nothing a user can build in the app is refused here.
+  // A caller writing MINUTELY+BYDAY by hand is told exactly what to write.
   const filtersWholeDays = WHOLE_DAY_PARTS.some((p) => (props.get(p) ?? '').trim() !== '');
   const statesCoarser = freq === 'MINUTELY' ? byHour != null : byHour != null || byMinute != null;
   if ((freq === 'MINUTELY' || freq === 'SECONDLY') && filtersWholeDays && statesCoarser) {
@@ -208,10 +264,12 @@ export function guardSchedule(
       return {
         safe: false,
         reason: 'slow_anchor',
-        detail:
-          `FREQ=${freq} with ${countRaw != null ? 'COUNT' : 'a coarser BY part'} and no DTSTART replays from 1970 on `
-          + 'every expansion, which blocks the save request and the scheduler tick. Add a DTSTART on the rule\'s own '
-          + 'grid — midnight of the start day works for any interval that divides 60.',
+        detail: countRaw != null
+          ? `FREQ=${freq} with COUNT keeps the 1970 anchor, so the occurrences it counts are 1970's, not this year's. `
+            + 'State a DTSTART to say when the rule starts, or drop COUNT and use UNTIL.'
+          : `FREQ=${freq} with a coarser BY part and no DTSTART replays from 1970 on every expansion, which blocks `
+            + 'the save request and the scheduler tick. State a DTSTART on the rule\'s own grid, or use FREQ=HOURLY '
+            + 'with BYMINUTE — every 15 minutes is BYMINUTE=0,15,30,45.',
       };
     }
   }

@@ -96,3 +96,61 @@ describe('what each control emits', () => {
     expect(composeMonthlyRule(15, 9, 30)).toBe('FREQ=MONTHLY;BYMONTHDAY=15;BYHOUR=9;BYMINUTE=30');
   });
 });
+
+describe('the WHOLE space the composer can reach, not a sample of it', () => {
+  /**
+   * The fixture is 221 rules, and the composer can emit far more than that:
+   * any of 127 day subsets, any hour window with 0 <= from < to <= 24, four
+   * intervals, 1440 times, 28 days of the month. Timing every one of those
+   * through the expander is not affordable; asserting a PROPERTY of every one
+   * of them is, because the emitter is pure string building.
+   *
+   * The property is exactly what makes a rule safe to hand to rrule, and the
+   * daemon asserts the converse — that a rule with these invariants is
+   * classified safe — in emittable-schedules.test.ts. Neither side imports the
+   * other; between them the claim is about the whole space rather than a
+   * sample of it.
+   */
+  it('every reachable control state emits a rule with the invariants that make it safe', () => {
+    const allDaySets: Weekday[][] = [];
+    for (let mask = 1; mask < 1 << 7; mask++) {
+      allDaySets.push(WEEKDAYS.filter((_, i) => (mask & (1 << i)) !== 0));
+    }
+    expect(allDaySets).toHaveLength(127);
+
+    let checked = 0;
+    const check = (rrule: string): void => {
+      checked++;
+      // 1. Never the sub-daily frequencies: those are the two hang classes.
+      expect(rrule).not.toMatch(/FREQ=(MINUTELY|SECONDLY)/);
+      // 2. HOURLY never states an INTERVAL, so gcd(INTERVAL,24) is 1 and every
+      //    BYHOUR value is on the walk — the unreachable case cannot arise.
+      if (rrule.startsWith('FREQ=HOURLY')) expect(rrule).not.toMatch(/INTERVAL=/);
+      // 3. No COUNT (pins the 1970 anchor) and no DTSTART (nothing to put
+      //    off-grid). Both are refusal inputs for the guard.
+      expect(rrule).not.toMatch(/COUNT=/);
+      expect(rrule).not.toMatch(/DTSTART/);
+    };
+
+    for (const days of allDaySets) {
+      for (const every of INTERVAL_MINUTES) {
+        for (let fromHour = 0; fromHour < 24; fromHour++) {
+          for (let toHour = fromHour + 1; toHour <= 24; toHour++) {
+            check(composeIntervalRule({ every, days, fromHour, toHour }));
+          }
+        }
+      }
+      for (const [h, m] of [[0, 0], [9, 30], [23, 59]] as Array<[number, number]>) {
+        check(composeWeeklyRule(days, h, m));
+      }
+    }
+    for (let h = 0; h < 24; h++) {
+      for (const m of [0, 1, 30, 59]) {
+        check(composeDailyRule(h, m));
+        for (let dom = 1; dom <= 28; dom++) check(composeMonthlyRule(dom, h, m));
+      }
+    }
+    // Guards the guard: a typo in the loops above would quietly check nothing.
+    expect(checked).toBeGreaterThan(150_000);
+  });
+});

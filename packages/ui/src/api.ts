@@ -599,10 +599,11 @@ export function fallbackIcsLabel(filename: string): string {
   return base || 'Imported calendar';
 }
 
-/** POST /schedule/preview: the runs, or the guard's refusal. */
-export type SchedulePreviewT =
-  | { runs: number[]; tz: string; count: number; error?: undefined }
-  | { error: string; reason: 'unreachable' | 'slow_anchor' | 'count_too_large' | 'unparseable'; runs?: undefined };
+/** POST /schedule/preview: the runs. A refusal arrives as a thrown ApiError. */
+export interface SchedulePreviewT { runs: number[]; tz: string; count: number }
+
+/** The `reason` the guard puts on a 422 from POST /schedule/preview. */
+export type ScheduleRefusalT = 'unreachable' | 'slow_anchor' | 'count_too_large' | 'unparseable';
 
 export const api = {
   health: () => req<Health>('GET', '/health'),
@@ -628,8 +629,9 @@ export const api = {
   createTask: (t: unknown) => req<TaskViewT>('POST', '/tasks', t),
   /**
    * Next runs for a rule being typed. Creates nothing.
-   * `req` does not throw on 4xx, so a refusal arrives as the error arm of
-   * this union rather than a rejection — the caller has to look at it.
+   * A refusal is a 422, and `send` THROWS an ApiError on any non-ok status
+   * (see the `!res.ok` branch above), so the guard's reason arrives as a
+   * rejection carrying `status === 422` — never as a resolved value.
    */
   previewSchedule: (s: unknown) => req<SchedulePreviewT>('POST', '/schedule/preview', s),
   patchTask: (id: string, p: unknown) => req<TaskViewT>('PATCH', `/tasks/${id}`, p),

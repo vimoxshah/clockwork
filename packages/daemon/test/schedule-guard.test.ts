@@ -42,10 +42,14 @@ describe('unreachable BY parts — the hang, refused by arithmetic', () => {
     expect(performance.now() - t0).toBeLessThan(100);
   });
 
-  it('anchoring at midnight does NOT rescue it — the day filter is the hazard, not the anchor', () => {
-    // Measured 2026-09-08 with an 8s watchdog: the same rule anchored on a
-    // Tuesday answered in 15ms and anchored on a SATURDAY hung. A refusal that
-    // depended on the anchor would pass on five days a week and hang on two.
+  it('refuses the whole MINUTELY-plus-day-filter combination, conservatively', () => {
+    // Honest about what this one is: the same rule anchored at midnight on a
+    // TUESDAY answers in 26ms, so this IS a false positive for that anchor.
+    // Whether it terminates depends on the anchor's weekday against the day
+    // filter and the hour skip, which is not derivable the way the modular
+    // check is — and the rule DOES hang for BYDAY=MO, for BYDAY=SA, and for
+    // MO..FR from a Saturday window. Refusing the combination costs nothing a
+    // user can reach: the composer emits FREQ=HOURLY.
     expect(guard(
       'DTSTART:20260908T000000Z\nFREQ=MINUTELY;INTERVAL=15;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9,10;BYMINUTE=0,15,30,45',
     )).toMatchObject({ safe: false, reason: 'unreachable' });
@@ -55,6 +59,33 @@ describe('unreachable BY parts — the hang, refused by arithmetic', () => {
     expect(guard('FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9,10;BYMINUTE=0,15,30,45')).toEqual({ safe: true });
     expect(guard('FREQ=HOURLY;BYDAY=SA;BYHOUR=9,10;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55'))
       .toEqual({ safe: true });
+  });
+
+  it('a coarser BY part is checked on the WALK\'s grid, not on its own field', () => {
+    // The hole this closes. A MINUTELY rule has no hour counter: it walks
+    // minutes and re-tests BYHOUR at each one, so reachability is a question
+    // about minutes-of-day. Every row below was verified out of process against
+    // rrule 2.8.1 with a watchdog.
+    //
+    //   INTERVAL=120 from midnight reaches minutes 0,120,240… and hour 3 is
+    //   minutes 180-239, so it never lands — killed at 457 SECONDS.
+    expect(guard('DTSTART:20260908T000000Z\nFREQ=MINUTELY;INTERVAL=120;BYHOUR=3'))
+      .toMatchObject({ safe: false, reason: 'unreachable' });
+    expect(guard('DTSTART:20260908T000000Z\nFREQ=MINUTELY;INTERVAL=1440;BYHOUR=10'))
+      .toMatchObject({ safe: false, reason: 'unreachable' });
+    expect(guard('DTSTART:20260908T000000Z\nFREQ=SECONDLY;INTERVAL=120;BYMINUTE=1'))
+      .toMatchObject({ safe: false, reason: 'unreachable' });
+  });
+
+  it('and the neighbouring interval that DOES land is left alone', () => {
+    // gcd(90, 1440) = 90, and 180 is a multiple of 90, so minute 180 — the
+    // first minute of hour 3 — is on the walk. Measured: 15ms, answers.
+    // A blanket ban on MINUTELY+BYHOUR would have refused this.
+    expect(guard('DTSTART:20260908T000000Z\nFREQ=MINUTELY;INTERVAL=90;BYHOUR=3')).toEqual({ safe: true });
+    // gcd(60, 1440) = 60: every hour boundary is on the walk.
+    expect(guard('DTSTART:20260908T000000Z\nFREQ=MINUTELY;INTERVAL=60;BYHOUR=3')).toEqual({ safe: true });
+    // Any interval that does not divide the day reaches every minute of it.
+    expect(guard('DTSTART:20260908T000000Z\nFREQ=MINUTELY;INTERVAL=7;BYHOUR=3;BYMINUTE=0')).toEqual({ safe: true });
   });
 
   it('reachable hours pass: INTERVAL=2 reaches even hours', () => {
@@ -74,7 +105,10 @@ describe('unreachable BY parts — the hang, refused by arithmetic', () => {
 describe('the epoch-anchor cliff — slow, and only without a DTSTART', () => {
   it('an off-grid INTERVAL with a coarser BY part and no DTSTART is the cliff', () => {
     // 60 % 7 !== 0, so `skipStaysOnGrid` fails and the anchor stays at 1970 —
-    // recurrence.ts's own `FREQ=MINUTELY;INTERVAL=7;BYHOUR=5` case.
+    // recurrence.ts's own `FREQ=MINUTELY;INTERVAL=7;BYHOUR=5` case. It is
+    // REACHABLE (gcd(7,1440)=1 reaches every minute), so it falls through the
+    // hang check to this one: slow, not infinite, and the two must not be
+    // reported as the same thing.
     expect(guard('FREQ=MINUTELY;INTERVAL=7;BYHOUR=5'))
       .toMatchObject({ safe: false, reason: 'slow_anchor' });
   });

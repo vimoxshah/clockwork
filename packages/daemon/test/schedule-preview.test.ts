@@ -26,6 +26,10 @@ let db: DB;
 let app: FastifyInstance;
 let token: string;
 let realHome: string | undefined;
+let clock: FakeClock;
+let scheduler: Scheduler;
+/** Task ids the scheduler actually booked. This is what "fireable" means. */
+let booked: string[];
 
 const auth = (json: Record<string, unknown>): any => ({
   ...json,
@@ -45,14 +49,22 @@ beforeEach(async () => {
   const opened = openDatabase(dir);
   db = opened.db;
   createMigrator(db, MIGRATIONS).migrate();
-  const clock = new FakeClock(Date.now());
+  clock = new FakeClock(Date.now());
+  booked = [];
   const rm = new RunManager({
     db, clock, dataDir: dir,
     runnerChildModule: '/nonexistent/runner-child.js',
     notify: () => {}, broadcast: () => {},
     safetyJournal: new SafetyJournal(`${dir}/journal.jsonl`),
   });
-  const scheduler = new Scheduler({ db, clock, enqueueRun: () => {}, notify: () => {} });
+  scheduler = new Scheduler({
+    db,
+    clock,
+    // The scheduler's only way of starting work. Recording it is how this file
+    // asserts a rule FIRES rather than asserting a copy of the tick's SELECT.
+    enqueueRun: (spec: { taskId: string }) => { booked.push(spec.taskId); },
+    notify: () => {},
+  });
   const built = await buildServer({ db, dataDir: dir, runManager: rm, scheduler, version: 'test' });
   app = built.app;
   token = built.token;
@@ -138,7 +150,7 @@ describe('the guard runs before the expander, not after it', () => {
 });
 
 describe('the rule this change exists for, end to end', () => {
-  it('saves, is enabled with a next_fire, and the tick predicate selects it', async () => {
+  it('saves, and the real scheduler tick books a run for it', async () => {
     const t0 = Date.now();
     const res = await app.inject(auth({
       method: 'POST',
@@ -151,17 +163,27 @@ describe('the rule this change exists for, end to end', () => {
     }));
     const elapsed = Date.now() - t0;
     expect(res.statusCode, res.body).toBe(201);
+    const taskId = res.json().id as string;
 
-    const row = db.prepare(
-      `SELECT s.enabled, s.next_fire FROM schedules s
-       JOIN tasks t ON t.id = s.task_id
-       WHERE t.id = ? AND s.enabled=1 AND t.enabled=1 AND t.deleted_at IS NULL AND s.next_fire IS NOT NULL`,
-    ).get(res.json().id) as { enabled: number; next_fire: number } | undefined;
-
-    // The tick's own predicate. A row it cannot select is a task that never runs.
+    const row = db.prepare('SELECT enabled, next_fire FROM schedules WHERE task_id = ?').get(taskId) as
+      { enabled: number; next_fire: number } | undefined;
     expect(row).toBeDefined();
     expect(row!.enabled).toBe(1);
-    expect(row!.next_fire).toBeGreaterThan(Date.now());
+    expect(row!.next_fire).toBeGreaterThan(clock.now());
+
+    // Not a copy of the tick's SELECT — the tick itself. Nothing here would
+    // survive `scheduler.ts` changing its due-selection, which a duplicated
+    // predicate silently would.
+    await scheduler.tick();
+    expect(booked, 'nothing is due yet').toEqual([]);
+
+    clock.setTo(row!.next_fire + 1);
+    await scheduler.tick();
+    expect(booked, 'the rule fires once its next_fire arrives').toContain(taskId);
+
+    // The schedule must also roll forward, or it fires once and stops.
+    const after = db.prepare('SELECT next_fire FROM schedules WHERE task_id = ?').get(taskId) as { next_fire: number };
+    expect(after.next_fire).toBeGreaterThan(row!.next_fire);
 
     // The FREQ=MINUTELY spelling of this rule costs 319-1872ms when it answers
     // at all, and hangs outright on a start day its BYDAY rejects. 500ms is a

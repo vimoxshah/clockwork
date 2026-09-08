@@ -13,7 +13,7 @@
  * newer one and describe a schedule the user has already moved past.
  */
 import { useEffect, useRef, useState } from 'react';
-import { api, type SchedulePreviewT } from '../api';
+import { api, ApiError, type SchedulePreviewT } from '../api';
 import { CalendarClock, AlertCircle } from 'lucide-react';
 
 const DEBOUNCE_MS = 250;
@@ -42,12 +42,16 @@ export function NextRunsPanel({ rrule, localError, tz }: NextRunsPanelProps): JS
         .previewSchedule({ kind: 'rrule', rrule, tz })
         .then((res: SchedulePreviewT) => {
           if (seq !== latest.current) return;
-          if (res.runs) setState({ runs: res.runs });
-          else setState({ error: res.error });
+          setState({ runs: res.runs });
         })
         .catch((e: unknown) => {
           if (seq !== latest.current) return;
-          setState({ error: `Could not reach the daemon: ${String(e)}` });
+          // A refusal is a 422 and `send` throws it, so the guard's own
+          // sentence arrives HERE. Reporting it as "could not reach the daemon"
+          // would be a false connectivity claim about a daemon that answered,
+          // and would bury the one line saying what is wrong with the rule.
+          if (e instanceof ApiError && e.status === 422) setState({ error: e.message });
+          else setState({ error: `Could not reach the daemon: ${String(e)}` });
         });
     }, DEBOUNCE_MS);
     return () => clearTimeout(timer);

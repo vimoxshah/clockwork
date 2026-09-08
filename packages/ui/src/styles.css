@@ -437,11 +437,17 @@ label.f { display: block; color: var(--muted); font-size: 12px; margin: 12px 0 4
  * tall one left the dead half-screen under the limits banner: the row was as
  * tall as its tallest cell and the other half of it was empty.
  *
- * Every section is now a card in one `auto-fill` grid. The columns start at the
- * top of the page, `align-items: start` lets each card be exactly its own
- * height so nothing pads out a neighbour, and the track floor is what collapses
- * the whole thing to a single column on a narrow window without a breakpoint to
- * maintain.
+ * Every section is now a card in one `auto-fill` grid, so the columns start at
+ * the top of the page and the track floor collapses them to one column on a
+ * narrow window with no breakpoint to maintain.
+ *
+ * What actually removed the half-screen: "Usage & limits" was one cell of a
+ * two-cell island, sharing a row with a much taller neighbour. It now sits in a
+ * three-track row beside two cards of its own rough size. `align-items: start`
+ * stops a card STRETCHING to its row's height — it does not shrink the row,
+ * which is still as tall as its tallest one-span card. So some whitespace under
+ * a short card remains and is bounded by one card's height, where before it was
+ * bounded by the tallest section on the page.
  */
 .settings-page {
   width: 100%;

@@ -216,12 +216,20 @@ describe('the next-5-runs panel', () => {
     const container = await openInterval();
 
     await waitFor(() => previewed().length > 0, 'a preview request');
+    const panel = (): HTMLElement => container.querySelector<HTMLElement>('[data-testid="next-runs"]')!;
     await waitFor(
-      () => (container.querySelector('[data-testid="next-runs"]')?.textContent ?? '').includes('unreachable'),
+      () => (panel().textContent ?? '').includes('unreachable'),
       'the refusal message',
-      { describe: () => `panel = ${container.querySelector('[data-testid="next-runs"]')?.textContent}` },
+      { describe: () => `panel = ${panel().textContent}` },
     );
-    expect(container.querySelector('[data-testid="next-runs"]')!.querySelectorAll('li')).toHaveLength(0);
+    // The assertion that matters: a 422 is a THROWN ApiError, so the message
+    // reaches the panel through the catch. Reporting it as a connectivity
+    // failure would still contain the word "unreachable" and pass a looser
+    // check while telling the user something false about a daemon that
+    // answered.
+    expect(panel().textContent).not.toContain('Could not reach the daemon');
+    expect(panel().textContent).toContain('BYHOUR=3 is unreachable');
+    expect(panel().querySelectorAll('li')).toHaveLength(0);
   });
 
   it('reports a local validation error without asking the daemon', async () => {
