@@ -132,13 +132,25 @@ describe('the guard runs before the expander, not after it', () => {
   });
 
   it('refuses a DTSTART-less sub-daily rule that would replay from 1970', async () => {
-    // BYMINUTE, not BYHOUR: a coarser BY part on a MINUTELY walk is refused as
-    // a HANG before this branch is reached, and the two reasons must stay
-    // distinguishable — one says "add a DTSTART", the other says "you cannot
-    // write this rule at all".
-    const res = await preview({ kind: 'rrule', rrule: 'FREQ=MINUTELY;INTERVAL=7;BYMINUTE=5', tz: 'UTC' });
+    // COUNT, and it has to be COUNT. This used to assert on
+    // FREQ=MINUTELY;INTERVAL=7;BYMINUTE=5, which the guard refused on a wrong
+    // reading of `advancedAnchorMs` — that function looks at BYHOUR for
+    // MINUTELY, never BYMINUTE, and the rule answers in 1ms. COUNT is what
+    // genuinely keeps the 1970 anchor, so it is what keeps this branch honest.
+    //
+    // The two reasons must stay distinguishable: `slow_anchor` says "add a
+    // DTSTART", `unreachable` says "you cannot write this rule at all".
+    const res = await preview({
+      kind: 'rrule',
+      rrule: 'FREQ=MINUTELY;INTERVAL=15;COUNT=500;BYMINUTE=0,15,30,45',
+      tz: 'UTC',
+    });
     expect(res.statusCode).toBe(422);
     expect(res.json().reason).toBe('slow_anchor');
+
+    // And the rule that used to sit here is now served, which is the point.
+    const ok = await preview({ kind: 'rrule', rrule: 'FREQ=MINUTELY;INTERVAL=7;BYMINUTE=5', tz: 'UTC' });
+    expect(ok.statusCode).toBe(200);
   });
 
   it('mirrors save\'s COUNT ceiling, so preview is not the weaker door', async () => {
