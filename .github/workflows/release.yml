@@ -88,7 +88,19 @@ jobs:
           # resolves it through node_modules, so a relative path here fails
           # with MODULE_NOT_FOUND on every run — while the step blames an ABI
           # mismatch that does not exist.
-          APP="$PWD/src-tauri/target/release/bundle/macos/Clockwork.app"
+          # Verified INSIDE THE MOUNTED DMG, which is the artifact a user
+          # downloads. `--bundles dmg` makes Tauri delete the intermediate
+          # .app once the DMG exists ("Cleaning .../Clockwork.app" in the log),
+          # so the old path here was empty and the step failed claiming there
+          # was no bundled node. Checking the mounted image is also the
+          # stronger claim: it is the bits that ship, not the bits they came
+          # from.
+          DMG=$(ls "$PWD"/src-tauri/target/release/bundle/dmg/Clockwork_*_aarch64.dmg | head -1)
+          test -f "$DMG" || { echo "::error::no DMG was produced"; exit 1; }
+          MNT=$(mktemp -d)
+          hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MNT" >/dev/null
+          trap 'hdiutil detach "$MNT" -force >/dev/null 2>&1 || true' EXIT
+          APP="$MNT/Clockwork.app"
           NODE="$APP/Contents/MacOS/node"
           ENTRY="$APP/Contents/Resources/app/packages/daemon/dist/main.js"
           SQLITE="$APP/Contents/Resources/app/packages/daemon/node_modules/better-sqlite3"
@@ -110,8 +122,13 @@ jobs:
 
       - name: Report signing state (informational)
         run: |
-          APP="src-tauri/target/release/bundle/macos/Clockwork.app"
-          codesign -dvvv "$APP" 2>&1 | grep -E "Authority|Signature|flags" || true
+          # Same reason as the verify step: the intermediate .app is gone by
+          # now, so read the signature off the copy inside the DMG.
+          DMG=$(ls "$PWD"/src-tauri/target/release/bundle/dmg/Clockwork_*_aarch64.dmg | head -1)
+          MNT=$(mktemp -d)
+          hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MNT" >/dev/null
+          trap 'hdiutil detach "$MNT" -force >/dev/null 2>&1 || true' EXIT
+          codesign -dvvv "$MNT/Clockwork.app" 2>&1 | grep -E "Authority|Signature|flags" || true
           # Not a gate: without an Apple Developer ID in the repo secrets this
           # is ad-hoc signed and Gatekeeper WILL refuse it on a fresh Mac.
           # Failing here would only stop us shipping the unsigned build we
