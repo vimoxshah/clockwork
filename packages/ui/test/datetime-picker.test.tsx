@@ -64,7 +64,7 @@ describe('DateTimePicker', () => {
     );
   });
 
-  it('offers the 5-minute grid every other schedule surface uses', async () => {
+  it('offers every minute, so any time is reachable', async () => {
     const body = await openPicker(new Date(2026, 8, 8, 14, 0));
     const minute = body.querySelector('[data-testid="dtp-minute"]');
     expect(minute?.textContent).toContain('00');

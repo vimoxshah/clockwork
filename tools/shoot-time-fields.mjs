@@ -89,7 +89,7 @@ async function checkTabRows(name, sel) {
 await checkTabRows('composer/frequency', '[aria-label="Repeat frequency"]');
 
 // INTERVAL is the default tab: the hour window lives here.
-await p.getByRole('tab', { name: 'Interval', exact: true }).click();
+await p.getByRole('tab', { name: 'Every N min', exact: true }).click();
 await p.waitForTimeout(400);
 await checkTabRows('composer/every-N', '[aria-label="Interval"]');
 await p.screenshot({ path: '/tmp/tf-interval.png' });
@@ -138,16 +138,32 @@ for (const freq of ['Daily', 'Weekly', 'Monthly']) {
 }
 await p.screenshot({ path: '/tmp/tf-weekly.png' });
 
-// The label the trigger shows must be the time the form holds.
+// "what if i want to set recurring at daily 10 AM?" — and at 10:07, because
+// "make sure we allow user to select any time" means the minute must not be
+// stuck on a grid. The five previewed runs are what proves the rule that
+// reaches the daemon carries the time, not just the trigger label.
+await p.getByRole('tab', { name: 'Daily', exact: true }).click();
+await p.waitForTimeout(400);
 await p.locator('[data-testid="c-rtime-hour"]').click();
 await p.waitForTimeout(400);
-await p.getByRole('option', { name: '2 PM', exact: true }).click();
-await p.waitForTimeout(400);
+await p.getByRole('option', { name: '10 AM', exact: true }).click();
+await p.waitForTimeout(300);
 {
-  const shown = (await p.locator('[data-testid="c-rtime-hour"]').textContent()).trim();
-  const hint = await p.locator('[data-testid="next-runs"]').textContent().catch(() => '');
-  check('composer/At time reflects the pick', shown === '2 PM', `trigger reads ${JSON.stringify(shown)}`);
-  console.log('   next-runs says:', (hint ?? '').slice(0, 120).replace(/\s+/g, ' '));
+  const minutes = await p.locator('[data-testid="c-rtime-minute"]').click().then(async () => {
+    const n = await p.locator('[role="option"]').count();
+    await p.getByRole('option', { name: '07', exact: true }).click();
+    return n;
+  });
+  await p.waitForTimeout(700);
+  const hour = (await p.locator('[data-testid="c-rtime-hour"]').textContent()).trim();
+  const minute = (await p.locator('[data-testid="c-rtime-minute"]').textContent()).trim();
+  const runs = (await p.locator('[data-testid="next-runs"]').textContent().catch(() => '') ?? '')
+    .replace(/\s+/g, ' ');
+  check('composer/daily at 10:07 AM', hour === '10 AM' && minute === '07',
+    `trigger reads ${JSON.stringify(`${hour}:${minute}`)}`);
+  check('composer/every minute is offered', minutes === 60, `minute options=${minutes}`);
+  check('composer/the preview carries the chosen time', /10:07/.test(runs),
+    `next runs: ${runs.slice(0, 110)}`);
 }
 await p.screenshot({ path: '/tmp/tf-attime.png' });
 await p.keyboard.press('Escape');

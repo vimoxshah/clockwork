@@ -117,7 +117,7 @@ async function openInterval(): Promise<HTMLElement> {
   typeInto(container.querySelector<HTMLTextAreaElement>('#c-prompt')!, 'Poll the queue.');
   tabByLabel(container, 'Recurring').click();
   await waitForElement(container, '#c-rtime');
-  tabByLabel(container, 'Interval').click();
+  tabByLabel(container, 'Every N min').click();
   await waitForElement(container, '#c-from-hour');
   return container;
 }

@@ -58,7 +58,7 @@ export function TimeField({
   value,
   onChange,
   id,
-  minuteStep = 5,
+  minuteStep = 1,
   allowEndOfDay = false,
   hourOnly = false,
   ariaLabelPrefix = 'Time',
@@ -69,6 +69,12 @@ export function TimeField({
   value: number;
   onChange: (minutes: number) => void;
   id?: string;
+  /**
+   * Minute granularity. 1 by default, because "make sure we allow user to
+   * select any time" — a grid that only offers :00/:05/:10 cannot express
+   * 10:07, and the schedule emitter accepts any minute. Radix's typeahead
+   * makes the 60-row list quick: type "37" and it jumps to 37.
+   */
   minuteStep?: number;
   /** Offer 24:00 (1440) as the end of THIS day rather than the start of the next. */
   allowEndOfDay?: boolean;

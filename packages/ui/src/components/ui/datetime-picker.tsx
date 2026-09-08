@@ -17,8 +17,6 @@ import { TimeField } from './time-field';
 import { Button } from './button';
 import { cn } from '../../lib/cn';
 
-/** Minute granularity. Every schedule surface in the app is on a 5-minute grid. */
-const MINUTE_STEP = 5;
 
 function fmt(d: Date | undefined): string {
   if (!d) return 'Pick a date & time';
@@ -114,18 +112,16 @@ export function DateTimePicker({
         />
         <div className="flex items-center gap-2 border-t border-border px-3 py-2.5">
           <span className="text-xs text-dim">Time</span>
-          <TimeField
-            value={minutes}
-            onChange={setMinutes}
-            minuteStep={MINUTE_STEP}
-            testIdPrefix="dtp"
-          />
+          <TimeField value={minutes} onChange={setMinutes} testIdPrefix="dtp" />
           <Button
             size="sm"
             className="ml-auto"
             onClick={() => {
+              // The actual current minute, not the nearest grid line: the
+              // field can express any minute now, so rounding would only make
+              // "Now" mean a time that is not now.
               const d = new Date();
-              setMinutes(d.getHours() * 60 + (Math.round(d.getMinutes() / MINUTE_STEP) * MINUTE_STEP) % 60);
+              setMinutes(d.getHours() * 60 + d.getMinutes());
             }}
           >
             Now

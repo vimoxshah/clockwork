@@ -699,12 +699,11 @@ export default function ComposerView({
                       value={form.rruleFreq}
                       onChange={(v) => setForm({ ...form, rruleFreq: v })}
                       options={[
-                        // "Interval", not "Every N min": the four tabs share a
-                        // ~345px column, and the longer label pushed "Monthly"
-                        // onto a second row. The panel this tab reveals opens
-                        // with "Every · 5/10/15/30 min", so the word does the
-                        // explaining without spending the width.
-                        { value: 'INTERVAL', label: 'Interval', title: 'Every N minutes' },
+                        // The label wrapped when Schedule lived in the 2/5 side
+                        // column: four tabs, 250px to share, 251px needed. The
+                        // row is full width now, so the descriptive name fits
+                        // and the tab keeps the name it was reported under.
+                        { value: 'INTERVAL', label: 'Every N min', title: 'Every N minutes' },
                         { value: 'DAILY', label: 'Daily' },
                         { value: 'WEEKLY', label: 'Weekly' },
                         { value: 'MONTHLY', label: 'Monthly' },

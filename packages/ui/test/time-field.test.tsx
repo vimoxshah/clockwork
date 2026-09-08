@@ -38,11 +38,12 @@ describe('TimeField', () => {
   });
 
   it('shows a stored off-grid minute and hands it back unchanged', async () => {
-    // 09:37 is not on the 5-minute grid. A pure grid would display 09:35 and
-    // then write 09:35 back the next time anything touched the field.
+    // 09:37 is not on the 5-minute grid a coarser field would use. Such a grid
+    // would display 09:35 and then write 09:35 back the next time anything
+    // touched the field.
     const seen: number[] = [];
     const c = await renderComponent(
-      <TimeField testIdPrefix="t" value={9 * 60 + 37} onChange={(m) => seen.push(m)} />,
+      <TimeField testIdPrefix="t" minuteStep={5} value={9 * 60 + 37} onChange={(m) => seen.push(m)} />,
     );
     const minute = await waitForElement(c, '[data-testid="t-minute"]');
     expect(minute.textContent?.trim(), 'the stored minute, not the nearest grid line').toBe('37');
@@ -52,7 +53,20 @@ describe('TimeField', () => {
     expect(seen, 'changing the hour keeps the off-grid minute').toEqual([11 * 60 + 37]);
   });
 
-  it('keeps the minute list short by offering the grid plus whatever is stored', () => {
+  it('offers every minute by default, so any time is reachable', async () => {
+    // "make sure we allow user to select any time" — a 5-minute grid cannot
+    // express 10:07, and the schedule emitter accepts any minute.
+    const seen: number[] = [];
+    const c = await renderComponent(<TimeField testIdPrefix="m" value={10 * 60} onChange={(v) => seen.push(v)} />);
+    const options = await openOptions(c.querySelector('[data-testid="m-minute"]'));
+    expect(options).toHaveLength(60);
+    await pickOption(c.querySelector('[data-testid="m-minute"]'), '07');
+    expect(seen).toEqual([10 * 60 + 7]);
+  });
+
+  it('adds a stored value to a coarser grid rather than substituting for it', () => {
+    // Only reachable by passing minuteStep explicitly, but the rule is what
+    // stops a coarse grid from moving a time someone already chose.
     expect(minuteOptions(5, 0)).toEqual([0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]);
     expect(minuteOptions(5, 37)).toContain(37);
     expect(minuteOptions(5, 37), 'the stored value is added, not substituted').toContain(35);
