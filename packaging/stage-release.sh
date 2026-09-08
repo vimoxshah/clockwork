@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Stage a freshly built DMG for public distribution:
-#   - copy the DMG + checksums into the Pages-published downloads directory
 #   - update the version and sha256 in the Homebrew cask
-#   - update the version in the landing page download links
+#   - update the version and size shown on the landing page
+# The DMG itself is served from the GitHub release; nothing is copied here.
 # Run from the repo root after `tauri build --bundles dmg`.
 set -euo pipefail
 
@@ -14,7 +14,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 #   BASE_URL=https://clockworkd.com ./packaging/stage-release.sh
 BASE_URL="${BASE_URL:-https://vimoxshah.github.io/clockwork}"
 BUNDLE="$ROOT/src-tauri/target/release/bundle/dmg"
-DEST="$ROOT/landing-page/downloads"
 
 # Preferred input: the DMG downloaded from the GitHub release, e.g.
 #   gh release download v0.5.0 -p 'Clockwork_*_aarch64.dmg' -D /tmp/rel
@@ -37,11 +36,12 @@ else
 fi
 
 VERSION="$(basename "$DMG" | sed -E 's/Clockwork_(.+)_aarch64\.dmg/\1/')"
-mkdir -p "$DEST"
-rm -f "$DEST"/Clockwork_*_aarch64.dmg
-cp "$DMG" "$DEST/"
-( cd "$DEST" && shasum -a 256 "Clockwork_${VERSION}_aarch64.dmg" > checksums-sha256.txt )
-SHA="$(cut -d' ' -f1 < "$DEST/checksums-sha256.txt")"
+# The DMG is NOT copied into the repo. It used to be, because a private repo
+# cannot serve a release asset to an anonymous request, so the site had to host
+# its own copy. The repo is public now and the download links point at
+# releases/latest, so a vendored copy would only add 51 MB to git history on
+# every release and give the checksum two places to disagree.
+SHA="$(shasum -a 256 "$DMG" | cut -d' ' -f1)"
 
 # Homebrew cask
 CASK="$ROOT/packaging/homebrew/clockwork.rb"
@@ -65,7 +65,7 @@ LATEST="https://github.com/vimoxshah/clockwork/releases/latest/download/Clockwor
 # fallback a rate-limited visitor gets, and they were being refreshed by hand
 # every release — which is exactly how the page sat on 0.4.0 while shipping
 # 0.9.0. Refresh them here so the fallback is current too.
-DMG_BYTES="$(/usr/bin/stat -f%z "$DEST/Clockwork_${VERSION}_aarch64.dmg")"
+DMG_BYTES="$(/usr/bin/stat -f%z "$DMG")"
 DMG_MB="$(/usr/bin/awk -v b="$DMG_BYTES" 'BEGIN{printf "%.1f", b/1048576}')"
 /usr/bin/sed -i '' -E "s#(<span data-ver>)[0-9.]+(</span>)#\1${VERSION}\2#g" "$PAGE"
 /usr/bin/sed -i '' -E "s#(<span data-size>)[0-9.]+ MB(</span>)#\1${DMG_MB} MB\2#g" "$PAGE"
@@ -79,6 +79,6 @@ DMG_MB="$(/usr/bin/awk -v b="$DMG_BYTES" 'BEGIN{printf "%.1f", b/1048576}')"
 
 echo "staged ${VERSION}"
 echo "  base   ${BASE_URL}"
-echo "  dmg    $DEST/Clockwork_${VERSION}_aarch64.dmg"
+echo "  dmg    $DMG (served from the GitHub release, not vendored)"
 echo "  sha256 ${SHA}"
 echo "  cask + landing page updated — commit, merge and push to redeploy Pages"
