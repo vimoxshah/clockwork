@@ -302,6 +302,13 @@ function UsageCard({ version }: { version: number }): JSX.Element {
 // Visually hides the real <input type="file"> while keeping it in the DOM
 // (not display:none) so it stays in the tab order and keeps its accessible
 // name from the wrapping <label> — a bare icon button would announce nothing.
+//
+// The label MUST stay positioned (see hiddenFileInputLabelStyle). `position:
+// absolute` resolves against the nearest positioned ancestor, and with none
+// the containing block is the page itself: this 1px box landed at document
+// y=2061, `.main` could not clip it because `.main` is static, and the
+// document grew a scrollbar of its own beside `.main`'s. Two scrollbars on
+// the Settings page, from one input nobody can see.
 const hiddenFileInputStyle: CSSProperties = {
   position: 'absolute',
   width: 1,
@@ -313,6 +320,9 @@ const hiddenFileInputStyle: CSSProperties = {
   whiteSpace: 'nowrap',
   border: 0,
 };
+
+/// The anchor that keeps the hidden input inside the label rather than on the page.
+const hiddenFileInputLabelStyle: CSSProperties = { position: 'relative' };
 
 function fmtImportedAt(ts: number | null): string {
   if (!ts) return 'unknown time';
@@ -490,6 +500,7 @@ function IcsCard({ version }: { version: number }): JSX.Element {
             htmlFor="ics-file-input"
             className="btn small"
             style={{
+              ...hiddenFileInputLabelStyle,
               cursor: fileBusy ? 'default' : 'pointer',
               outline: fileInputFocused ? '2px solid var(--accent)' : 'none',
               outlineOffset: 2,

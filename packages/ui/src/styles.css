@@ -90,6 +90,15 @@ body {
 
 .mono { font-family: 'SF Mono', ui-monospace, Menlo, monospace; font-variant-numeric: tabular-nums; }
 
+/* The app is a fixed-height shell with ONE scroller inside it (.main).
+   html/body are pinned so nothing can grow a second scrollbar beside it: a
+   single absolutely-positioned descendant with no positioned ancestor is
+   enough to stretch the document, and that is exactly what happened (the
+   hidden .ics file input in SettingsView). Anchoring that input fixed the
+   cause; this is the guard, so the next one cannot come back as a mystery.
+   min-height:0 on .main is the flexbox half of the same rule. */
+html, body { height: 100%; overflow: hidden; }
+
 #root { display: flex; flex-direction: column; height: 100vh; }
 
 /* ---------- top bar ---------- */
@@ -167,7 +176,7 @@ body {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.main { flex: 1; overflow: auto; padding: 20px 22px; }
+.main { flex: 1; min-height: 0; overflow: auto; padding: 20px 22px; }
 
 /* ---------- onboarding ---------- */
 .onboard {
