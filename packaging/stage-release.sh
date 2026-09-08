@@ -70,8 +70,11 @@ DMG_MB="$(/usr/bin/awk -v b="$DMG_BYTES" 'BEGIN{printf "%.1f", b/1048576}')"
 /usr/bin/sed -i '' -E "s#(<span data-ver>)[0-9.]+(</span>)#\1${VERSION}\2#g" "$PAGE"
 /usr/bin/sed -i '' -E "s#(<span data-size>)[0-9.]+ MB(</span>)#\1${DMG_MB} MB\2#g" "$PAGE"
 
-# keep the cask host in sync with BASE_URL
-/usr/bin/sed -i '' -E "s#url \"https://[^/]+/downloads/#url \"${BASE_URL}/downloads/#" "$CASK"
+# The cask url is NOT rewritten to BASE_URL any more: it points at the GitHub
+# release asset, which exists the moment the release is published. Pointing it
+# at the site's mirror meant every release broke `brew install` until the site
+# was redeployed — a separate step, on a separate host.
+
 /usr/bin/sed -i '' -E "s#homepage \"https://[^/]+/?\"#homepage \"${BASE_URL}/\"#" "$CASK"
 
 echo "staged ${VERSION}"
