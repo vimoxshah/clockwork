@@ -3,16 +3,15 @@
 ## The short version
 
 1. Download `Clockwork-<version>-aarch64.dmg` from
-   [Releases](https://github.com/vimoxshah/clockwork/releases/latest) (Apple Silicon, macOS 14+).
+   [Releases](https://github.com/vimoxshah/clockwork/releases/latest) (Apple Silicon, macOS 13+).
 2. Verify integrity (recommended):
    ```bash
    shasum -a 256 ~/Downloads/Clockwork-*-aarch64.dmg
    # compare with checksums-sha256.txt attached to the release
    ```
 3. Open the DMG and drag **Clockwork** into **Applications**.
-4. Launch Clockwork.
-5. Pair the UI with your local daemon: paste the token from `~/.clockwork/api-token`
-   (printed during first daemon setup).
+4. Launch Clockwork. It starts its own daemon and signs in on your behalf —
+   there is no token to paste.
 
 ## Gatekeeper & signature status — read this honestly
 
@@ -33,25 +32,16 @@ release notes' "Signature status" section. Do not disable Gatekeeper globally.
 
 ## After launch
 
-1. Clockwork needs the local daemon (`clockworkd`) running. **The DMG does not
-   contain it** — the app is a native window onto the daemon, which serves both
-   the interface and the API on `127.0.0.1:4747`, and it is installed separately
-   from source:
-   ```bash
-   git clone https://github.com/vimoxshah/clockwork && cd clockwork
-   pnpm install && pnpm build
-   node packages/daemon/dist/main.js
-   ```
-   Until that is running the app has nothing to show, and says so.
+1. Nothing to set up. **From 0.11.0 the DMG carries the daemon and its own Node
+   runtime**, so the app is the whole install: no clone, no `pnpm`, and no Node
+   version of your own to match. First launch registers a background agent that
+   keeps the daemon running and starts it again after a reboot.
 
-   **Install with the same Node you will run it with.** The daemon uses
-   `better-sqlite3`, a native module compiled for one Node ABI at install time.
-   Switching Node versions afterwards — a Homebrew upgrade is enough — breaks it
-   with `NODE_MODULE_VERSION 137 … requires NODE_MODULE_VERSION 147` in
-   `~/.clockwork/daemon.log.err`. Re-run `pnpm install` to rebuild it. If you
-   installed the background service, note that `clockworkd install` bakes the
-   absolute path of the Node binary it saw into the LaunchAgent, so that copy
-   keeps using the old one until you reinstall the service.
+   Before 0.11.0 the daemon was installed separately from source, and its
+   `better-sqlite3` native module broke whenever your Node version changed —
+   a Homebrew upgrade was enough. The bundled runtime ends that: the module is
+   compiled against the Node that ships beside it, so the ABI matches by
+   construction.
 2. Install at least one provider CLI and log in once:
    - [`claude`](https://docs.anthropic.com/en/docs/claude-code) (recommended)
    - `codex`, `opencode`, or [`hermes`](https://github.com/NousResearch/hermes-agent)
