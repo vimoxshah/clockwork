@@ -599,6 +599,12 @@ export function fallbackIcsLabel(filename: string): string {
   return base || 'Imported calendar';
 }
 
+/** POST /schedule/preview: the runs. A refusal arrives as a thrown ApiError. */
+export interface SchedulePreviewT { runs: number[]; tz: string; count: number }
+
+/** The `reason` the guard puts on a 422 from POST /schedule/preview. */
+export type ScheduleRefusalT = 'unreachable' | 'slow_anchor' | 'count_too_large' | 'unparseable';
+
 export const api = {
   health: () => req<Health>('GET', '/health'),
   byok: () => req<{ configs: unknown[]; meta: unknown }>('GET', '/byok'),
@@ -621,6 +627,13 @@ export const api = {
   deleteTrigger: (id: string) => req<void>('DELETE', `/triggers/${id}`),
   tasks: () => req<TaskViewT[]>('GET', '/tasks'),
   createTask: (t: unknown) => req<TaskViewT>('POST', '/tasks', t),
+  /**
+   * Next runs for a rule being typed. Creates nothing.
+   * A refusal is a 422, and `send` THROWS an ApiError on any non-ok status
+   * (see the `!res.ok` branch above), so the guard's reason arrives as a
+   * rejection carrying `status === 422` — never as a resolved value.
+   */
+  previewSchedule: (s: unknown) => req<SchedulePreviewT>('POST', '/schedule/preview', s),
   patchTask: (id: string, p: unknown) => req<TaskViewT>('PATCH', `/tasks/${id}`, p),
   deleteTask: (id: string) => req<{ deleted: boolean }>('DELETE', `/tasks/${id}`),
   runNow: (id: string) => req<{ runId: string }>('POST', `/tasks/${id}/run-now`),

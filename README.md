@@ -240,6 +240,18 @@ xattr -dr com.apple.quarantine /Applications/Clockwork.app
 open -a Clockwork
 ```
 
+**That is the whole install** (a 51 MB download; 192 MB once installed, most of
+it the Node runtime). The app carries the daemon and its own Node, so
+there is no checkout, no `pnpm`, no Node to install, and no token to paste. On
+first launch Clockwork registers its background service with launchd, which is
+what keeps scheduled runs firing after you close the window and after a reboot,
+and pairs the window with the daemon's token itself. Move the app afterwards and
+it re-points the service at the new location.
+
+Two things it cannot bring with it, because they are yours and already logged
+in: **git**, and at least one agent CLI (`claude`, `codex`, `opencode` or
+`hermes`). `clockworkd doctor` names either one when it is missing.
+
 **Releases are unsigned.** There is no Apple Developer certificate on this
 project, so the release workflow ad-hoc signs the bundle
 (`.github/workflows/release.yml` exports `APPLE_SIGNING_IDENTITY="-"` when no
@@ -251,7 +263,7 @@ binary, which is exactly why the hash check comes first. Homebrew
 quarantine either. Full detail, including the Homebrew tap:
 [docs/install.md](docs/install.md).
 
-### Or build it from this source
+### Or run it from source (for development)
 
 ```bash
 # 1. Clone and install
@@ -290,11 +302,19 @@ Prerequisites:
 pnpm tauri build          # unsigned .app + DMG in src-tauri/target/release/bundle/
 ```
 
-The Tauri shell loads the local daemon URL — it is a window, and **the bundle
-does not contain the daemon**, so the .app alone cannot run anything. When
-nothing answers on `127.0.0.1:4747` the window shows `daemon-down.html`
-(`packages/ui/public/`) with the start command and the log path, and navigates
-to the real UI as soon as the port answers.
+`tools/stage-bundle.mjs` runs first and stages what the app needs to stand on
+its own: the daemon's production tree into `Contents/Resources/app` (laid out
+as a miniature of the repo, because `main.js` walks to `../migrations`,
+`../../ui/dist` and `../../../resources/skill-pack`) and the Node running the
+build into `Contents/MacOS` via `externalBin`, where Tauri signs it. That Node
+is the one `better-sqlite3` is compiled against in the same command, so the
+`NODE_MODULE_VERSION` mismatch cannot happen in a released build.
+
+The shell installs the LaunchAgent, re-points it when the app moves, restarts a
+daemon left stale by an update, and pairs the token. When the daemon still does
+not answer, the window shows `daemon-down.html` (`packages/ui/public/`) with the
+cause this install actually has and one command to run, then navigates to the
+real UI as soon as the port answers.
 
 This build is unsigned and un-notarized; the release workflow only signs when
 Apple Developer credentials are present in CI, and they are not.

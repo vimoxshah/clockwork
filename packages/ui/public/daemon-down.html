@@ -124,30 +124,15 @@
           interface and the API on <code>127.0.0.1:4747</code>. Nothing is answering there, so there
           is nothing to draw — that is what a blank window means.
         </p>
-        <p class="note">
-          The app bundle does not contain the daemon. It is installed separately, from source.
-        </p>
 
-        <h2>Start it</h2>
-        <pre>cd <em>your-clockwork-checkout</em> &amp;&amp; node packages/daemon/dist/main.js</pre>
-        <p class="note">
-          Or, if you installed the background service: <code>launchctl kickstart -k gui/$(id -u)/com.clockwork.daemon</code>
-        </p>
+        <h2>What went wrong here</h2>
+        <p class="note" id="cause">Working it out…</p>
 
-        <h2>If it starts and then dies</h2>
-        <pre>tail -30 ~/.clockwork/daemon.log.err</pre>
-        <p class="note">
-          A <code>NODE_MODULE_VERSION</code> mismatch there means <code>better-sqlite3</code> was
-          built against a different Node than the one now running it — switching Node versions after
-          install does that. Re-run <code>pnpm install</code> with the Node you start the daemon
-          with. <code>EADDRINUSE</code> means another daemon already holds the port, which is fine.
-        </p>
+        <div id="fix"></div>
 
-        <h2>Never installed it?</h2>
-        <pre>git clone https://github.com/vimoxshah/clockwork &amp;&amp; cd clockwork
-pnpm install &amp;&amp; pnpm build
-node packages/daemon/dist/main.js</pre>
-        <p class="note">Needs Node 22 or newer, pnpm, and git.</p>
+        <h2 id="log-heading" hidden>Last output from the daemon</h2>
+        <pre id="log" hidden></pre>
+        <p class="note" id="log-path" hidden></p>
 
         <div class="status">
           <span class="dot" id="dot"></span>
@@ -168,6 +153,74 @@ node packages/daemon/dist/main.js</pre>
       var checking = false;
       var tries = 0;
 
+      // Injected by the Rust shell before this page loads (src-tauri/src/lib.rs
+      // `diagnosis`). It is absent when this file is opened any other way, and
+      // the page has to stay honest in that case rather than invent a cause.
+      var d = window.__CLOCKWORK_DIAGNOSIS__ || null;
+
+      // Each cause gets ONE action, and only actions that apply to a bundled
+      // install. The page used to end with `git clone && pnpm install`, which
+      // was already wrong the day the daemon moved inside the app: it sent
+      // people to rebuild a thing that was sitting in Contents/Resources.
+      var FIXES = {
+        "another process already holds 127.0.0.1:4747":
+          ['Something else is on the port — often an older Clockwork you started by hand.',
+           'lsof -nP -iTCP:4747 -sTCP:LISTEN'],
+        "the daemon's native database module was built for a different Node":
+          ['This should not happen in a released build: the app ships the Node it was built against. Please report it with the log below.',
+           null],
+        "the background service is not registered with launchd":
+          ['Clockwork registers itself at launch. Quitting and reopening the app normally fixes this.',
+           'launchctl print gui/$(id -u)/com.clockwork.daemon'],
+        "the background service started and exited — see the log below":
+          ['The service is registered and launchd is starting it, but it exits. The log below says why.',
+           'launchctl kickstart -k gui/$(id -u)/com.clockwork.daemon'],
+        "the background service is registered but is not answering":
+          ['Registered, but nothing is listening yet. Restarting the service usually settles it.',
+           'launchctl kickstart -k gui/$(id -u)/com.clockwork.daemon'],
+        "this is a development build, which does not carry a daemon":
+          ['Development builds run the daemon from your checkout.',
+           'node packages/daemon/dist/main.js']
+      };
+
+      function render() {
+        var cause = document.getElementById('cause');
+        if (!d) {
+          cause.textContent =
+            'This page was opened outside the Clockwork app, so there is nothing to report about a particular install.';
+          return;
+        }
+        cause.textContent = d.cause + '.';
+        var fix = FIXES[d.cause];
+        if (fix) {
+          var box = document.getElementById('fix');
+          var h = document.createElement('h2');
+          h.textContent = 'What to do';
+          var p = document.createElement('p');
+          p.className = 'note';
+          p.textContent = fix[0];
+          box.appendChild(h);
+          box.appendChild(p);
+          if (fix[1]) {
+            var pre = document.createElement('pre');
+            pre.textContent = fix[1];
+            box.appendChild(pre);
+          }
+        }
+        // Only a log from THIS launch is shown. An old one is worse than none:
+        // it reads as the current failure and sends the reader after a bug
+        // that was fixed weeks ago.
+        if (d.tail && d.logIsRecent) {
+          document.getElementById('log-heading').hidden = false;
+          var pre2 = document.getElementById('log');
+          pre2.hidden = false;
+          pre2.textContent = d.tail;
+          var lp = document.getElementById('log-path');
+          lp.hidden = false;
+          lp.textContent = 'Full log: ' + d.logPath;
+        }
+      }
+
       function probe() {
         if (checking) return;
         checking = true;
@@ -185,6 +238,7 @@ node packages/daemon/dist/main.js</pre>
           });
       }
 
+      render();
       retry.addEventListener('click', probe);
       setInterval(probe, 2000);
       probe();

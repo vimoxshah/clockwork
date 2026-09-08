@@ -305,7 +305,15 @@ export class RunManager {
     }
   }
 
-  private async spawnChild(runId: string, spec: JobSpec, now: number): Promise<void> {
+  /**
+   * Spawn the runner child and supervise it.
+   *
+   * Not private, so the supervision paths can be driven directly by a test with
+   * a stub child module. That is deliberate: the outcome-vs-exit race this
+   * method arbitrates shipped a bug that every unit test in the runner passed
+   * through, because the fault lived in the seam between the two processes.
+   */
+  async spawnChild(runId: string, spec: JobSpec, now: number): Promise<void> {
     const runDir = path.join(this.deps.dataDir, 'runs', runId);
     mkdirSync(runDir, { recursive: true });
     const specPath = path.join(runDir, 'jobspec.json');
@@ -394,6 +402,12 @@ export class RunManager {
     child.on('close', () => {
       this.liveChildren.delete(runId);
       const cur = this.getRun(runId);
+      // `finalizing` is deliberately absent: finalize() runs from that
+      // transition to the terminal write with no `await` between them, so this
+      // handler can never observe it. It DID observe it until 2026-09-08, but
+      // only because `finalizing -> timed_out` was an illegal FSM edge and the
+      // throw stranded the row — a guard here would have hidden that, not
+      // fixed it. See test/interrupt-outcome-race.test.ts.
       if (cur && !['completed','failed','cancelled','budget_exceeded','timed_out'].includes(cur.state)) {
         // exited without an outcome message → S-32
         this.finalize(runId, {

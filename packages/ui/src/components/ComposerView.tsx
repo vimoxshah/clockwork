@@ -14,12 +14,18 @@ import { Select, SelectValue, SelectTrigger, SelectContent, SelectItem } from '.
 import { Switch } from './ui/switch';
 import { AgentPicker } from './AgentPicker';
 import { DateTimePicker } from './ui/datetime-picker';
+import { TimeField, timeStringToMinutes, minutesToTimeString, hourLabel } from './ui/time-field';
 import { Badge } from './ui/card';
 import { Zap, FolderGit2, Bot, Wallet, CalendarClock, AlertCircle, GitBranch, Bell, Send } from 'lucide-react';
 import { cn } from '../lib/cn';
 import { FolderBrowserDialog } from './FolderBrowserDialog';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from './ui/dialog';
 import { registerFeatureSurface } from './featureSurfaces';
+import {
+  INTERVAL_MINUTES, WEEKDAYS, composeIntervalRule, composeWeeklyRule, composeDailyRule, composeMonthlyRule,
+  type IntervalMinutes, type Weekday,
+} from '../lib/schedule-rule';
+import { NextRunsPanel } from './NextRunsPanel';
 
 /**
  * The RRULE/cron picker lives here, not on the calendar (which only
@@ -56,10 +62,78 @@ export const BUDGET_GUARDS_SURFACE = registerFeatureSurface({
  */
 const ASAP_LEAD_MS = 15_000;
 
+/** Add or remove one day, keeping the list a set. */
+export function toggleDay(days: Weekday[], day: Weekday): Weekday[] {
+  return days.includes(day) ? days.filter((d) => d !== day) : [...days, day];
+}
+
+/** The recurrence fields `buildRrule` reads. Named so the panel can pass the same object. */
+interface RruleFormFields {
+  rruleFreq: 'INTERVAL' | 'DAILY' | 'WEEKLY' | 'MONTHLY';
+  rruleByDay: Weekday[];
+  rruleTime: string;
+  monthlyDay: string;
+  intervalEvery: IntervalMinutes;
+  intervalDays: Weekday[];
+  intervalFromHour: string;
+  intervalToHour: string;
+}
+
+/**
+ * One place that turns the form into a rule string, so the "next runs" panel
+ * previews exactly what Book-it will save. Two sources here would let the panel
+ * confirm a rule the composer never sends.
+ */
+export function buildRrule(form: RruleFormFields): { rrule: string } | { error: string } {
+  if (form.rruleFreq === 'INTERVAL') {
+    if (form.intervalDays.length === 0) return { error: 'Pick at least one day to repeat on.' };
+    const fromHour = Number(form.intervalFromHour);
+    const toHour = Number(form.intervalToHour);
+    if (!Number.isInteger(fromHour) || !Number.isInteger(toHour) || fromHour < 0 || toHour > 24) {
+      return { error: 'The hour window must be whole hours between 0 and 24.' };
+    }
+    if (toHour <= fromHour) return { error: 'The end hour must be after the start hour.' };
+    return {
+      rrule: composeIntervalRule({
+        every: form.intervalEvery, days: form.intervalDays, fromHour, toHour,
+      }),
+    };
+  }
+  const [hh, mm] = form.rruleTime.split(':').map(Number);
+  if (!Number.isInteger(hh) || !Number.isInteger(mm)) return { error: 'Pick a valid recurrence time.' };
+  if (form.rruleFreq === 'DAILY') return { rrule: composeDailyRule(hh!, mm!) };
+  if (form.rruleFreq === 'WEEKLY') {
+    if (form.rruleByDay.length === 0) return { error: 'Pick at least one day to repeat on.' };
+    return { rrule: composeWeeklyRule(form.rruleByDay, hh!, mm!) };
+  }
+  const dom = Number(form.monthlyDay);
+  if (!Number.isInteger(dom) || dom < 1 || dom > 28) {
+    return { error: 'Monthly day must be 1–28 (safe across months).' };
+  }
+  return { rrule: composeMonthlyRule(dom, hh!, mm!) };
+}
+
 function defaultSlot(): Date {
   const d = new Date(Date.now() + 60 * 60_000);
   d.setMinutes(0, 0, 0);
   return d;
+}
+
+/**
+ * Move a start time forward when it has already gone.
+ *
+ * The Calendar's "Book a run this day" hands the composer midnight on the day
+ * you clicked, which is in the past for every hour of today after 00:00. The
+ * form then opened already showing "This time is in the past — pick a future
+ * slot", so the first thing a new task said was that it was wrong, about a
+ * value the user had not chosen. Clicking today should mean "today", not
+ * "today, an hour that is gone".
+ *
+ * A future instant is returned untouched, so clicking a day next week keeps
+ * exactly the hour the Calendar chose.
+ */
+export function notInThePast(d: Date, now = new Date()): Date {
+  return d.getTime() > now.getTime() ? d : defaultSlot();
 }
 
 /**
@@ -121,7 +195,7 @@ interface ProfileRow {
   avatar?: string | null;
 }
 
-const DOW = [
+const DOW: Array<{ value: Weekday; label: string }> = [
   { value: 'MO', label: 'Mon' },
   { value: 'TU', label: 'Tue' },
   { value: 'WE', label: 'Wed' },
@@ -187,9 +261,16 @@ export default function ComposerView({
     // and repo-jobs — and this option used to reuse it, which is why an "ASAP"
     // task never ran.
     kind: 'once' as 'once' | 'rrule' | 'asap',
-    runAt: prefill ? new Date(prefill.runAtLocal) : defaultSlot(),
-    rruleFreq: 'WEEKLY' as 'DAILY' | 'WEEKLY' | 'MONTHLY',
-    rruleByDay: 'MO',
+    runAt: prefill ? notInThePast(new Date(prefill.runAtLocal)) : defaultSlot(),
+    rruleFreq: 'WEEKLY' as 'INTERVAL' | 'DAILY' | 'WEEKLY' | 'MONTHLY',
+    // Multi-day, where it used to be one day. `BYDAY=MO,WE,FR` was always legal
+    // in the rule; only the picker was single-select.
+    rruleByDay: ['MO'] as Weekday[],
+    intervalEvery: 15 as IntervalMinutes,
+    intervalDays: [...WEEKDAYS] as Weekday[],
+    intervalFromHour: '0',
+    /** Exclusive, so 9–17 is a nine-to-five day and 0–24 is all day. */
+    intervalToHour: '24',
     rruleTime: '09:00',
     monthlyDay: String(new Date().getDate()),
     tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -215,10 +296,13 @@ export default function ComposerView({
   // Calendar "Book a run this day" prefill arrives after mount.
   useEffect(() => {
     if (prefill?.runAtLocal) {
-      setForm((f) => ({ ...f, kind: 'once', runAt: new Date(prefill.runAtLocal) }));
+      setForm((f) => ({ ...f, kind: 'once', runAt: notInThePast(new Date(prefill.runAtLocal)) }));
     }
   }, [prefill]);
 
+  // The panel must preview EXACTLY what Book-it will send, so both read the
+  // same builder rather than each assembling a string of their own.
+  const previewRule = buildRrule(form);
   const selectedProfile = profiles.find((p) => p.id === form.profileId) ?? null;
   const detectedProviders = providers.filter((p) => p.detected);
   const providerOptions = [
@@ -260,18 +344,9 @@ export default function ComposerView({
       // the clock moves between building this payload and validating it.
       schedule = { kind: 'once', runAt: Date.now() + ASAP_LEAD_MS, tz: form.tz };
     } else {
-      const [hh, mm] = form.rruleTime.split(':').map(Number);
-      if (!Number.isInteger(hh) || !Number.isInteger(mm)) return setError('Pick a valid recurrence time.');
-      let rrule: string;
-      if (form.rruleFreq === 'DAILY') rrule = `FREQ=DAILY;BYHOUR=${hh};BYMINUTE=${mm}`;
-      else if (form.rruleFreq === 'WEEKLY') rrule = `FREQ=WEEKLY;BYDAY=${form.rruleByDay};BYHOUR=${hh};BYMINUTE=${mm}`;
-      else {
-        const dom = Number(form.monthlyDay);
-        if (!Number.isInteger(dom) || dom < 1 || dom > 28)
-          return setError('Monthly day must be 1–28 (safe across months).');
-        rrule = `FREQ=MONTHLY;BYMONTHDAY=${dom};BYHOUR=${hh};BYMINUTE=${mm}`;
-      }
-      schedule = { kind: 'rrule', rrule, tz: form.tz };
+      const built = buildRrule(form);
+      if ('error' in built) return setError(built.error);
+      schedule = { kind: 'rrule', rrule: built.rrule, tz: form.tz };
     }
 
     const delivery = buildTaskDelivery(form.telegramChatId, form.telegramIsGroup, form.telegramAllowedUserIds, {
@@ -369,7 +444,7 @@ export default function ComposerView({
           </p>
         </div>
 
-        <CardContent className="grid gap-6 p-5 lg:grid-cols-5">
+        <CardContent className="grid items-start gap-6 p-5 lg:grid-cols-5">
           {/* ---------- main column ---------- */}
           <div className="space-y-6 lg:col-span-3">
             <Section icon={<Bot />} title="The job">
@@ -572,6 +647,15 @@ export default function ComposerView({
               />
             </section>
 
+          </div>
+
+          {/* Schedule gets the full width, not the 2/5 side column. Inside that
+              column the frequency tabs had 250px to share and "Monthly" broke
+              onto a second row — measured, not guessed: the four tabs need
+              251px. Every part of a recurrence (how often, which days, which
+              hours, the next five runs) is also read together, so stacking
+              them in a narrow column was the wrong shape regardless. */}
+          <div className="lg:col-span-5">
             <section id={SCHEDULING_SURFACE.anchorId}>
               <div className="mb-3 flex items-center gap-2">
                 <span className="flex h-6 w-6 items-center justify-center rounded-md bg-surface-active text-dim [&_svg]:h-3.5 [&_svg]:w-3.5">
@@ -612,15 +696,93 @@ export default function ComposerView({
                     <Segmented
                       aria-label="Repeat frequency"
                       size="sm"
-                      className="w-full"
                       value={form.rruleFreq}
                       onChange={(v) => setForm({ ...form, rruleFreq: v })}
                       options={[
+                        // The label wrapped when Schedule lived in the 2/5 side
+                        // column: four tabs, 250px to share, 251px needed. The
+                        // row is full width now, so the descriptive name fits
+                        // and the tab keeps the name it was reported under.
+                        { value: 'INTERVAL', label: 'Every N min', title: 'Every N minutes' },
                         { value: 'DAILY', label: 'Daily' },
                         { value: 'WEEKLY', label: 'Weekly' },
                         { value: 'MONTHLY', label: 'Monthly' },
                       ]}
                     />
+                    {/* Controls left, preview right. The five next runs are what
+                        tells you whether the rule you just built is the rule you
+                        meant, so they belong beside it rather than below the
+                        fold. */}
+                    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
+                      <div className="space-y-3">
+                    {form.rruleFreq === 'INTERVAL' && (
+                      <div className="space-y-3">
+                        <div>
+                          <Label>Every</Label>
+                          <Segmented
+                            aria-label="Interval"
+                            size="sm"
+                            className="w-full"
+                            value={String(form.intervalEvery)}
+                            onChange={(v) => setForm({ ...form, intervalEvery: Number(v) as IntervalMinutes })}
+                            options={INTERVAL_MINUTES.map((m) => ({ value: String(m), label: `${m} min` }))}
+                          />
+                        </div>
+                        <div>
+                          <Label>On</Label>
+                          <div className="flex gap-1">
+                            {DOW.map((d) => (
+                              <button
+                                key={d.value}
+                                onClick={() => setForm({ ...form, intervalDays: toggleDay(form.intervalDays, d.value) })}
+                                aria-pressed={form.intervalDays.includes(d.value)}
+                                className={cn(
+                                  'h-8 w-full rounded-md border text-xxs font-medium',
+                                  form.intervalDays.includes(d.value)
+                                    ? 'border-accent bg-accent text-[var(--accent-fg)]'
+                                    : 'border-border text-muted hover:bg-surface-hover hover:text-fg',
+                                )}
+                              >
+                                {d.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <Label htmlFor="c-from-hour">Between</Label>
+                          {/* The window is whole hours — the emitter has no BYMINUTE
+                              for it — so these are TimeField in hour-only mode rather
+                              than a second, differently-shaped time control. The state
+                              stays a string of hours, which is what buildRrule reads. */}
+                          <div className="flex flex-wrap items-center gap-2">
+                            <TimeField
+                              id="c-from-hour"
+                              testIdPrefix="c-from"
+                              hourOnly
+                              ariaLabelPrefix="From"
+                              value={Number(form.intervalFromHour) * 60}
+                              onChange={(m) => setForm({ ...form, intervalFromHour: String(m / 60) })}
+                            />
+                            <span className="text-xs text-dim">to</span>
+                            <TimeField
+                              testIdPrefix="c-to"
+                              hourOnly
+                              allowEndOfDay
+                              ariaLabelPrefix="To"
+                              value={Number(form.intervalToHour) * 60}
+                              onChange={(m) => setForm({ ...form, intervalToHour: String(m / 60) })}
+                            />
+                          </div>
+                          {/* Built from the same labeller the control uses. A
+                              hard-coded "9 AM to 5 PM" reads wrong under a
+                              24-hour locale, where the field above says "09". */}
+                          <p className="mt-1 text-xxs text-dim">
+                            The end hour is exclusive, so {hourLabel(9)} to {hourLabel(17)} is a
+                            nine-to-five day and {hourLabel(0)} to 24:00 is all day.
+                          </p>
+                        </div>
+                      </div>
+                    )}
                     {form.rruleFreq === 'WEEKLY' && (
                       <div>
                         <Label>On</Label>
@@ -628,11 +790,11 @@ export default function ComposerView({
                           {DOW.map((d) => (
                             <button
                               key={d.value}
-                              onClick={() => setForm({ ...form, rruleByDay: d.value })}
-                              aria-pressed={form.rruleByDay === d.value}
+                              onClick={() => setForm({ ...form, rruleByDay: toggleDay(form.rruleByDay, d.value) })}
+                              aria-pressed={form.rruleByDay.includes(d.value)}
                               className={cn(
                                 'h-8 w-full rounded-md border text-xxs font-medium',
-                                form.rruleByDay === d.value
+                                form.rruleByDay.includes(d.value)
                                   ? 'border-accent bg-accent text-[var(--accent-fg)]'
                                   : 'border-border text-muted hover:bg-surface-hover hover:text-fg',
                               )}
@@ -646,25 +808,47 @@ export default function ComposerView({
                     {form.rruleFreq === 'MONTHLY' && (
                       <div>
                         <Label htmlFor="c-dom">On day of month (1–28)</Label>
-                        <Input
-                          id="c-dom"
-                          className="mono w-24"
-                          type="number"
-                          min={1}
-                          max={28}
-                          value={form.monthlyDay}
-                          onChange={(e) => setForm({ ...form, monthlyDay: e.target.value })}
+                        {/* Sized by the WRAPPER, not by a `w-24` on the input.
+                            styles.css sets `input[type='number'] { width: 100% }`
+                            at specificity (0,1,1), which beats every Tailwind
+                            `w-*` utility (0,1,0) — so the class was dead, and it
+                            only showed once this field moved out of a 250px
+                            column into a full-width row and rendered 396px wide
+                            for a two-digit number. */}
+                        <div className="w-24">
+                          <Input
+                            id="c-dom"
+                            className="mono"
+                            type="number"
+                            min={1}
+                            max={28}
+                            value={form.monthlyDay}
+                            onChange={(e) => setForm({ ...form, monthlyDay: e.target.value })}
+                          />
+                        </div>
+                      </div>
+                    )}
+                    {form.rruleFreq !== 'INTERVAL' && (
+                      <div>
+                        <Label htmlFor="c-rtime">At time</Label>
+                        <TimeField
+                          id="c-rtime"
+                          testIdPrefix="c-rtime"
+                          ariaLabelPrefix="At time"
+                          // The fallback is unreachable: `rruleTime` has exactly
+                          // two writers, the '09:00' default and this field's own
+                          // `minutesToTimeString`. It stays because a bad string
+                          // should degrade to a sane time, not blank the composer.
+                          value={timeStringToMinutes(form.rruleTime) ?? 9 * 60}
+                          onChange={(m) => setForm({ ...form, rruleTime: minutesToTimeString(m) })}
                         />
                       </div>
                     )}
-                    <div>
-                      <Label htmlFor="c-rtime">At time</Label>
-                      <input
-                        id="c-rtime"
-                        type="time"
-                        className="mono h-9 w-32 rounded-lg border border-strong bg-bg px-3 text-compact text-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-                        value={form.rruleTime}
-                        onChange={(e) => setForm({ ...form, rruleTime: e.target.value })}
+                      </div>
+                      <NextRunsPanel
+                        rrule={'rrule' in previewRule ? previewRule.rrule : null}
+                        localError={'error' in previewRule ? previewRule.error : null}
+                        tz={form.tz}
                       />
                     </div>
                   </div>
@@ -684,7 +868,17 @@ export default function ComposerView({
                 )}
               </div>
             </section>
+          </div>
 
+          {/* ---------- optional delivery, full width ----------
+              These two lived at the bottom of the side column, and that is
+              what made the form look broken: a grid row is as tall as its
+              tallest child, so the side column's two paragraphs of Telegram
+              and Slack prose left a screen-height of white space beside
+              "Budget & limits". They are also the only two sections that are
+              about where the OUTCOME goes rather than what to run, so a full
+              width row of their own is where they belonged anyway. */}
+          <div className="grid gap-6 lg:col-span-5 lg:grid-cols-2">
             <section>
               <div className="mb-3 flex items-center gap-2">
                 <span className="flex h-6 w-6 items-center justify-center rounded-md bg-surface-active text-dim [&_svg]:h-3.5 [&_svg]:w-3.5">

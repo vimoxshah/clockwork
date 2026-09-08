@@ -90,6 +90,15 @@ body {
 
 .mono { font-family: 'SF Mono', ui-monospace, Menlo, monospace; font-variant-numeric: tabular-nums; }
 
+/* The app is a fixed-height shell with ONE scroller inside it (.main).
+   html/body are pinned so nothing can grow a second scrollbar beside it: a
+   single absolutely-positioned descendant with no positioned ancestor is
+   enough to stretch the document, and that is exactly what happened (the
+   hidden .ics file input in SettingsView). Anchoring that input fixed the
+   cause; this is the guard, so the next one cannot come back as a mystery.
+   min-height:0 on .main is the flexbox half of the same rule. */
+html, body { height: 100%; overflow: hidden; }
+
 #root { display: flex; flex-direction: column; height: 100vh; }
 
 /* ---------- top bar ---------- */
@@ -167,7 +176,7 @@ body {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.main { flex: 1; overflow: auto; padding: 20px 22px; }
+.main { flex: 1; min-height: 0; overflow: auto; padding: 20px 22px; }
 
 /* ---------- onboarding ---------- */
 .onboard {
@@ -350,12 +359,118 @@ label.f { display: block; color: var(--muted); font-size: 12px; margin: 12px 0 4
 .form-card { max-width: 640px; }
 .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+
+/*
+ * The office-hours form had six controls in a `1fr 1fr 1fr` grid, so it wrapped
+ * to two rows of three and every cell was a third of the card wide whatever it
+ * held. A time input is about 7rem; in a 1fr cell it sat at the left of a very
+ * wide box with its label above it, which is why "To" read as floating far away
+ * from "From" and why the four inputs looked like three different widths.
+ *
+ * The controls are sized to what they hold instead: the day picker takes the
+ * slack, the two time inputs are identical and adjacent, and the text fields
+ * share what is left. Wrapping is by content, so nothing is stranded on a row
+ * of its own at a narrow width.
+ */
+.office-hours-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+}
+.office-hours-form > * { min-width: 0; }
+.office-hours-form .oh-days { flex: 1 1 16rem; }
+.office-hours-form .oh-time { flex: 0 0 auto; }
+.office-hours-form .oh-text { flex: 1 1 11rem; }
+.office-hours-form .oh-text input { width: 100%; }
+/* Sits on the inputs' baseline rather than below their labels. */
+.office-hours-form .oh-action { flex: 0 0 auto; }
 .hint { color: var(--dim); font-size: 12px; margin-top: 6px; }
 .error-banner { background: var(--ev-failed-bg); color: var(--ev-failed-fg); border-radius: 8px; padding: 8px 12px; margin-top: 10px; font-size: 13px; }
 .ok-banner { background: var(--ev-completed-bg); color: var(--ev-completed-fg); border-radius: 8px; padding: 8px 12px; margin-top: 10px; font-size: 13px; }
 
 .tasklist-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; margin-bottom: 8px; }
 .tasklist-row .grow { flex: 1; min-width: 0; }
+
+/* ---------- credential rows (Settings › Notifications & delivery) ----------
+   Every row here is one credential: a label, a field, a hint, and one to three
+   actions. They used to be .tasklist-row, which is flex with align-items:center
+   and a .grow field taking whatever the buttons left over. Two visible faults
+   came from that, and both are what "see alignment of all buttons" was about:
+
+   - the field's right edge moved with the BUTTON COUNT, so the Slack row (Save
+     · Send test · Clear) ended at x=1213 while the Telegram row ended at 1287;
+   - centring put SMTP's Save/Clear against the middle of a block holding two
+     fields and two hints, so they sat beside the helper text instead of the
+     field they act on.
+
+   A grid with named areas fixes both by construction: the action column is a
+   FIXED width, so every field ends on the same x whatever the row holds, and
+   the actions occupy the `field` row specifically, so a taller hint or a second
+   field below cannot drag them out of line. .tasklist-row is left alone — the
+   Tasks list uses it and wants the centring. */
+.cred-row {
+  display: grid;
+  /* Wide enough for the widest group (Save · Send test · Clear) so that group
+     does not have to shrink and no other row has to match its shrinking. */
+  grid-template-columns: minmax(0, 1fr) 13.5rem;
+  grid-template-areas:
+    "label   ."
+    "field   actions"
+    "hint    ."
+    "extra   .";
+  column-gap: 10px;
+  align-items: start;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  margin-bottom: 8px;
+}
+.cred-row > .cred-label { grid-area: label; margin-top: 0; }
+.cred-row > .cred-field { grid-area: field; width: 100%; }
+.cred-row > .cred-hint { grid-area: hint; margin: 4px 0 0; }
+.cred-row > .cred-extra { grid-area: extra; min-width: 0; }
+/* Save and Clear are COLUMNS, not just a right-aligned group.
+   Right-aligning the group lines up whatever happens to be last — so Clear
+   agreed across rows while Save sat at x=1297 on four rows and x=1213 on the
+   Slack row, which has a third button. Fixed areas mean every Save shares an
+   x and every Clear shares an x whether or not the row has a middle action.
+   The actions sit on the field's row so they need no vertical nudge; a button
+   is shorter than an input, and centring the two reads better than topping. */
+.cred-row > .cred-actions {
+  grid-area: actions;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-areas: "test save clear";
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+}
+.cred-actions > .act-test { grid-area: test; justify-self: end; }
+.cred-actions > .act-save { grid-area: save; }
+.cred-actions > .act-clear { grid-area: clear; }
+/* A row whose only action is a test send has no Save or Clear to line up
+   with, so it takes the whole track rather than sitting in a column that is
+   empty on every other row. */
+.cred-row > .cred-actions--single {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "test";
+}
+@media (max-width: 720px) {
+  /* One column: a 13.5rem action track next to a field is unreadable here, and
+     a squeezed field is exactly the fault this class exists to remove. */
+  .cred-row {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "label" "field" "hint" "actions" "extra";
+  }
+  .cred-row > .cred-actions {
+    grid-template-columns: auto auto auto;
+    grid-template-areas: "save clear test";
+    justify-content: start;
+  }
+  .cred-actions > .act-test { justify-self: start; }
+}
 
 /* Tasks page: use the full window width with a sticky toolbar */
 .tasks-page { width: 100%; max-width: none; margin: 0 auto; }
@@ -399,25 +514,58 @@ label.f { display: block; color: var(--muted); font-size: 12px; margin: 12px 0 4
   * { transition-duration: 0.01ms !important; }
 }
 
-/* ---------- Settings page layout (design-system pass) ---------- */
-/* Wide, readable measure instead of the old 680px column that left the
-   right half of wide windows empty. */
-.settings-page { width: 100%; max-width: none; }
-
-/* Two-column pairing for compact sections (usage + calendars/shortcuts).
-   Collapses to one column below 980px like the calendar view does. */
-.settings-grid {
+/* ---------- Settings page layout ---------- */
+/*
+ * ONE grid for the whole page, not a stack with two-column islands cut into it.
+ *
+ * The page used to be a full-width single column down to "Usage & limits" and
+ * then, for two sections only, a `1fr 1fr` grid — so the second column began
+ * two thirds of the way down and every reader's eye had to restart there. Those
+ * islands also fixed their two cells to a shared row, so a short card beside a
+ * tall one left the dead half-screen under the limits banner: the row was as
+ * tall as its tallest cell and the other half of it was empty.
+ *
+ * Every section is now a card in one `auto-fill` grid, so the columns start at
+ * the top of the page and the track floor collapses them to one column on a
+ * narrow window with no breakpoint to maintain.
+ *
+ * What actually removed the half-screen: "Usage & limits" was one cell of a
+ * two-cell island, sharing a row with a much taller neighbour. It now sits in a
+ * three-track row beside two cards of its own rough size. `align-items: start`
+ * stops a card STRETCHING to its row's height — it does not shrink the row,
+ * which is still as tall as its tallest one-span card. So some whitespace under
+ * a short card remains and is bounded by one card's height, where before it was
+ * bounded by the tallest section on the page.
+ */
+.settings-page {
+  width: 100%;
+  max-width: none;
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 26rem), 1fr));
+  gap: 16px;
   align-items: start;
+  /*
+   * `dense` because the full-row cards below would otherwise leave the holes
+   * this layout exists to remove: a wide card cannot start mid-row, so without
+   * backfilling, the two tracks beside a narrow card sit empty until the next
+   * narrow card comes along. Reading order shifts slightly for the small cards,
+   * which is the right trade here — these are independent settings, not steps.
+   */
+  grid-auto-flow: row dense;
 }
-@media (min-width: 1500px) {
-  .settings-grid { grid-template-columns: 1fr 1fr 1fr; }
-}
-@media (max-width: 980px) {
-  .settings-grid { grid-template-columns: 1fr; }
-}
+
+/* The page heading is not a card; it introduces all of them. */
+.settings-page > h2 { grid-column: 1 / -1; }
+
+.settings-card { min-width: 0; }
+.settings-card > .section-title:first-child { margin-top: 0; }
+
+/*
+ * Sections whose contents are a form or a table rather than a paragraph: they
+ * read badly in a 26rem track, so they take the full row instead of being the
+ * one card that always looks cramped.
+ */
+.settings-card--wide { grid-column: 1 / -1; }
 
 /* Agents page: use the full width; 3-up cards from ~1200px, 2-up below. */
 .agents-page { width: 100%; max-width: none; }

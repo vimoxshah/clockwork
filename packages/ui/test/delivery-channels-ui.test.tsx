@@ -144,11 +144,13 @@ function waitForPut(calls: Call[]): Promise<Call> {
   });
 }
 
-/** The `.tasklist-row` that holds the control with this test id. */
+/** The credential row that holds the control with this test id. */
 function rowFor(container: HTMLElement, testid: string): HTMLElement {
   const el = container.querySelector(`[data-testid="${testid}"]`);
   expect(el, `no element with data-testid=${testid}`).not.toBeNull();
-  return el!.closest('.tasklist-row') as HTMLElement;
+  // `.cred-row` since the delivery rows moved off `.tasklist-row`: that row
+  // was flex-centred, which put SMTP's Save/Clear beside the helper text.
+  return el!.closest('.cred-row') as HTMLElement;
 }
 
 afterEach(() => {

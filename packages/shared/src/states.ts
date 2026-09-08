@@ -61,7 +61,13 @@ export const LEGAL_TRANSITIONS: Readonly<Record<RunState, readonly RunState[]>> 
   running: ['waiting_approval', 'finalizing', 'failed', 'cancelled', 'budget_exceeded', 'timed_out'],
   waiting_approval: ['running', 'finalizing', 'failed', 'cancelled', 'timed_out'],
   awaiting_user: ['queued', 'missed', 'cancelled'],
-  finalizing: ['completed', 'failed', 'cancelled'],
+  // budget_exceeded and timed_out were missing here until 2026-09-08, and every
+  // interrupted run paid for it. finalize() always goes running -> finalizing
+  // first, so `finalizing -> timed_out` threw, the row was stranded in
+  // `finalizing`, and the child-exit handler then stamped it `runner_crashed`.
+  // The user saw a crash report for the timeout and the budget cap doing
+  // exactly their job. `running` already allows both; so must this.
+  finalizing: ['completed', 'failed', 'cancelled', 'budget_exceeded', 'timed_out'],
   completed: [],
   failed: [],
   cancelled: [],

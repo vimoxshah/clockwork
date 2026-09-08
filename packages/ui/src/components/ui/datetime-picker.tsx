@@ -1,16 +1,22 @@
 /**
- * DateTimePicker — Popover + DayPicker month grid + time fields.
- * Replaces the native datetime-local (which rendered unstyled popups and
- * broke dark mode). Fully themed via Tailwind tokens.
+ * DateTimePicker — Popover + DayPicker month grid + themed time fields.
+ *
+ * Replaces the native datetime-local (which rendered unstyled popups and broke
+ * dark mode). The time controls were native <select> until they were reported
+ * as "still not a proper date time picker component" — and in WKWebView, which
+ * is the engine the desktop window actually uses, a native <select> is a macOS
+ * popup menu drawn by the OS. It ignores the theme, ignores dark mode, and is
+ * the one part of this component that was never ours. Chromium hides that,
+ * which is why it survived: the earlier check was run in the wrong browser.
  */
 import { useState } from 'react';
 import { DayPicker } from 'react-day-picker';
 import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from './popover';
+import { TimeField } from './time-field';
 import { Button } from './button';
 import { cn } from '../../lib/cn';
 
-const p2 = (n: number): string => String(n).padStart(2, '0');
 
 function fmt(d: Date | undefined): string {
   if (!d) return 'Pick a date & time';
@@ -35,12 +41,11 @@ export function DateTimePicker({
   className?: string;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
-  const hh = p2(value.getHours());
-  const mm = p2(value.getMinutes());
+  const minutes = value.getHours() * 60 + value.getMinutes();
 
-  const setTime = (h: number, m: number): void => {
+  const setMinutes = (m: number): void => {
     const d = new Date(value);
-    d.setHours(h, m, 0, 0);
+    d.setHours(Math.floor(m / 60), m % 60, 0, 0);
     onChange(d);
   };
 
@@ -56,6 +61,16 @@ export function DateTimePicker({
           {fmt(value)}
         </Button>
       </PopoverTrigger>
+      {/* No onInteractOutside guard, and that is checked rather than assumed.
+          A Select renders its list in a portal outside this popover, so the
+          obvious worry is that choosing an hour reads as a click outside and
+          closes the whole picker. It does not: Radix keeps a stack of
+          dismissable layers and the Select is a layer above this one. The
+          guard written for it matched `[data-radix-select-content]`, an
+          attribute Radix never emits — the listbox carries only data-side,
+          data-align and data-state — so it was dead code claiming to hold
+          something up. Verified in WebKit with it gone: picking 9 AM changes
+          the value to 09:00 AM and the popover is still open. */}
       <PopoverContent className="w-auto p-0" align="start">
         <DayPicker
           mode="single"
@@ -95,36 +110,18 @@ export function DateTimePicker({
             IconRight: () => <ChevronRight className="h-4 w-4" />,
           }}
         />
-        <div className="flex items-center justify-between border-t border-border px-3 py-2.5">
+        <div className="flex items-center gap-2 border-t border-border px-3 py-2.5">
           <span className="text-xs text-dim">Time</span>
-          <div className="flex items-center gap-1.5">
-            <select
-              aria-label="Hour"
-              className="h-8 rounded-md border border-strong bg-bg px-2 text-compact text-fg focus:outline-none focus:ring-2 focus:ring-accent"
-              value={hh}
-              onChange={(e) => setTime(Number(e.target.value), value.getMinutes())}
-            >
-              {Array.from({ length: 24 }, (_, i) => (
-                <option key={i} value={i}>{p2(i)}</option>
-              ))}
-            </select>
-            <span className="text-dim">:</span>
-            <select
-              aria-label="Minute"
-              className="h-8 rounded-md border border-strong bg-bg px-2 text-compact text-fg focus:outline-none focus:ring-2 focus:ring-accent"
-              value={mm}
-              onChange={(e) => setTime(value.getHours(), Number(e.target.value))}
-            >
-              {[0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55].map((m) => (
-                <option key={m} value={m}>{p2(m)}</option>
-              ))}
-            </select>
-          </div>
+          <TimeField value={minutes} onChange={setMinutes} testIdPrefix="dtp" />
           <Button
             size="sm"
+            className="ml-auto"
             onClick={() => {
+              // The actual current minute, not the nearest grid line: the
+              // field can express any minute now, so rounding would only make
+              // "Now" mean a time that is not now.
               const d = new Date();
-              setTime(d.getHours(), Math.round(d.getMinutes() / 5) * 5 % 60);
+              setMinutes(d.getHours() * 60 + d.getMinutes());
             }}
           >
             Now

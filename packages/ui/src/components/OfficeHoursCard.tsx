@@ -20,6 +20,7 @@ import { CalendarClock } from 'lucide-react';
 import { api } from '../api';
 import { useAsync } from '../useAsync';
 import { Switch } from './ui/switch';
+import { TimeField, END_OF_DAY } from './ui/time-field';
 import { Badge } from './ui/card';
 import { featureSurface, registerFeatureSurface, revealFeatureSurface } from './featureSurfaces';
 
@@ -49,35 +50,18 @@ interface ProfileFlagRow {
   may_require_approval?: number | null;
 }
 
-/** '09:30' → 570. Returns null for an empty or unparseable field. */
-export function timeToMin(v: string): number | null {
-  const m = /^(\d{1,2}):(\d{2})$/.exec(v.trim());
-  if (!m) return null;
-  const h = Number(m[1]);
-  const min = Number(m[2]);
-  if (h > 23 || min > 59) return null;
-  return h * 60 + min;
-}
-
-/** 570 → '09:30'. 1440 renders as '00:00' because `<input type="time">` has no 24:00. */
-function minToTime(min: number): string {
+/**
+ * Display form, where 1440 IS 24:00.
+ *
+ * The fields used to be `<input type="time">`, which has no 24:00, so an end of
+ * day had to be entered as "00:00" and silently reinterpreted — the user typed
+ * the start of the day and got the end of it. `TimeField` spells 24:00 out and
+ * emits `END_OF_DAY`, so the pun is gone and this is only about the saved list.
+ */
+function fmtMin(min: number): string {
+  if (min === END_OF_DAY) return '24:00';
   const h = Math.floor(min / 60) % 24;
   return `${String(h).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
-}
-
-/** Display form, where 1440 IS 24:00 — the end of the day, which the input cannot spell. */
-function fmtMin(min: number): string {
-  return min === 1440 ? '24:00' : minToTime(min);
-}
-
-/**
- * `endMin` is 1..1440 and must be after `startMin`, so an end of midnight is
- * the END of this day (1440), never the start of the next one — a window that
- * crosses midnight is two rows, and the daemon refuses it as one.
- */
-export function endFieldToMin(v: string): number | null {
-  const raw = timeToMin(v);
-  return raw === 0 ? 1440 : raw;
 }
 
 /** IANA names for the datalist. Not every engine has `supportedValuesOf`. */
@@ -98,24 +82,20 @@ export function OfficeHoursCard({ version }: { version: number }): JSX.Element {
   const [err, setErr] = useState<string | null>(null);
 
   const [dow, setDow] = useState(1);
-  const [start, setStart] = useState('09:00');
-  const [end, setEnd] = useState('17:00');
+  const [startMin, setStartMin] = useState(9 * 60);
+  const [endMin, setEndMin] = useState(17 * 60);
   const [tz, setTz] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
   const [label, setLabel] = useState('');
 
   const enabled = hours.data?.enabled ?? false;
   const windows = [...(hours.data?.windows ?? [])].sort((a, b) => a.dow - b.dow || a.startMin - b.startMin);
 
-  const startMin = timeToMin(start);
-  const endMin = endFieldToMin(end);
   const problem =
-    startMin === null || endMin === null
-      ? 'Enter a start and an end time.'
-      : endMin <= startMin
-        ? 'End must be after start — a window cannot cross midnight. Split it into two windows (22:00–24:00 and 00:00–02:00).'
-        : !tz.trim()
-          ? 'Enter an IANA time zone, e.g. America/New_York.'
-          : null;
+    endMin <= startMin
+      ? 'End must be after start — a window cannot cross midnight. Split it into two windows (22:00–24:00 and 00:00–02:00).'
+      : !tz.trim()
+        ? 'Enter an IANA time zone, e.g. America/New_York.'
+        : null;
 
   const toggle = async (next: boolean): Promise<void> => {
     setBusy(true);
@@ -131,7 +111,7 @@ export function OfficeHoursCard({ version }: { version: number }): JSX.Element {
   };
 
   const add = async (): Promise<void> => {
-    if (problem || startMin === null || endMin === null) return;
+    if (problem) return;
     setBusy(true);
     setErr(null);
     try {
@@ -235,8 +215,8 @@ export function OfficeHoursCard({ version }: { version: number }): JSX.Element {
         </div>
       ))}
 
-      <div className="row3" style={{ alignItems: 'end' }}>
-        <div>
+      <div className="office-hours-form">
+        <div className="oh-days">
           <label className="f">Day</label>
           <div className="flex gap-1">
             {DOW.map((d) => (
@@ -257,34 +237,19 @@ export function OfficeHoursCard({ version }: { version: number }): JSX.Element {
             ))}
           </div>
         </div>
-        <div>
+        <div className="oh-time">
           <label className="f" htmlFor="oh-start">
             From
           </label>
-          <input
-            id="oh-start"
-            type="time"
-            className="mono"
-            value={start}
-            onChange={(e) => setStart(e.target.value)}
-          />
+          <TimeField id="oh-start" testIdPrefix="oh-start" ariaLabelPrefix="From" value={startMin} onChange={setStartMin} />
         </div>
-        <div>
+        <div className="oh-time">
           <label className="f" htmlFor="oh-end">
             To
           </label>
-          <input
-            id="oh-end"
-            type="time"
-            className="mono"
-            value={end}
-            onChange={(e) => setEnd(e.target.value)}
-          />
-          <p className="hint" style={{ margin: 0 }}>
-            00:00 here means midnight at the <em>end</em> of that day.
-          </p>
+          <TimeField id="oh-end" testIdPrefix="oh-end" ariaLabelPrefix="To" allowEndOfDay value={endMin} onChange={setEndMin} />
         </div>
-        <div>
+        <div className="oh-text">
           <label className="f" htmlFor="oh-tz">
             Time zone
           </label>
@@ -303,7 +268,7 @@ export function OfficeHoursCard({ version }: { version: number }): JSX.Element {
             ))}
           </datalist>
         </div>
-        <div>
+        <div className="oh-text">
           <label className="f" htmlFor="oh-label">
             Label (optional)
           </label>
@@ -317,7 +282,7 @@ export function OfficeHoursCard({ version }: { version: number }): JSX.Element {
           />
         </div>
         <button
-          className="btn primary"
+          className="btn primary oh-action"
           disabled={busy || problem !== null}
           data-testid="office-hours-add"
           onClick={() => void add()}
@@ -325,6 +290,12 @@ export function OfficeHoursCard({ version }: { version: number }): JSX.Element {
           {busy ? 'Saving…' : 'Add window'}
         </button>
       </div>
+      {/* Out of the control row on purpose: a hint under one input pushed that
+          input off the baseline its three neighbours sat on. */}
+      <p className="hint">
+        Pick <span className="mono">24:00</span> in “To” for a window that runs to the <em>end</em> of
+        that day. A window cannot cross midnight — split it into two.
+      </p>
       {problem && (
         <p className="hint" data-testid="office-hours-problem">
           {problem}

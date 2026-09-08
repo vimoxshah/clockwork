@@ -61,6 +61,7 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
     <div className="settings-page">
       <h2 style={{ marginTop: 0 }}>Settings</h2>
 
+      <section className="settings-card">
       <h3 className="section-title">Appearance</h3>
       <div className="tasklist-row">
         <div className="grow">
@@ -81,11 +82,15 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
           ))}
         </div>
       </div>
+      </section>
 
-      <h3 className="section-title" style={{ marginTop: 20 }}>Notifications &amp; delivery</h3>
+      <section className="settings-card settings-card--wide">
+      <h3 className="section-title">Notifications &amp; delivery</h3>
       <DeliveryCard version={version} />
+      </section>
 
-      <h3 className="section-title" style={{ marginTop: 20 }}>Scheduling</h3>
+      <section className="settings-card">
+      <h3 className="section-title">Scheduling</h3>
       {health.error && <div className="error-banner">Couldn’t load daemon state: {health.error}</div>}
       <div className="tasklist-row">
         <div className="grow">
@@ -118,21 +123,30 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
           </div>
         </div>
       )}
+      </section>
 
-      <h3 className="section-title" style={{ marginTop: 20 }} id="office-hours">Office hours</h3>
+      <section className="settings-card settings-card--wide">
+      <h3 className="section-title" id="office-hours">Office hours</h3>
       <OfficeHoursCard version={version} />
+      </section>
 
-      <h3 className="section-title" style={{ marginTop: 20 }} id="earned-autonomy">Earned autonomy</h3>
+      <section className="settings-card">
+      <h3 className="section-title" id="earned-autonomy">Earned autonomy</h3>
       <AutonomyCard version={version} />
+      </section>
 
-      <h3 className="section-title" style={{ marginTop: 20 }}>Usage &amp; limits</h3>
-      <div className="settings-grid">
-        <div>
-          <UsageCard version={version} />
-        </div>
-        <div>
-          <IcsCard version={version} />
-          <h3 className="section-title" style={{ marginTop: 18 }}>Keyboard shortcuts</h3>
+      <section className="settings-card">
+      <h3 className="section-title">Usage &amp; limits</h3>
+      <UsageCard version={version} />
+      </section>
+
+      <section className="settings-card">
+      <h3 className="section-title">Calendars</h3>
+      <IcsCard version={version} />
+      </section>
+
+      <section className="settings-card">
+          <h3 className="section-title">Keyboard shortcuts</h3>
           <div className="tasklist-row" style={{ display: 'block' }}>
             {SHORTCUTS.map((s) => (
               <div key={s.keys} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 13 }}>
@@ -145,10 +159,10 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
             ))}
             <p className="hint" style={{ marginTop: 8 }}>Press ⌘K anywhere to search commands.</p>
           </div>
-        </div>
-      </div>
+      </section>
 
-      <h3 className="section-title" style={{ marginTop: 20 }}>Security</h3>
+      <section className="settings-card">
+      <h3 className="section-title">Security</h3>
       <div className="tasklist-row">
         <div className="grow">
           <strong>Rotate access token</strong>
@@ -177,8 +191,10 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
           Rotate token
         </button>
       </div>
+      </section>
 
-      <h3 className="section-title" style={{ marginTop: 20 }}>Support</h3>
+      <section className="settings-card">
+      <h3 className="section-title">Support</h3>
       <div className="tasklist-row">
         <div className="grow">
           <strong>Export diagnostics</strong>
@@ -208,30 +224,36 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
           Export bundle
         </button>
       </div>
+      </section>
 
-      <h3 className="section-title" style={{ marginTop: 20 }}>Plan &amp; license</h3>
+      <section className="settings-card">
+      <h3 className="section-title">Plan &amp; license</h3>
       <LicenseCard version={version} />
+      </section>
 
-      <h3 className="section-title" style={{ marginTop: 20 }} id="byok-providers">API providers (BYOK)</h3>
+      <section className="settings-card settings-card--wide">
+      <h3 className="section-title" id="byok-providers">API providers (BYOK)</h3>
       <ByokCard version={version} />
+      </section>
 
-      <h3 className="section-title" style={{ marginTop: 20 }} id="cli-engines">CLI engines</h3>
-      <div className="settings-grid">
-        <div>
-          <ProvidersCard version={version} />
-        </div>
-        <div>
-          <h3 className="section-title" style={{ marginTop: 0 }} id="event-triggers">Event triggers</h3>
-          <TriggersCard version={version} />
-        </div>
-      </div>
+      <section className="settings-card settings-card--wide">
+      <h3 className="section-title" id="cli-engines">CLI engines</h3>
+      <ProvidersCard version={version} />
+      </section>
 
-      <h3 className="section-title" style={{ marginTop: 20 }}>Execution</h3>
+      <section className="settings-card settings-card--wide">
+      <h3 className="section-title" id="event-triggers">Event triggers</h3>
+      <TriggersCard version={version} />
+      </section>
+
+      <section className="settings-card">
+      <h3 className="section-title">Execution</h3>
       <p className="hint">
         Engine: your own Claude Code via <span className="mono">claude -p</span> on your subscription
         login — no API key required. Every run is OS-sandboxed with writes locked to its worktree,
         SSH keys unreadable, and hard budget bounds.
       </p>
+      </section>
     </div>
   );
 }
@@ -280,6 +302,13 @@ function UsageCard({ version }: { version: number }): JSX.Element {
 // Visually hides the real <input type="file"> while keeping it in the DOM
 // (not display:none) so it stays in the tab order and keeps its accessible
 // name from the wrapping <label> — a bare icon button would announce nothing.
+//
+// The label MUST stay positioned (see hiddenFileInputLabelStyle). `position:
+// absolute` resolves against the nearest positioned ancestor, and with none
+// the containing block is the page itself: this 1px box landed at document
+// y=2061, `.main` could not clip it because `.main` is static, and the
+// document grew a scrollbar of its own beside `.main`'s. Two scrollbars on
+// the Settings page, from one input nobody can see.
 const hiddenFileInputStyle: CSSProperties = {
   position: 'absolute',
   width: 1,
@@ -291,6 +320,9 @@ const hiddenFileInputStyle: CSSProperties = {
   whiteSpace: 'nowrap',
   border: 0,
 };
+
+/// The anchor that keeps the hidden input inside the label rather than on the page.
+const hiddenFileInputLabelStyle: CSSProperties = { position: 'relative' };
 
 function fmtImportedAt(ts: number | null): string {
   if (!ts) return 'unknown time';
@@ -468,6 +500,7 @@ function IcsCard({ version }: { version: number }): JSX.Element {
             htmlFor="ics-file-input"
             className="btn small"
             style={{
+              ...hiddenFileInputLabelStyle,
               cursor: fileBusy ? 'default' : 'pointer',
               outline: fileInputFocused ? '2px solid var(--accent)' : 'none',
               outlineOffset: 2,
@@ -772,28 +805,26 @@ export function DeliveryCard({ version }: { version: number }): JSX.Element {
         never handed to a running agent.
       </p>
 
-      <div className="tasklist-row">
-        <div className="grow">
-          <label className="f" htmlFor="tg-token">Telegram bot token</label>
-          <input
-            id="tg-token"
-            type="password"
-            autoComplete="off"
-            value={token}
-            onChange={(e) => setTokenInput(e.target.value)}
-            placeholder={configured ? (cfg.data?.telegram.botTokenMasked ?? 'configured') : 'Paste the token from @BotFather'}
-            style={{ width: '100%' }}
-            data-testid="telegram-token-input"
-          />
-          <div className="hint" style={{ margin: '4px 0 0' }}>
-            {configured
-              ? `Configured — ${cfg.data?.telegram.botTokenMasked}`
-              : 'Not configured — chat approvals are unavailable until a bot token is set.'}
-          </div>
+      <div className="cred-row">
+        <label className="f cred-label" htmlFor="tg-token">Telegram bot token</label>
+        <input
+          id="tg-token"
+          className="cred-field"
+          type="password"
+          autoComplete="off"
+          value={token}
+          onChange={(e) => setTokenInput(e.target.value)}
+          placeholder={configured ? (cfg.data?.telegram.botTokenMasked ?? 'configured') : 'Paste the token from @BotFather'}
+          data-testid="telegram-token-input"
+        />
+        <div className="hint cred-hint">
+          {configured
+            ? `Configured — ${cfg.data?.telegram.botTokenMasked}`
+            : 'Not configured — chat approvals are unavailable until a bot token is set.'}
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div className="cred-actions">
           <button
-            className="btn small primary"
+            className="btn small primary act-save"
             disabled={tokenBusy || !token.trim()}
             onClick={() => void saveToken()}
             data-testid="telegram-token-save"
@@ -801,7 +832,7 @@ export function DeliveryCard({ version }: { version: number }): JSX.Element {
             {tokenBusy ? 'Saving…' : 'Save'}
           </button>
           <button
-            className="btn small danger"
+            className="btn small danger act-clear"
             disabled={tokenBusy || !configured}
             onClick={() => void clearToken()}
           >
@@ -812,27 +843,28 @@ export function DeliveryCard({ version }: { version: number }): JSX.Element {
       {tokenMsg && <div className="ok-banner">{tokenMsg}</div>}
       {tokenErr && <div className="error-banner" role="alert">{tokenErr}</div>}
 
-      <div className="tasklist-row" style={{ marginTop: 8 }}>
-        <div className="grow">
-          <label className="f" htmlFor="tg-test-chat">Send test message</label>
-          <input
-            id="tg-test-chat"
-            type="text"
-            value={chatId}
-            onChange={(e) => setChatId(e.target.value)}
-            placeholder="Chat id"
-            disabled={!configured}
-            data-testid="telegram-test-chatid"
-          />
+      <div className="cred-row">
+        <label className="f cred-label" htmlFor="tg-test-chat">Send test message</label>
+        <input
+          id="tg-test-chat"
+          className="cred-field"
+          type="text"
+          value={chatId}
+          onChange={(e) => setChatId(e.target.value)}
+          placeholder="Chat id"
+          disabled={!configured}
+          data-testid="telegram-test-chatid"
+        />
+        <div className="cred-actions cred-actions--single">
+          <button
+            className="btn small act-test"
+            disabled={!configured || testBusy || !chatId.trim()}
+            onClick={() => void sendTest()}
+            data-testid="telegram-test-send"
+          >
+            {testBusy ? 'Sending…' : 'Send test message'}
+          </button>
         </div>
-        <button
-          className="btn small"
-          disabled={!configured || testBusy || !chatId.trim()}
-          onClick={() => void sendTest()}
-          data-testid="telegram-test-send"
-        >
-          {testBusy ? 'Sending…' : 'Send test message'}
-        </button>
       </div>
       {testMsg && (
         <div className={testOk ? 'ok-banner' : 'error-banner'} role={testOk ? undefined : 'alert'}>
@@ -840,27 +872,25 @@ export function DeliveryCard({ version }: { version: number }): JSX.Element {
         </div>
       )}
 
-      <div className="tasklist-row" style={{ marginTop: 14 }}>
-        <div className="grow">
-          <label className="f" htmlFor="wh-secret">Webhook secret (optional)</label>
-          <input
-            id="wh-secret"
-            type="password"
-            autoComplete="off"
-            value={webhookSecret}
-            onChange={(e) => setWebhookSecret(e.target.value)}
-            placeholder={cfg.data?.webhook.configured ? 'configured' : 'Shared secret used to sign outgoing webhook calls'}
-            style={{ width: '100%' }}
-          />
-          <div className="hint" style={{ margin: '4px 0 0' }}>
-            {cfg.data?.webhook.configured ? 'Configured.' : 'Not set — outgoing webhooks are sent unsigned.'}
-          </div>
+      <div className="cred-row">
+        <label className="f cred-label" htmlFor="wh-secret">Webhook secret (optional)</label>
+        <input
+          id="wh-secret"
+          className="cred-field"
+          type="password"
+          autoComplete="off"
+          value={webhookSecret}
+          onChange={(e) => setWebhookSecret(e.target.value)}
+          placeholder={cfg.data?.webhook.configured ? 'configured' : 'Shared secret used to sign outgoing webhook calls'}
+        />
+        <div className="hint cred-hint">
+          {cfg.data?.webhook.configured ? 'Configured.' : 'Not set — outgoing webhooks are sent unsigned.'}
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn small primary" disabled={whBusy || !webhookSecret.trim()} onClick={() => void saveWebhookSecret()}>
+        <div className="cred-actions">
+          <button className="btn small primary act-save" disabled={whBusy || !webhookSecret.trim()} onClick={() => void saveWebhookSecret()}>
             {whBusy ? 'Saving…' : 'Save'}
           </button>
-          <button className="btn small danger" disabled={whBusy || !cfg.data?.webhook.configured} onClick={() => void clearWebhookSecret()}>
+          <button className="btn small danger act-clear" disabled={whBusy || !cfg.data?.webhook.configured} onClick={() => void clearWebhookSecret()}>
             Clear
           </button>
         </div>
@@ -868,28 +898,26 @@ export function DeliveryCard({ version }: { version: number }): JSX.Element {
       {whMsg && <div className="ok-banner">{whMsg}</div>}
       {whErr && <div className="error-banner" role="alert">{whErr}</div>}
 
-      <div className="tasklist-row" style={{ marginTop: 14 }}>
-        <div className="grow">
-          <label className="f" htmlFor="slack-hook">Slack incoming webhook</label>
-          <input
-            id="slack-hook"
-            type="password"
-            autoComplete="off"
-            value={slackUrl}
-            onChange={(e) => setSlackUrl(e.target.value)}
-            placeholder={slackConfigured ? (cfg.data?.slack?.webhookUrlMasked ?? 'configured') : 'https://hooks.slack.com/services/…'}
-            style={{ width: '100%' }}
-            data-testid="slack-webhook-input"
-          />
-          <div className="hint" style={{ margin: '4px 0 0' }}>
-            {slackConfigured
-              ? `Configured — ${cfg.data?.slack?.webhookUrlMasked}`
-              : 'Not configured. The URL is the credential: anyone holding it can post to that channel. One webhook posts to one channel — a second destination needs a second webhook.'}
-          </div>
+      <div className="cred-row">
+        <label className="f cred-label" htmlFor="slack-hook">Slack incoming webhook</label>
+        <input
+          id="slack-hook"
+          className="cred-field"
+          type="password"
+          autoComplete="off"
+          value={slackUrl}
+          onChange={(e) => setSlackUrl(e.target.value)}
+          placeholder={slackConfigured ? (cfg.data?.slack?.webhookUrlMasked ?? 'configured') : 'https://hooks.slack.com/services/…'}
+          data-testid="slack-webhook-input"
+        />
+        <div className="hint cred-hint">
+          {slackConfigured
+            ? `Configured — ${cfg.data?.slack?.webhookUrlMasked}`
+            : 'Not configured. The URL is the credential: anyone holding it can post to that channel. One webhook posts to one channel — a second destination needs a second webhook.'}
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div className="cred-actions">
           <button
-            className="btn small primary"
+            className="btn small primary act-save"
             disabled={slackBusy || !slackUrl.trim()}
             onClick={() => void saveSlack()}
             data-testid="slack-webhook-save"
@@ -897,7 +925,7 @@ export function DeliveryCard({ version }: { version: number }): JSX.Element {
             {slackBusy ? 'Saving…' : 'Save'}
           </button>
           <button
-            className="btn small"
+            className="btn small act-test"
             disabled={slackBusy || !slackConfigured}
             onClick={() => void testSlack()}
             data-testid="slack-test-send"
@@ -905,7 +933,7 @@ export function DeliveryCard({ version }: { version: number }): JSX.Element {
             Send test
           </button>
           <button
-            className="btn small danger"
+            className="btn small danger act-clear"
             disabled={slackBusy || !slackConfigured}
             onClick={() => void clearSlack()}
           >
@@ -919,25 +947,31 @@ export function DeliveryCard({ version }: { version: number }): JSX.Element {
         </div>
       )}
 
-      <div className="tasklist-row" style={{ marginTop: 14 }}>
-        <div className="grow">
-          <label className="f" htmlFor="smtp-url">SMTP relay</label>
-          <input
-            id="smtp-url"
-            type="password"
-            autoComplete="off"
-            value={smtpUrl}
-            onChange={(e) => setSmtpUrl(e.target.value)}
-            placeholder={smtpConfigured ? (cfg.data?.smtp?.endpointMasked ?? 'configured') : 'smtp://user:pass@smtp.example.com:587'}
-            style={{ width: '100%' }}
-            data-testid="smtp-url-input"
-          />
-          <div className="hint" style={{ margin: '4px 0 0' }}>
-            {smtpConfigured
-              ? `Configured — ${cfg.data?.smtp?.endpointMasked}`
-              : 'Not configured. Port 587 upgrades with STARTTLS; smtps:// is TLS from the first byte. Plain-text mail only — no attachments, no HTML.'}
-          </div>
-          <label className="f" htmlFor="smtp-from" style={{ marginTop: 8 }}>From address</label>
+      {/* The row the "alignment" report pointed at. Save and Clear used to be
+          centred on a block holding two fields and two hints, which put them
+          level with the STARTTLS sentence instead of the relay field they act
+          on. `From address` moves into the row's `extra` area so the actions
+          stay on the relay field's line — they save both, and the relay is the
+          field that decides whether email works at all. */}
+      <div className="cred-row">
+        <label className="f cred-label" htmlFor="smtp-url">SMTP relay</label>
+        <input
+          id="smtp-url"
+          className="cred-field"
+          type="password"
+          autoComplete="off"
+          value={smtpUrl}
+          onChange={(e) => setSmtpUrl(e.target.value)}
+          placeholder={smtpConfigured ? (cfg.data?.smtp?.endpointMasked ?? 'configured') : 'smtp://user:pass@smtp.example.com:587'}
+          data-testid="smtp-url-input"
+        />
+        <div className="hint cred-hint">
+          {smtpConfigured
+            ? `Configured — ${cfg.data?.smtp?.endpointMasked}`
+            : 'Not configured. Port 587 upgrades with STARTTLS; smtps:// is TLS from the first byte. Plain-text mail only — no attachments, no HTML.'}
+        </div>
+        <div className="cred-extra">
+          <label className="f" htmlFor="smtp-from">From address</label>
           <input
             id="smtp-from"
             type="email"
@@ -954,9 +988,9 @@ export function DeliveryCard({ version }: { version: number }): JSX.Element {
               : 'Optional — leave blank when the SMTP username is itself an email address.'}
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div className="cred-actions">
           <button
-            className="btn small primary"
+            className="btn small primary act-save"
             disabled={smtpBusy || (!smtpUrl.trim() && !smtpFrom.trim())}
             onClick={() => void saveSmtp()}
             data-testid="smtp-save"
@@ -964,7 +998,7 @@ export function DeliveryCard({ version }: { version: number }): JSX.Element {
             {smtpBusy ? 'Saving…' : 'Save'}
           </button>
           <button
-            className="btn small danger"
+            className="btn small danger act-clear"
             disabled={smtpBusy || !smtpConfigured}
             onClick={() => void clearSmtp()}
           >
@@ -972,27 +1006,28 @@ export function DeliveryCard({ version }: { version: number }): JSX.Element {
           </button>
         </div>
       </div>
-      <div className="tasklist-row">
-        <div className="grow">
-          <label className="f" htmlFor="smtp-test-to">Send test email to</label>
-          <input
-            id="smtp-test-to"
-            type="email"
-            value={smtpTo}
-            onChange={(e) => setSmtpTo(e.target.value)}
-            placeholder="you@example.com"
-            disabled={!smtpConfigured}
-            data-testid="smtp-test-to"
-          />
+      <div className="cred-row">
+        <label className="f cred-label" htmlFor="smtp-test-to">Send test email to</label>
+        <input
+          id="smtp-test-to"
+          className="cred-field"
+          type="email"
+          value={smtpTo}
+          onChange={(e) => setSmtpTo(e.target.value)}
+          placeholder="you@example.com"
+          disabled={!smtpConfigured}
+          data-testid="smtp-test-to"
+        />
+        <div className="cred-actions cred-actions--single">
+          <button
+            className="btn small act-test"
+            disabled={!smtpConfigured || smtpBusy || !smtpTo.trim()}
+            onClick={() => void testSmtp()}
+            data-testid="smtp-test-send"
+          >
+            {smtpBusy ? 'Sending…' : 'Send test email'}
+          </button>
         </div>
-        <button
-          className="btn small"
-          disabled={!smtpConfigured || smtpBusy || !smtpTo.trim()}
-          onClick={() => void testSmtp()}
-          data-testid="smtp-test-send"
-        >
-          {smtpBusy ? 'Sending…' : 'Send test email'}
-        </button>
       </div>
       {smtpMsg && (
         <div className={smtpOk ? 'ok-banner' : 'error-banner'} role={smtpOk ? undefined : 'alert'} data-testid="smtp-result">
@@ -1156,8 +1191,12 @@ function TriggersCard({ version }: { version: number }): JSX.Element {
               <input id="trg-secret" type="password" value={secret} placeholder="min 8 chars" onChange={(e) => setSecret(e.target.value)} />
             )}
         </div>
+        {/* justify-self, because this button is a direct child of a
+            three-column grid and was filling a whole 457px track — a submit
+            button the width of a select reads as a banner, not an action. */}
         <button
           className="btn primary"
+          style={{ justifySelf: 'start' }}
           disabled={busy || !name.trim() || !taskId}
           onClick={() => void create()}
         >

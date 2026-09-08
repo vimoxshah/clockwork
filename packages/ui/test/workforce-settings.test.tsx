@@ -20,6 +20,12 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { neverHappens, renderComponent, waitFor, waitForElement, waitForText } from './helpers/dom';
+import { openOptions, pickTime } from './helpers/radix';
+
+/** The label TimeField renders for an hour, in whatever locale the run uses. */
+function hourLabel(h: number): string {
+  return new Date(2000, 0, 1, h).toLocaleTimeString(undefined, { hour: 'numeric' });
+}
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const SETTINGS = readFileSync(resolve(SRC, 'components/SettingsView.tsx'), 'utf8');
@@ -243,8 +249,8 @@ describe('OfficeHoursCard (F3)', () => {
 
   it('adds a window with minutes-since-midnight, not a time string', async () => {
     const { container, calls } = await mount({ enabled: true, windows: [] });
-    type(container.querySelector('#oh-start'), '08:30');
-    type(container.querySelector('#oh-end'), '12:00');
+    await pickTime(container, 'oh-start', hourLabel(8), '30');
+    await pickTime(container, 'oh-end', hourLabel(12), '00');
     type(container.querySelector('#oh-tz'), 'Europe/Berlin');
     type(container.querySelector('#oh-label'), 'Mornings');
     // `type` dispatches a discrete `input` event, which React 18 flushes before
@@ -256,18 +262,32 @@ describe('OfficeHoursCard (F3)', () => {
     expect(post!.body).toEqual({ dow: 1, startMin: 510, endMin: 720, tz: 'Europe/Berlin', label: 'Mornings' });
   });
 
-  it('treats an end of 00:00 as the end of that day (1440), which the input cannot spell', async () => {
-    const { endFieldToMin, timeToMin } = await import('../src/components/OfficeHoursCard');
-    expect(endFieldToMin('00:00')).toBe(1440);
-    expect(endFieldToMin('17:00')).toBe(1020);
-    expect(timeToMin('00:00')).toBe(0);
-    expect(timeToMin('')).toBeNull();
-    expect(timeToMin('99:99')).toBeNull();
+  it('sends 1440 for an end of 24:00, and offers it as its own option', async () => {
+    // The field used to be `<input type="time">`, which has no 24:00, so the
+    // end of the day had to be entered as "00:00" and reinterpreted behind the
+    // user's back. The whole point of the option is that midnight-at-the-end
+    // and midnight-at-the-start are different instants, so it is now pickable
+    // and spelled differently from "12 AM".
+    const { container, calls } = await mount({ enabled: true, windows: [] });
+    const end = container.querySelector('[data-testid="oh-end-hour"]');
+    expect((await openOptions(end)).map((o) => o.textContent?.trim()), 'the end list ends at 24:00')
+      .toContain('24:00');
+    await pickTime(container, 'oh-end', '24:00');
+    click(container.querySelector('[data-testid="office-hours-add"]'));
+    await sawCall(calls, 'POST /workforce/office-hours', (c) => c.url === '/workforce/office-hours' && c.method === 'POST');
+    const post = calls.find((c) => c.url === '/workforce/office-hours' && c.method === 'POST');
+    expect(post!.body).toMatchObject({ startMin: 540, endMin: 1440 });
+  });
+
+  it('does not offer 24:00 as a START — a window cannot begin at the end of the day', async () => {
+    const { container } = await mount({ enabled: true, windows: [] });
+    const start = container.querySelector('[data-testid="oh-start-hour"]');
+    expect((await openOptions(start)).map((o) => o.textContent?.trim())).not.toContain('24:00');
   });
 
   it('refuses to offer a window the daemon would 422 — and says why', async () => {
     const { container, calls } = await mount({ enabled: true, windows: [] });
-    type(container.querySelector('#oh-end'), '08:00'); // before the 09:00 default start
+    await pickTime(container, 'oh-end', hourLabel(8)); // before the 09:00 default start
     // The explanation appearing is the state change the typing caused, so it is
     // the anchor for reading the button beside it.
     await waitForElement(container, '[data-testid="office-hours-problem"]');

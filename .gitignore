@@ -60,3 +60,8 @@ src-tauri/app-icon.png.orig/
 # Product Hunt / launch prep — drafts, unpublished copy, generated assets.
 # The repo is PUBLIC: launch copy stays local until it is actually published.
 launch/
+
+# Staged by tools/stage-bundle.mjs before `tauri build` — ~195MB of Node and
+# production node_modules, reproducible from the lockfile, never committed.
+src-tauri/resources/app/
+src-tauri/binaries/

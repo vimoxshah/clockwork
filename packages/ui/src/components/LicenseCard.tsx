@@ -82,7 +82,14 @@ export function LicenseCard({ version }: { version: number }): JSX.Element {
       <p className="hint" style={{ margin: 0 }}>{copy.detail}</p>
 
       {!activating && ent.state === 'none' && (
-        <button className="btn small" onClick={() => setActivating(true)} data-testid="license-activate-open">
+        <button
+          className="btn small"
+          // The card is a stretch column, so a bare button spans it — 429px of
+          // "I have a license key". Sized to its label instead.
+          style={{ alignSelf: 'flex-start' }}
+          onClick={() => setActivating(true)}
+          data-testid="license-activate-open"
+        >
           I have a license key
         </button>
       )}
