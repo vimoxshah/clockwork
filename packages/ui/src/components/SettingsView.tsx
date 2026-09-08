@@ -61,6 +61,7 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
     <div className="settings-page">
       <h2 style={{ marginTop: 0 }}>Settings</h2>
 
+      <section className="settings-card">
       <h3 className="section-title">Appearance</h3>
       <div className="tasklist-row">
         <div className="grow">
@@ -81,11 +82,15 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
           ))}
         </div>
       </div>
+      </section>
 
-      <h3 className="section-title" style={{ marginTop: 20 }}>Notifications &amp; delivery</h3>
+      <section className="settings-card settings-card--wide">
+      <h3 className="section-title">Notifications &amp; delivery</h3>
       <DeliveryCard version={version} />
+      </section>
 
-      <h3 className="section-title" style={{ marginTop: 20 }}>Scheduling</h3>
+      <section className="settings-card">
+      <h3 className="section-title">Scheduling</h3>
       {health.error && <div className="error-banner">Couldn’t load daemon state: {health.error}</div>}
       <div className="tasklist-row">
         <div className="grow">
@@ -118,21 +123,30 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
           </div>
         </div>
       )}
+      </section>
 
-      <h3 className="section-title" style={{ marginTop: 20 }} id="office-hours">Office hours</h3>
+      <section className="settings-card settings-card--wide">
+      <h3 className="section-title" id="office-hours">Office hours</h3>
       <OfficeHoursCard version={version} />
+      </section>
 
-      <h3 className="section-title" style={{ marginTop: 20 }} id="earned-autonomy">Earned autonomy</h3>
+      <section className="settings-card">
+      <h3 className="section-title" id="earned-autonomy">Earned autonomy</h3>
       <AutonomyCard version={version} />
+      </section>
 
-      <h3 className="section-title" style={{ marginTop: 20 }}>Usage &amp; limits</h3>
-      <div className="settings-grid">
-        <div>
-          <UsageCard version={version} />
-        </div>
-        <div>
-          <IcsCard version={version} />
-          <h3 className="section-title" style={{ marginTop: 18 }}>Keyboard shortcuts</h3>
+      <section className="settings-card">
+      <h3 className="section-title">Usage &amp; limits</h3>
+      <UsageCard version={version} />
+      </section>
+
+      <section className="settings-card">
+      <h3 className="section-title">Calendars</h3>
+      <IcsCard version={version} />
+      </section>
+
+      <section className="settings-card">
+          <h3 className="section-title">Keyboard shortcuts</h3>
           <div className="tasklist-row" style={{ display: 'block' }}>
             {SHORTCUTS.map((s) => (
               <div key={s.keys} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 13 }}>
@@ -145,10 +159,10 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
             ))}
             <p className="hint" style={{ marginTop: 8 }}>Press ⌘K anywhere to search commands.</p>
           </div>
-        </div>
-      </div>
+      </section>
 
-      <h3 className="section-title" style={{ marginTop: 20 }}>Security</h3>
+      <section className="settings-card">
+      <h3 className="section-title">Security</h3>
       <div className="tasklist-row">
         <div className="grow">
           <strong>Rotate access token</strong>
@@ -177,8 +191,10 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
           Rotate token
         </button>
       </div>
+      </section>
 
-      <h3 className="section-title" style={{ marginTop: 20 }}>Support</h3>
+      <section className="settings-card">
+      <h3 className="section-title">Support</h3>
       <div className="tasklist-row">
         <div className="grow">
           <strong>Export diagnostics</strong>
@@ -208,30 +224,36 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
           Export bundle
         </button>
       </div>
+      </section>
 
-      <h3 className="section-title" style={{ marginTop: 20 }}>Plan &amp; license</h3>
+      <section className="settings-card">
+      <h3 className="section-title">Plan &amp; license</h3>
       <LicenseCard version={version} />
+      </section>
 
-      <h3 className="section-title" style={{ marginTop: 20 }} id="byok-providers">API providers (BYOK)</h3>
+      <section className="settings-card settings-card--wide">
+      <h3 className="section-title" id="byok-providers">API providers (BYOK)</h3>
       <ByokCard version={version} />
+      </section>
 
-      <h3 className="section-title" style={{ marginTop: 20 }} id="cli-engines">CLI engines</h3>
-      <div className="settings-grid">
-        <div>
-          <ProvidersCard version={version} />
-        </div>
-        <div>
-          <h3 className="section-title" style={{ marginTop: 0 }} id="event-triggers">Event triggers</h3>
-          <TriggersCard version={version} />
-        </div>
-      </div>
+      <section className="settings-card settings-card--wide">
+      <h3 className="section-title" id="cli-engines">CLI engines</h3>
+      <ProvidersCard version={version} />
+      </section>
 
-      <h3 className="section-title" style={{ marginTop: 20 }}>Execution</h3>
+      <section className="settings-card settings-card--wide">
+      <h3 className="section-title" id="event-triggers">Event triggers</h3>
+      <TriggersCard version={version} />
+      </section>
+
+      <section className="settings-card">
+      <h3 className="section-title">Execution</h3>
       <p className="hint">
         Engine: your own Claude Code via <span className="mono">claude -p</span> on your subscription
         login — no API key required. Every run is OS-sandboxed with writes locked to its worktree,
         SSH keys unreadable, and hard budget bounds.
       </p>
+      </section>
     </div>
   );
 }

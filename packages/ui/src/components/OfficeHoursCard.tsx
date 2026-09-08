@@ -235,8 +235,8 @@ export function OfficeHoursCard({ version }: { version: number }): JSX.Element {
         </div>
       ))}
 
-      <div className="row3" style={{ alignItems: 'end' }}>
-        <div>
+      <div className="office-hours-form">
+        <div className="oh-days">
           <label className="f">Day</label>
           <div className="flex gap-1">
             {DOW.map((d) => (
@@ -257,7 +257,7 @@ export function OfficeHoursCard({ version }: { version: number }): JSX.Element {
             ))}
           </div>
         </div>
-        <div>
+        <div className="oh-time">
           <label className="f" htmlFor="oh-start">
             From
           </label>
@@ -269,7 +269,7 @@ export function OfficeHoursCard({ version }: { version: number }): JSX.Element {
             onChange={(e) => setStart(e.target.value)}
           />
         </div>
-        <div>
+        <div className="oh-time">
           <label className="f" htmlFor="oh-end">
             To
           </label>
@@ -280,11 +280,8 @@ export function OfficeHoursCard({ version }: { version: number }): JSX.Element {
             value={end}
             onChange={(e) => setEnd(e.target.value)}
           />
-          <p className="hint" style={{ margin: 0 }}>
-            00:00 here means midnight at the <em>end</em> of that day.
-          </p>
         </div>
-        <div>
+        <div className="oh-text">
           <label className="f" htmlFor="oh-tz">
             Time zone
           </label>
@@ -303,7 +300,7 @@ export function OfficeHoursCard({ version }: { version: number }): JSX.Element {
             ))}
           </datalist>
         </div>
-        <div>
+        <div className="oh-text">
           <label className="f" htmlFor="oh-label">
             Label (optional)
           </label>
@@ -317,7 +314,7 @@ export function OfficeHoursCard({ version }: { version: number }): JSX.Element {
           />
         </div>
         <button
-          className="btn primary"
+          className="btn primary oh-action"
           disabled={busy || problem !== null}
           data-testid="office-hours-add"
           onClick={() => void add()}
@@ -325,6 +322,11 @@ export function OfficeHoursCard({ version }: { version: number }): JSX.Element {
           {busy ? 'Saving…' : 'Add window'}
         </button>
       </div>
+      {/* Out of the control row on purpose: a hint under one input pushed that
+          input off the baseline its three neighbours sat on. */}
+      <p className="hint">
+        00:00 in “To” means midnight at the <em>end</em> of that day.
+      </p>
       {problem && (
         <p className="hint" data-testid="office-hours-problem">
           {problem}
