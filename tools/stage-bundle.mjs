@@ -26,7 +26,7 @@
  * checking afterwards that they happen to agree.
  */
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, rmSync, chmodSync, readdirSync, statSync, unlinkSync, lstatSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, chmodSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -41,11 +41,24 @@ const BINARIES = path.join(ROOT, 'src-tauri', 'binaries');
  * instead — same 68MB, nothing to resolve at runtime.
  */
 function deployDaemon(dest) {
-  execFileSync(
-    'pnpm',
-    ['deploy', '--filter', '@clockwork/daemon', '--prod', '--legacy', '--config.node-linker=hoisted', dest],
-    { cwd: ROOT, stdio: 'inherit' },
-  );
+  // `pnpm deploy` writes the flags it ran with into the ROOT workspace state,
+  // so this command leaves the developer's checkout believing it should be a
+  // hoisted production-only install. Every later `pnpm <script>` then tries to
+  // purge node_modules and reinstall, and outside a TTY it just fails:
+  // ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY. The real tree is untouched —
+  // only the state file lies — so snapshot it and put it back.
+  const state = path.join(ROOT, 'node_modules', '.pnpm-workspace-state-v1.json');
+  const before = existsSync(state) ? readFileSync(state) : null;
+  try {
+    execFileSync(
+      'pnpm',
+      ['deploy', '--filter', '@clockwork/daemon', '--prod', '--legacy', '--config.node-linker=hoisted', dest],
+      { cwd: ROOT, stdio: 'inherit' },
+    );
+  } finally {
+    if (before === null) rmSync(state, { force: true });
+    else writeFileSync(state, before);
+  }
 }
 
 /** Source, tests and build config ride along in `pnpm deploy` output and are dead weight in a .app. */

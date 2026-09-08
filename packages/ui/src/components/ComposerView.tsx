@@ -426,7 +426,7 @@ export default function ComposerView({
           </p>
         </div>
 
-        <CardContent className="grid gap-6 p-5 lg:grid-cols-5">
+        <CardContent className="grid items-start gap-6 p-5 lg:grid-cols-5">
           {/* ---------- main column ---------- */}
           <div className="space-y-6 lg:col-span-3">
             <Section icon={<Bot />} title="The job">
@@ -812,7 +812,17 @@ export default function ComposerView({
                 )}
               </div>
             </section>
+          </div>
 
+          {/* ---------- optional delivery, full width ----------
+              These two lived at the bottom of the side column, and that is
+              what made the form look broken: a grid row is as tall as its
+              tallest child, so the side column's two paragraphs of Telegram
+              and Slack prose left a screen-height of white space beside
+              "Budget & limits". They are also the only two sections that are
+              about where the OUTCOME goes rather than what to run, so a full
+              width row of their own is where they belonged anyway. */}
+          <div className="grid gap-6 lg:col-span-5 lg:grid-cols-2">
             <section>
               <div className="mb-3 flex items-center gap-2">
                 <span className="flex h-6 w-6 items-center justify-center rounded-md bg-surface-active text-dim [&_svg]:h-3.5 [&_svg]:w-3.5">
