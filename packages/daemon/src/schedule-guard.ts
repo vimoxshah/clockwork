@@ -262,22 +262,35 @@ export function guardSchedule(
   }
 
   // --- 3. the epoch-anchor cliff: slow, only when the anchor is synthesized ---
-  // Mirrors `advancedAnchorMs`: with no DTSTART the anchor is ours to move, and
-  // it is NOT moved for a sub-daily rule whose counter can leave the grid.
-  if (anchor === null && (freq === 'MINUTELY' || freq === 'SECONDLY')) {
-    const skipStaysOnGrid = 60 % interval === 0 && !filtersWholeDays;
-    if ((byMinute != null && !skipStaysOnGrid) || countRaw != null) {
-      return {
-        safe: false,
-        reason: 'slow_anchor',
-        detail: countRaw != null
-          ? `FREQ=${freq} with COUNT keeps the 1970 anchor, so the occurrences it counts are 1970's, not this year's. `
-            + 'State a DTSTART to say when the rule starts, or drop COUNT and use UNTIL.'
-          : `FREQ=${freq} with a coarser BY part and no DTSTART replays from 1970 on every expansion, which blocks `
-            + 'the save request and the scheduler tick. State a DTSTART on the rule\'s own grid, or use FREQ=HOURLY '
-            + 'with BYMINUTE — every 15 minutes is BYMINUTE=0,15,30,45.',
-      };
-    }
+  // COUNT is the whole of it, and that is a narrowing from what this block used
+  // to test. It used to refuse a synthesized-anchor MINUTELY/SECONDLY rule
+  // carrying BYMINUTE off the interval grid, on the theory that it mirrored
+  // `advancedAnchorMs`. It did not. `advancedAnchorMs` (recurrence.ts:252) keeps
+  // the 1970 anchor for MINUTELY on BYHOUR alone — BYMINUTE never enters it —
+  // and for SECONDLY on BYHOUR or BYMINUTE (:256). Measured through the real
+  // `occurrencesBetween` over an 8-day window in America/New_York, every rule
+  // the old clause refused is fast:
+  //
+  //   FREQ=MINUTELY;INTERVAL=7;BYMINUTE=0       13ms, 28 runs
+  //   FREQ=MINUTELY;INTERVAL=7;BYMINUTE=0,30     2ms, 50 runs
+  //   FREQ=MINUTELY;INTERVAL=13;BYMINUTE=0       0ms, 15 runs
+  //   FREQ=MINUTELY;INTERVAL=45;BYMINUTE=0       1ms, 50 runs
+  //
+  // The BYHOUR half that WOULD have been a true mirror is unreachable here:
+  // step 2 above refuses any sub-daily rule carrying a coarser BY part before
+  // control arrives, so a MINUTELY rule with BYHOUR, and a SECONDLY rule with
+  // BYHOUR or BYMINUTE, are already gone. Restoring the mirror would restore
+  // dead code beside a live refusal, which is the shape that produced the wrong
+  // model twice — so it is written down here instead of kept in the branch. If
+  // step 2 is ever narrowed, this is the clause that has to come back.
+  if (anchor === null && countRaw != null && (freq === 'MINUTELY' || freq === 'SECONDLY')) {
+    return {
+      safe: false,
+      reason: 'slow_anchor',
+      detail:
+        `FREQ=${freq} with COUNT keeps the 1970 anchor, so the occurrences it counts are 1970's, not this year's. `
+        + 'State a DTSTART to say when the rule starts, or drop COUNT and use UNTIL.',
+    };
   }
 
   return { safe: true };

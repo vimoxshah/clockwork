@@ -124,12 +124,30 @@ describe('unreachable BY parts — the hang, refused by arithmetic', () => {
 });
 
 describe('the epoch-anchor cliff — slow, and only without a DTSTART', () => {
-  it('an off-grid INTERVAL with a same-unit BY part and no DTSTART is the cliff', () => {
-    // 60 % 7 !== 0, so `skipStaysOnGrid` fails and the anchor stays at 1970.
-    // BYMINUTE is the rule's own unit, so it is not refused as a hang and falls
-    // through to this: slow, not infinite. The two must not be reported alike.
-    expect(guard('FREQ=MINUTELY;INTERVAL=7;BYMINUTE=5'))
+  it('COUNT is the cliff, and it is the only thing left that is', () => {
+    // COUNT is what `advancedAnchorMs` (recurrence.ts:246) actually refuses to
+    // advance for, on every frequency — so the occurrences it counts are 1970's.
+    expect(guard('FREQ=MINUTELY;INTERVAL=15;COUNT=500;BYMINUTE=0,15,30,45'))
       .toMatchObject({ safe: false, reason: 'slow_anchor' });
+    expect(guard('FREQ=SECONDLY;INTERVAL=30;COUNT=10'))
+      .toMatchObject({ safe: false, reason: 'slow_anchor' });
+  });
+
+  it('an off-grid INTERVAL with BYMINUTE is NOT the cliff — that was a false positive', () => {
+    // These were refused as `slow_anchor` on the theory that the clause mirrored
+    // `advancedAnchorMs`. It did not: for MINUTELY that function looks at BYHOUR
+    // alone (recurrence.ts:252), and BYMINUTE never enters it. Measured through
+    // the real `occurrencesBetween`, 8-day window, America/New_York: 13ms/28
+    // runs, 2ms/50, 0ms/15, 1ms/50 respectively. A refusal has to cost someone
+    // something real, and these cost them a working schedule for nothing.
+    for (const rule of [
+      'FREQ=MINUTELY;INTERVAL=7;BYMINUTE=0',
+      'FREQ=MINUTELY;INTERVAL=7;BYMINUTE=0,30',
+      'FREQ=MINUTELY;INTERVAL=13;BYMINUTE=0',
+      'FREQ=MINUTELY;INTERVAL=45;BYMINUTE=0',
+    ]) {
+      expect(guard(rule), rule).toEqual({ safe: true });
+    }
   });
 
   it('a whole-day filter is a hang, not a cliff, and is reported as one', () => {
@@ -245,6 +263,30 @@ describe('the sweep: no rule the guard passes may fail to terminate', () => {
               try { occurrencesBetween({ kind: 'rrule', rrule: rule, tz: TZ }, FROM, FROM + 3_600_000, 5); } catch { /* as above */ }
               worstMs = Math.max(worstMs, performance.now() - t0);
             }
+            // HOURLY belongs in the sweep more than either of the two above.
+            // Sub-daily rules with a coarser BY part are refused by their
+            // SHAPE, and a refusal cannot be wrong about termination. HOURLY
+            // + BYHOUR is the one branch left that still decides by
+            // arithmetic — the gcd reachability test — so it is the one
+            // branch where a wrong answer admits a hang. Generating it is the
+            // same argument that found the round-2 witnesses: rows pin what
+            // someone already thought of.
+            {
+              const rule = build('HOURLY', null, '');
+              generated++;
+              if (guardSchedule('rrule', rule, MAX).safe) {
+                passed++;
+                const t0 = performance.now();
+                try { occurrencesBetween({ kind: 'rrule', rrule: rule, tz: TZ }, FROM, FROM + 3_600_000, 5); } catch { /* as above */ }
+                worstMs = Math.max(worstMs, performance.now() - t0);
+              }
+            }
+            // Deliberately no HOURLY+BYMINUTE arm here. It is the shape the
+            // composer emits, so it is already timed exhaustively by
+            // emittable-schedules.json (265 rows, two start days, two zones)
+            // — and adding it back doubles this sweep to ~92s while testing
+            // nothing the gcd branch above does not already cover, because
+            // BYMINUTE does not enter that arithmetic.
           }
         }
       }
