@@ -1,0 +1,1109 @@
+{
+  "rows": [
+    {
+      "id": "daily-9-0",
+      "kind": "rrule",
+      "rrule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0"
+    },
+    {
+      "id": "weekly-MO-9-0",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0"
+    },
+    {
+      "id": "weekly-TU-9-0",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=TU;BYHOUR=9;BYMINUTE=0"
+    },
+    {
+      "id": "weekly-WE-9-0",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=WE;BYHOUR=9;BYMINUTE=0"
+    },
+    {
+      "id": "weekly-TH-9-0",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=TH;BYHOUR=9;BYMINUTE=0"
+    },
+    {
+      "id": "weekly-FR-9-0",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=FR;BYHOUR=9;BYMINUTE=0"
+    },
+    {
+      "id": "weekly-SA-9-0",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=SA;BYHOUR=9;BYMINUTE=0"
+    },
+    {
+      "id": "weekly-SU-9-0",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=SU;BYHOUR=9;BYMINUTE=0"
+    },
+    {
+      "id": "weekly-MOWEFR-9-0",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=MO,WE,FR;BYHOUR=9;BYMINUTE=0"
+    },
+    {
+      "id": "weekly-SASU-9-0",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=SA,SU;BYHOUR=9;BYMINUTE=0"
+    },
+    {
+      "id": "weekly-MOTUWETHFR-9-0",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0"
+    },
+    {
+      "id": "weekly-MOTUWETHFRSASU-9-0",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR,SA,SU;BYHOUR=9;BYMINUTE=0"
+    },
+    {
+      "id": "monthly-1-9-0",
+      "kind": "rrule",
+      "rrule": "FREQ=MONTHLY;BYMONTHDAY=1;BYHOUR=9;BYMINUTE=0"
+    },
+    {
+      "id": "monthly-15-9-0",
+      "kind": "rrule",
+      "rrule": "FREQ=MONTHLY;BYMONTHDAY=15;BYHOUR=9;BYMINUTE=0"
+    },
+    {
+      "id": "monthly-28-9-0",
+      "kind": "rrule",
+      "rrule": "FREQ=MONTHLY;BYMONTHDAY=28;BYHOUR=9;BYMINUTE=0"
+    },
+    {
+      "id": "daily-0-0",
+      "kind": "rrule",
+      "rrule": "FREQ=DAILY;BYHOUR=0;BYMINUTE=0"
+    },
+    {
+      "id": "weekly-MO-0-0",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=0;BYMINUTE=0"
+    },
+    {
+      "id": "weekly-TU-0-0",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=TU;BYHOUR=0;BYMINUTE=0"
+    },
+    {
+      "id": "weekly-WE-0-0",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=WE;BYHOUR=0;BYMINUTE=0"
+    },
+    {
+      "id": "weekly-TH-0-0",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=TH;BYHOUR=0;BYMINUTE=0"
+    },
+    {
+      "id": "weekly-FR-0-0",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=FR;BYHOUR=0;BYMINUTE=0"
+    },
+    {
+      "id": "weekly-SA-0-0",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=SA;BYHOUR=0;BYMINUTE=0"
+    },
+    {
+      "id": "weekly-SU-0-0",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=SU;BYHOUR=0;BYMINUTE=0"
+    },
+    {
+      "id": "weekly-MOWEFR-0-0",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=MO,WE,FR;BYHOUR=0;BYMINUTE=0"
+    },
+    {
+      "id": "weekly-SASU-0-0",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=SA,SU;BYHOUR=0;BYMINUTE=0"
+    },
+    {
+      "id": "weekly-MOTUWETHFR-0-0",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=0;BYMINUTE=0"
+    },
+    {
+      "id": "weekly-MOTUWETHFRSASU-0-0",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR,SA,SU;BYHOUR=0;BYMINUTE=0"
+    },
+    {
+      "id": "monthly-1-0-0",
+      "kind": "rrule",
+      "rrule": "FREQ=MONTHLY;BYMONTHDAY=1;BYHOUR=0;BYMINUTE=0"
+    },
+    {
+      "id": "monthly-15-0-0",
+      "kind": "rrule",
+      "rrule": "FREQ=MONTHLY;BYMONTHDAY=15;BYHOUR=0;BYMINUTE=0"
+    },
+    {
+      "id": "monthly-28-0-0",
+      "kind": "rrule",
+      "rrule": "FREQ=MONTHLY;BYMONTHDAY=28;BYHOUR=0;BYMINUTE=0"
+    },
+    {
+      "id": "daily-23-45",
+      "kind": "rrule",
+      "rrule": "FREQ=DAILY;BYHOUR=23;BYMINUTE=45"
+    },
+    {
+      "id": "weekly-MO-23-45",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=23;BYMINUTE=45"
+    },
+    {
+      "id": "weekly-TU-23-45",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=TU;BYHOUR=23;BYMINUTE=45"
+    },
+    {
+      "id": "weekly-WE-23-45",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=WE;BYHOUR=23;BYMINUTE=45"
+    },
+    {
+      "id": "weekly-TH-23-45",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=TH;BYHOUR=23;BYMINUTE=45"
+    },
+    {
+      "id": "weekly-FR-23-45",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=FR;BYHOUR=23;BYMINUTE=45"
+    },
+    {
+      "id": "weekly-SA-23-45",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=SA;BYHOUR=23;BYMINUTE=45"
+    },
+    {
+      "id": "weekly-SU-23-45",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=SU;BYHOUR=23;BYMINUTE=45"
+    },
+    {
+      "id": "weekly-MOWEFR-23-45",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=MO,WE,FR;BYHOUR=23;BYMINUTE=45"
+    },
+    {
+      "id": "weekly-SASU-23-45",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=SA,SU;BYHOUR=23;BYMINUTE=45"
+    },
+    {
+      "id": "weekly-MOTUWETHFR-23-45",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=23;BYMINUTE=45"
+    },
+    {
+      "id": "weekly-MOTUWETHFRSASU-23-45",
+      "kind": "rrule",
+      "rrule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR,SA,SU;BYHOUR=23;BYMINUTE=45"
+    },
+    {
+      "id": "monthly-1-23-45",
+      "kind": "rrule",
+      "rrule": "FREQ=MONTHLY;BYMONTHDAY=1;BYHOUR=23;BYMINUTE=45"
+    },
+    {
+      "id": "monthly-15-23-45",
+      "kind": "rrule",
+      "rrule": "FREQ=MONTHLY;BYMONTHDAY=15;BYHOUR=23;BYMINUTE=45"
+    },
+    {
+      "id": "monthly-28-23-45",
+      "kind": "rrule",
+      "rrule": "FREQ=MONTHLY;BYMONTHDAY=28;BYHOUR=23;BYMINUTE=45"
+    },
+    {
+      "id": "interval-5-MO-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-MO-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-MO-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-MO-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO;BYHOUR=22,23;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-TU-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TU;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-TU-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TU;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-TU-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TU;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-TU-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TU;BYHOUR=22,23;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-WE-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=WE;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-WE-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=WE;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-WE-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=WE;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-WE-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=WE;BYHOUR=22,23;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-TH-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TH;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-TH-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TH;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-TH-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TH;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-TH-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TH;BYHOUR=22,23;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-FR-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=FR;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-FR-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=FR;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-FR-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=FR;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-FR-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=FR;BYHOUR=22,23;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-SA-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-SA-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-SA-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-SA-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA;BYHOUR=22,23;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-SU-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SU;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-SU-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SU;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-SU-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SU;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-SU-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SU;BYHOUR=22,23;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-MOWEFR-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,WE,FR;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-MOWEFR-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,WE,FR;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-MOWEFR-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,WE,FR;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-MOWEFR-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,WE,FR;BYHOUR=22,23;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-SASU-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA,SU;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-SASU-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA,SU;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-SASU-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA,SU;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-SASU-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA,SU;BYHOUR=22,23;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-MOTUWETHFR-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-MOTUWETHFR-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-MOTUWETHFR-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-MOTUWETHFR-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=22,23;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-MOTUWETHFRSASU-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-MOTUWETHFRSASU-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-MOTUWETHFRSASU-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-5-MOTUWETHFRSASU-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYHOUR=22,23;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55"
+    },
+    {
+      "id": "interval-10-MO-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-MO-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-MO-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-MO-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO;BYHOUR=22,23;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-TU-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TU;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-TU-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TU;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-TU-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TU;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-TU-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TU;BYHOUR=22,23;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-WE-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=WE;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-WE-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=WE;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-WE-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=WE;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-WE-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=WE;BYHOUR=22,23;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-TH-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TH;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-TH-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TH;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-TH-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TH;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-TH-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TH;BYHOUR=22,23;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-FR-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=FR;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-FR-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=FR;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-FR-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=FR;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-FR-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=FR;BYHOUR=22,23;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-SA-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-SA-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-SA-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-SA-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA;BYHOUR=22,23;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-SU-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SU;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-SU-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SU;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-SU-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SU;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-SU-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SU;BYHOUR=22,23;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-MOWEFR-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,WE,FR;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-MOWEFR-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,WE,FR;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-MOWEFR-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,WE,FR;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-MOWEFR-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,WE,FR;BYHOUR=22,23;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-SASU-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA,SU;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-SASU-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA,SU;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-SASU-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA,SU;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-SASU-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA,SU;BYHOUR=22,23;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-MOTUWETHFR-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-MOTUWETHFR-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-MOTUWETHFR-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-MOTUWETHFR-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=22,23;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-MOTUWETHFRSASU-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-MOTUWETHFRSASU-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-MOTUWETHFRSASU-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-10-MOTUWETHFRSASU-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYHOUR=22,23;BYMINUTE=0,10,20,30,40,50"
+    },
+    {
+      "id": "interval-15-MO-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-MO-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-MO-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-MO-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO;BYHOUR=22,23;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-TU-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TU;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-TU-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TU;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-TU-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TU;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-TU-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TU;BYHOUR=22,23;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-WE-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=WE;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-WE-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=WE;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-WE-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=WE;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-WE-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=WE;BYHOUR=22,23;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-TH-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TH;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-TH-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TH;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-TH-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TH;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-TH-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TH;BYHOUR=22,23;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-FR-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=FR;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-FR-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=FR;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-FR-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=FR;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-FR-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=FR;BYHOUR=22,23;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-SA-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-SA-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-SA-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-SA-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA;BYHOUR=22,23;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-SU-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SU;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-SU-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SU;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-SU-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SU;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-SU-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SU;BYHOUR=22,23;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-MOWEFR-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,WE,FR;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-MOWEFR-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,WE,FR;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-MOWEFR-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,WE,FR;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-MOWEFR-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,WE,FR;BYHOUR=22,23;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-SASU-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA,SU;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-SASU-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA,SU;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-SASU-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA,SU;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-SASU-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA,SU;BYHOUR=22,23;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-MOTUWETHFR-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-MOTUWETHFR-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-MOTUWETHFR-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-MOTUWETHFR-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=22,23;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-MOTUWETHFRSASU-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-MOTUWETHFRSASU-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-MOTUWETHFRSASU-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-15-MOTUWETHFRSASU-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYHOUR=22,23;BYMINUTE=0,15,30,45"
+    },
+    {
+      "id": "interval-30-MO-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-MO-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-MO-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-MO-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO;BYHOUR=22,23;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-TU-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TU;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-TU-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TU;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-TU-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TU;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-TU-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TU;BYHOUR=22,23;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-WE-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=WE;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-WE-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=WE;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-WE-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=WE;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-WE-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=WE;BYHOUR=22,23;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-TH-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TH;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-TH-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TH;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-TH-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TH;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-TH-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=TH;BYHOUR=22,23;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-FR-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=FR;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-FR-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=FR;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-FR-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=FR;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-FR-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=FR;BYHOUR=22,23;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-SA-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-SA-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-SA-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-SA-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA;BYHOUR=22,23;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-SU-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SU;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-SU-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SU;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-SU-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SU;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-SU-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SU;BYHOUR=22,23;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-MOWEFR-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,WE,FR;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-MOWEFR-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,WE,FR;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-MOWEFR-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,WE,FR;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-MOWEFR-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,WE,FR;BYHOUR=22,23;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-SASU-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA,SU;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-SASU-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA,SU;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-SASU-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA,SU;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-SASU-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=SA,SU;BYHOUR=22,23;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-MOTUWETHFR-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-MOTUWETHFR-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-MOTUWETHFR-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-MOTUWETHFR-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=22,23;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-MOTUWETHFRSASU-0to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-MOTUWETHFRSASU-9to17",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-MOTUWETHFRSASU-8to20",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYHOUR=8,9,10,11,12,13,14,15,16,17,18,19;BYMINUTE=0,30"
+    },
+    {
+      "id": "interval-30-MOTUWETHFRSASU-22to24",
+      "kind": "rrule",
+      "rrule": "FREQ=HOURLY;BYHOUR=22,23;BYMINUTE=0,30"
+    }
+  ]
+}

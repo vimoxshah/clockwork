@@ -44,6 +44,7 @@ import { PlanExecute } from './plan-execute.js';
 import type { RunManager } from './run-manager.js';
 import type { Scheduler } from './scheduler.js';
 import { nextOccurrenceAfter, type ScheduleLike } from './recurrence.js';
+import { guardSchedule } from './schedule-guard.js';
 import { OfficeHours, isKnownZone } from './office-hours.js';
 import { Sentinels } from './sentinel.js';
 import { isGitRepo } from '@clockwork/runner';
@@ -384,6 +385,9 @@ function deriveImportLabel(explicit: unknown, calName: string | null, filename: 
  * 40,000,000 measured 79 seconds for a single next-fire; see the call site.
  */
 export const MAX_RRULE_COUNT = 100_000;
+
+/** How many upcoming fires POST /schedule/preview answers with. */
+export const PREVIEW_RUN_COUNT = 5;
 
 export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance; token: string; sseClients: Set<FastifyReply> }> {
   const app = Fastify({ logger: false });
@@ -775,6 +779,18 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
           ok: false,
           error: `RRULE COUNT is too large: ${countMatch[1]} exceeds the ${MAX_RRULE_COUNT} limit. Expanding it would block the scheduler — drop COUNT and use UNTIL, or lower it.`,
         };
+      }
+      // Two hazards `nextFireForSave` below cannot survive, so they are refused
+      // from the STRING before it reaches rrule: a rule whose BY parts are
+      // unreachable from its own INTERVAL grid never terminates (verified out of
+      // process with a watchdog — see schedule-guard.ts), and a DTSTART-less
+      // sub-daily rule with a whole-day filter replays from 1970 and blocks this
+      // request. The tick path is deliberately NOT guarded: a hazardous row saved
+      // before this check exists would go from slow to throwing, and that is a
+      // different change from refusing new ones.
+      const hazard = guardSchedule(input.schedule.kind, input.schedule.rrule, MAX_RRULE_COUNT);
+      if (!hazard.safe) {
+        return { ok: false, error: `invalid recurrence (${hazard.reason}): ${hazard.detail}` };
       }
       try {
         nextFire = nextFireForSave(
@@ -1171,6 +1187,49 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
   const { securityPreview, validateTemplateApply } = await import('./templates.js');
 
   /** S-74: preview WITHOUT importing — full prompt/permissions/budget diff vs defaults. */
+  /**
+   * Show the next few fires for a rule the user is still typing, without
+   * creating anything (SCH-3). It exists because the composer used to offer
+   * only shapes it could not get wrong; the interval and multi-day options are
+   * ones a user CAN get wrong, and a rule that looks right and never fires is
+   * the failure this endpoint is here to make visible before the task is saved.
+   *
+   * The guard runs FIRST, and that ordering is the whole safety property: this
+   * route is reachable per keystroke, so an unreachable rule expanded here would
+   * hang the daemon on a draft. It also mirrors save's COUNT ceiling, or preview
+   * would be the weaker of the two doors into the same expander.
+   */
+  app.post('/schedule/preview', async (req, reply) => {
+    const body = req.body as { kind?: string; rrule?: string | null; cron?: string | null; runAt?: number | null; tz?: string } | null;
+    const kind = body?.kind;
+    if (kind !== 'once' && kind !== 'rrule' && kind !== 'cron') {
+      return reply.code(422).send({ error: 'kind must be once, rrule or cron' });
+    }
+    const tz = typeof body?.tz === 'string' && body.tz.trim() !== '' ? body.tz : 'UTC';
+
+    const hazard = guardSchedule(kind, body?.rrule, MAX_RRULE_COUNT);
+    if (!hazard.safe) {
+      return reply.code(422).send({ error: hazard.detail, reason: hazard.reason });
+    }
+
+    const schedule: ScheduleLike = { kind, rrule: body?.rrule ?? null, cron: body?.cron ?? null, runAt: body?.runAt ?? null, tz };
+    const { occurrencesBetween } = await import('./recurrence.js');
+    const from = Date.now();
+    try {
+      // Same rung ladder save uses, and for the same reason: a dense rule is
+      // answered in the 8-day window and never pays for the wide one, while a
+      // monthly rule still finds its first fires.
+      let runs: number[] = [];
+      for (const horizonDays of SAVE_HORIZON_LADDER_DAYS) {
+        runs = occurrencesBetween(schedule, from, from + horizonDays * 86_400_000, PREVIEW_RUN_COUNT);
+        if (runs.length >= PREVIEW_RUN_COUNT) break;
+      }
+      return { runs, tz, count: runs.length };
+    } catch (e) {
+      return reply.code(422).send({ error: `invalid recurrence: ${String(e)}`, reason: 'unparseable' });
+    }
+  });
+
   app.post('/templates/preview', async (req, reply) => {
     const tpl = req.body as any;
     if (!tpl || tpl.schema !== 'clockwork.template.v1') {
