@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    The .app ships its own Node (tools/stage-bundle.mjs) and runs it. Under the
+    hardened runtime, which Tauri enables by default, Node needs both of these
+    or it will not start:
+
+      allow-jit                  V8 maps executable memory to compile JS.
+      allow-unsigned-executable-memory
+                                 V8's older codegen paths, still reached.
+      disable-library-validation Node dlopen()s better-sqlite3's .node binary,
+                                 which is not signed by our team id.
+
+    Without them the symptom is not an error dialog — it is the daemon dying at
+    launch and the window showing daemon-down.html.
+  -->
+  <key>com.apple.security.cs.allow-jit</key><true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
+  <key>com.apple.security.cs.disable-library-validation</key><true/>
+</dict>
+</plist>

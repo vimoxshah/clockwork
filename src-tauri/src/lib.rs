@@ -1,15 +1,24 @@
 /**
  * Clockwork desktop shell (T-121): native window onto the daemon-served UI at
- * 127.0.0.1:4747. The daemon is the product surface; this shell adds the
- * macOS window, dock presence, and best-effort daemon autolaunch.
+ * 127.0.0.1:4747.
+ *
+ * The .app now carries the daemon and its own Node (tools/stage-bundle.mjs),
+ * so "installed" means the DMG and nothing else — no checkout, no pnpm, no
+ * Node on the machine, no token to paste. This file is what makes that true at
+ * runtime: it finds the bundled pair, hands them to launchd so scheduled runs
+ * survive the window closing AND the reboot, and pairs the webview's token
+ * itself.
  */
-
+use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
 const DAEMON_ADDR: &str = "127.0.0.1:4747";
 const DAEMON_URL: &str = "http://127.0.0.1:4747";
+const LAUNCHD_LABEL: &str = "com.clockwork.daemon";
+const PLIST_REL: &str = "Library/LaunchAgents/com.clockwork.daemon.plist";
 
 fn daemon_up() -> bool {
     TcpStream::connect_timeout(
@@ -19,21 +28,166 @@ fn daemon_up() -> bool {
     .is_ok()
 }
 
-/// Best-effort: try the installed launcher, then a bare `node` fallback.
+/// The Node and daemon this .app carries.
+struct Bundle {
+    node: PathBuf,
+    /// `dist/main.js` — what launchd runs.
+    entry: PathBuf,
+    /// `dist/cli.js` — `clockworkd install|uninstall|doctor`.
+    cli: PathBuf,
+}
+
+/// Locate the bundled pair, or None when running unbundled (`tauri dev`).
 ///
-/// Both branches are long shots on a machine that only installed the .app. The
-/// launcher exists only after `clockworkd install` (packages/daemon/src/cli.ts),
-/// which needs a source checkout; `~/clockwork/daemon.mjs` is a path nothing in
-/// this repo writes, so it answers only for someone who placed it there. And a
-/// GUI process launched from Finder inherits launchd's PATH, not a shell's, so
-/// `command -v node` misses Homebrew and nvm installs even when Node is
-/// genuinely present. When neither branch lands, the window falls back to
-/// `daemon-down.html` (see `run`) rather than showing nothing.
-fn ensure_daemon() {
-    if daemon_up() {
+/// Derived from `current_exe` rather than Tauri's resource resolver because
+/// this runs before the Builder exists, and because the two halves live in
+/// different places: `externalBin` puts Node next to the shell in
+/// Contents/MacOS, `resources` puts the daemon in Contents/Resources.
+fn bundle() -> Option<Bundle> {
+    let exe = std::env::current_exe().ok()?;
+    let macos_dir = exe.parent()?;
+    let node = macos_dir.join("node");
+    let daemon_dist = macos_dir
+        .parent()?
+        .join("Resources")
+        .join("app")
+        .join("packages")
+        .join("daemon")
+        .join("dist");
+    let entry = daemon_dist.join("main.js");
+    let cli = daemon_dist.join("cli.js");
+    if node.is_file() && entry.is_file() && cli.is_file() {
+        Some(Bundle { node, entry, cli })
+    } else {
+        None
+    }
+}
+
+fn home() -> PathBuf {
+    PathBuf::from(std::env::var("HOME").unwrap_or_default())
+}
+
+/// One unauthenticated GET against the local daemon, returning the body.
+///
+/// Hand-rolled rather than pulling in an HTTP client: the only endpoint this
+/// shell reads is `/health`, which `requiresAuth` leaves open precisely so a
+/// supervisor can check on the daemon without holding a credential.
+fn http_get(path: &str) -> Option<String> {
+    let mut stream =
+        TcpStream::connect_timeout(&DAEMON_ADDR.parse().ok()?, Duration::from_millis(500)).ok()?;
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
+    write!(
+        stream,
+        "GET {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+    )
+    .ok()?;
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw).ok()?;
+    let (_, body) = raw.split_once("\r\n\r\n")?;
+    Some(body.to_string())
+}
+
+/// The version of the daemon PROCESS currently answering, which is not
+/// necessarily the version on disk — a running LaunchAgent keeps serving the
+/// old build after the .app is replaced.
+fn running_daemon_version() -> Option<String> {
+    let body = http_get("/health")?;
+    let parsed: serde_json::Value = serde_json::from_str(&body).ok()?;
+    parsed.get("daemonVersion")?.as_str().map(str::to_string)
+}
+
+/// `ProgramArguments[0]` out of the installed LaunchAgent, if there is one.
+///
+/// Text-scanned rather than plist-parsed: the file is written by
+/// `packages/daemon/src/cli.ts:plistXml`, whose shape is fixed and whose first
+/// `<string>` after the ProgramArguments key is the Node path by construction.
+fn agent_node_path() -> Option<String> {
+    let xml = std::fs::read_to_string(home().join(PLIST_REL)).ok()?;
+    let after = xml.split_once("<key>ProgramArguments</key>")?.1;
+    let open = after.find("<string>")? + "<string>".len();
+    let close = after[open..].find("</string>")?;
+    Some(after[open..open + close].to_string())
+}
+
+/// Install (or re-point) the LaunchAgent so scheduled runs outlive the window.
+///
+/// Automatic and unprompted, because the alternative reads as "installed" and
+/// is not: a daemon that merely outlives the app still dies at the next
+/// reboot, and a calendar for agents whose jobs stop overnight has lost the
+/// thing it is for.
+///
+/// Re-pointed, not just installed, and that is the case a first-launch-only
+/// install misses. The plist bakes an ABSOLUTE path to the Node inside the
+/// bundle, so dragging Clockwork.app from Downloads to Applications leaves
+/// launchd pointing at a binary that is no longer there — an app that worked
+/// yesterday and is silently dead today. Comparing the recorded path to the
+/// running bundle's on every launch costs one file read and closes it.
+fn ensure_launch_agent(b: &Bundle) {
+    let want = b.node.to_string_lossy().to_string();
+    if agent_node_path().as_deref() == Some(want.as_str()) {
         return;
     }
-    let home = std::env::var("HOME").unwrap_or_default();
+    // `install` pins `process.execPath` into the plist, so running the CLI
+    // WITH the bundled Node is what makes the plist point at the bundled Node.
+    let _ = Command::new(&b.node)
+        .arg(&b.cli)
+        .arg("install")
+        .arg(&b.entry)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+fn wait_for_daemon(attempts: u32) -> bool {
+    for _ in 0..attempts {
+        if daemon_up() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    daemon_up()
+}
+
+/// Restart the LaunchAgent when the daemon answering is older than the one in
+/// this bundle.
+///
+/// After an app update launchd is still running the PREVIOUS build out of
+/// memory, and nothing restarts it — the user updates, sees the stale-page
+/// notice, and has no way to act on it. `kickstart -k` is the same command
+/// `clockworkd doctor` already prescribes for a wedged service.
+fn restart_if_stale() {
+    let Some(running) = running_daemon_version() else {
+        return;
+    };
+    if running == env!("CARGO_PKG_VERSION") {
+        return;
+    }
+    let Some(uid) = current_uid() else { return };
+    let _ = Command::new("/bin/launchctl")
+        .args(["kickstart", "-k", &format!("gui/{uid}/{LAUNCHD_LABEL}")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    wait_for_daemon(20);
+}
+
+/// launchd addresses a login-session service as `gui/<uid>/<label>`, and the
+/// uid has to come from somewhere. `id -u` rather than a libc binding: one
+/// process at app start, no `unsafe`, no new crate.
+fn current_uid() -> Option<String> {
+    let out = Command::new("/usr/bin/id").arg("-u").output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let uid = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    if uid.is_empty() { None } else { Some(uid) }
+}
+
+/// Fallback for an unbundled build (`tauri dev`), where there is nothing to
+/// supervise. Both branches are long shots on a machine that only installed
+/// the .app, which is exactly why the bundled path above exists.
+fn ensure_daemon_unbundled() {
+    let home = home().to_string_lossy().to_string();
     let launcher = format!("{home}/.clockwork/bin/start-daemon.sh");
     let script = format!(
         "if [ -x {launcher} ]; then nohup {launcher} >/dev/null 2>&1 & \
@@ -46,13 +200,61 @@ fn ensure_daemon() {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn();
-    // give it a moment; the UI polls health anyway
-    for _ in 0..10 {
-        if daemon_up() {
-            break;
+    wait_for_daemon(10);
+}
+
+fn ensure_daemon() {
+    match bundle() {
+        Some(b) => {
+            ensure_launch_agent(&b);
+            if !daemon_up() {
+                // launchd's RunAtLoad fires on bootstrap, but bootstrap is
+                // asynchronous; give it the same grace the unbundled path got.
+                wait_for_daemon(20);
+            }
+            restart_if_stale();
         }
-        std::thread::sleep(Duration::from_millis(300));
+        None => {
+            if !daemon_up() {
+                ensure_daemon_unbundled();
+            }
+        }
     }
+}
+
+/// The daemon's own API token, read off disk as the user who owns it.
+///
+/// The token exists to stop a random web page driving the daemon, and reading
+/// the file is not a way around that: this process already runs as the user
+/// whose file it is. Pairing it here removes the one manual step left in
+/// "install and start using it" — a paste out of ~/.clockwork/api-token that
+/// the desktop app never had any reason to ask a human for.
+fn api_token() -> Option<String> {
+    let dir = std::env::var("CLOCKWORK_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| home().join(".clockwork"));
+    let token = std::fs::read_to_string(dir.join("api-token")).ok()?;
+    let token = token.trim();
+    if token.is_empty() {
+        None
+    } else {
+        Some(token.to_string())
+    }
+}
+
+/// JS that pairs this webview, and ONLY this webview.
+///
+/// An injection script runs in the app's own WKWebView before the page loads.
+/// A browser tab pointed at 127.0.0.1:4747 is a different web view with its
+/// own storage, so it gets no injection and still meets the pairing screen —
+/// which is the behaviour we want kept, not a limitation. Doing this through a
+/// Tauri IPC command instead would mean granting IPC to a remote origin, and
+/// that grant would belong to every page the daemon serves.
+fn pairing_script(token: &str) -> String {
+    format!(
+        "try{{localStorage.setItem('clockwork.token',{});}}catch(e){{}}",
+        serde_json::to_string(token).unwrap_or_else(|_| "\"\"".into())
+    )
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -76,13 +278,72 @@ pub fn run() {
             } else {
                 tauri::WebviewUrl::App("daemon-down.html".into())
             };
-            tauri::WebviewWindowBuilder::new(app, "main", url)
+            let mut builder = tauri::WebviewWindowBuilder::new(app, "main", url)
                 .title("Clockwork")
                 .inner_size(1280.0, 820.0)
-                .min_inner_size(940.0, 600.0)
-                .build()?;
+                .min_inner_size(940.0, 600.0);
+            if let Some(token) = api_token() {
+                builder = builder.initialization_script(&pairing_script(&token));
+            }
+            builder.build()?;
             Ok(())
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_node_path_reads_the_first_program_argument() {
+        // The exact shape packages/daemon/src/cli.ts:plistXml emits.
+        let xml = "<dict>\n  <key>Label</key><string>com.clockwork.daemon</string>\n  \
+                   <key>ProgramArguments</key>\n  <array>\n    \
+                   <string>/Apps/Clockwork.app/Contents/MacOS/node</string>\n    \
+                   <string>/Apps/Clockwork.app/Contents/Resources/app/packages/daemon/dist/main.js</string>\n  \
+                   </array>\n</dict>";
+        let after = xml.split_once("<key>ProgramArguments</key>").unwrap().1;
+        let open = after.find("<string>").unwrap() + "<string>".len();
+        let close = after[open..].find("</string>").unwrap();
+        assert_eq!(
+            &after[open..open + close],
+            "/Apps/Clockwork.app/Contents/MacOS/node",
+            "the Label's <string> must not be mistaken for ProgramArguments[0]"
+        );
+    }
+
+    #[test]
+    fn pairing_script_escapes_the_token() {
+        // base64url tokens carry no quotes, but the script is built by string
+        // formatting and a token that did would break out of the literal.
+        let js = pairing_script("a\"b\\c");
+        assert!(js.contains(r#""a\"b\\c""#), "token must be JSON-escaped: {js}");
+    }
+
+    #[test]
+    fn pairing_script_targets_the_key_the_ui_reads() {
+        // packages/ui/src/api.ts: TOKEN_KEY = 'clockwork.token'.
+        assert!(pairing_script("tok").contains("'clockwork.token'"));
+    }
+
+    #[test]
+    fn bundle_is_none_outside_an_app_bundle() {
+        // The dev binary lives in target/debug, not Contents/MacOS, so the
+        // unbundled fallback is what runs — this is the guard that keeps
+        // `tauri dev` working.
+        assert!(bundle().is_none());
+    }
+
+    #[test]
+    fn bundle_paths_hang_off_the_executable() {
+        let exe = Path::new("/Apps/Clockwork.app/Contents/MacOS/Clockwork");
+        let macos = exe.parent().unwrap();
+        assert_eq!(macos.join("node"), Path::new("/Apps/Clockwork.app/Contents/MacOS/node"));
+        assert_eq!(
+            macos.parent().unwrap().join("Resources").join("app").join("packages").join("daemon").join("dist").join("main.js"),
+            Path::new("/Apps/Clockwork.app/Contents/Resources/app/packages/daemon/dist/main.js")
+        );
+    }
 }
