@@ -33,6 +33,15 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm build
           pnpm test
+          # BEFORE cargo: `externalBin` in tauri.conf.json makes
+          # binaries/node-<triple> a COMPILE-TIME input, so the Tauri build
+          # script fails with "resource path doesn't exist" — even for
+          # `cargo test`. The first v0.11.0 tag push died exactly here. It also
+          # has to run before the bundler collects resources: without it the
+          # DMG is a window with nothing behind it. It stages the Node running
+          # HERE and installs better-sqlite3 with it, so the ABI matches by
+          # construction.
+          node tools/stage-bundle.mjs
           # The Tauri shell is where the daemon supervision lives — the plist
           # parser, the version-skew restart, the failure diagnosis. None of it
           # is reachable from vitest.
@@ -64,12 +73,6 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          # The .app carries the daemon and its own Node, so this has to run
-          # before the bundler collects resources. Without it the DMG is a
-          # window with nothing behind it — the exact bug this staging step
-          # was added to end. It stages the Node running HERE, and installs
-          # better-sqlite3 with it, so the ABI matches by construction.
-          node tools/stage-bundle.mjs
           cd src-tauri
           if [ -z "$APPLE_CERTIFICATE" ]; then
             unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
