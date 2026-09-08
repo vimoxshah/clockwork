@@ -231,7 +231,7 @@ Routes, refusal paths, per-feature tests and the measured numbers:
 ```bash
 # 1. Verify the bytes BEFORE you trust them
 shasum -a 256 ~/Downloads/Clockwork_*_aarch64.dmg
-curl -s https://vimoxshah.github.io/clockwork/downloads/checksums-sha256.txt
+curl -s https://github.com/vimoxshah/clockwork/releases/latest/download/checksums-sha256.txt
 # if the two do not match: stop, do not install, report it
 
 # 2. Open the DMG, drag Clockwork to Applications, then clear quarantine

@@ -12,24 +12,23 @@ landing page points at `releases/latest/download/Clockwork_aarch64.dmg`, and the
 Homebrew cask installs from the versioned release asset. Both resolve the moment
 a release publishes, with no second host to keep in sync.
 
-`landing-page/downloads/` also carries a copy, served from the same origin as
-the site by GitHub Pages. **This copy is now redundant and is not free:** the
-DMG is 51 MB since the daemon and its Node runtime moved inside it, and every
-release adds another 51 MB to git history permanently. It was committed when
-the repo was private, because an anonymous request to a private repo's release
-asset returns 404 and there was no other way to serve a public download. The
-repo is public now, so that reason is gone.
-
-**Open decision:** drop the vendored copy and let `landing-page/downloads/`
-links point at the release instead. The only thing that would change for a
-visitor is the origin the bytes come from.
+**Nothing is vendored.** `landing-page/downloads/` used to carry a committed
+copy of the DMG, because an anonymous request to a PRIVATE repo's release asset
+returns 404 and there was no other way to serve a public download. The repo is
+public now, so that reason is gone — and the copy was not free: the DMG is
+51 MB since the daemon and its Node runtime moved inside it, so every release
+added another 51 MB to git history permanently, and gave the checksum two
+places to disagree. Removed in 0.11.0. The existing copies stay in history;
+only new releases stop adding to it.
 
 ## Cutting a release
 
-1. `pnpm -r build && ./node_modules/.bin/tauri build --bundles dmg`
-2. `./packaging/stage-release.sh` — copies the DMG plus checksums into
-   `landing-page/downloads/` and rewrites the version and hash in the Homebrew
-   cask and the landing page.
+1. Push a `v*` tag. `.github/workflows/release.yml` builds the DMG on a clean
+   macOS runner, verifies it by mounting the image, and publishes the release
+   with checksums.
+2. `DMG=<the downloaded release asset> ./packaging/stage-release.sh` — rewrites
+   the version and sha256 in the Homebrew cask and the version and size shown
+   on the landing page. It copies nothing.
 3. Commit, merge to `main`, push. The `pages` workflow redeploys the site.
 4. Push the updated cask to the tap (see below).
 
@@ -75,8 +74,8 @@ and the mirror has been retired.
 ## The host is GitHub Pages
 
 `https://vimoxshah.github.io/clockwork/`, deployed by `.github/workflows/pages.yml`
-on every push to `main` that touches `landing-page/`. It serves the page and
-`/downloads/` alike.
+on every push to `main` that touches `landing-page/`. It serves the page; the
+DMG itself comes from the GitHub release.
 
 This was not always possible. While the repo was private, the Pages API returned
 "Your current plan does not support GitHub Pages for this repository", so the
@@ -93,17 +92,17 @@ Cloudflare dashboard rather than leaving a stale copy of the site online.
 ## Cost: zero
 
 GitHub Pages is free on a public repo and gives you HTTPS on
-`<user>.github.io/<repo>`. **No domain purchase is required.** The landing page
-uses relative links (`/downloads/...`) so it works on whatever host serves it;
-the Homebrew cask needs an absolute URL and uses the GitHub release directly, so
-it cannot go stale behind a site deploy.
+`<user>.github.io/<repo>`. **No domain purchase is required.** Every download
+link is absolute and points at `releases/latest`, so the site can move hosts
+without a single link changing; the Homebrew cask reads the release directly for
+the same reason, and cannot go stale behind a site deploy.
 
 A custom domain is a branding decision, not a functional one. Buy it if the
 experiment gets traction — not before.
 
 ## Before this works publicly
 
-- [x] GitHub Pages serving the site and `/downloads/`
+- [x] GitHub Pages serving the site
 - [x] Public `homebrew-clockwork` tap repo created, cask published
 - [ ] Delete or redirect the old Cloudflare Worker, which still serves a stale
       copy of the site
