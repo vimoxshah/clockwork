@@ -381,7 +381,6 @@ label.f { display: block; color: var(--muted); font-size: 12px; margin: 12px 0 4
 .office-hours-form > * { min-width: 0; }
 .office-hours-form .oh-days { flex: 1 1 16rem; }
 .office-hours-form .oh-time { flex: 0 0 auto; }
-.office-hours-form .oh-time input { width: 7.5rem; }
 .office-hours-form .oh-text { flex: 1 1 11rem; }
 .office-hours-form .oh-text input { width: 100%; }
 /* Sits on the inputs' baseline rather than below their labels. */

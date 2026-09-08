@@ -14,6 +14,17 @@ import { renderComponent, waitForElement, waitFor } from './helpers/dom';
 // ComposerView pulls Radix, react-day-picker and the lucide barrel through the
 // transform, and a dynamic import here blows the per-test timeout.
 import ComposerView from '../src/components/ComposerView';
+import { pickTime } from './helpers/radix';
+
+/** The label TimeField renders for an hour, in whatever locale the run uses. */
+function hourLabel(h: number): string {
+  return new Date(2000, 0, 1, h).toLocaleTimeString(undefined, { hour: 'numeric' });
+}
+
+/** What an hour-only TimeField currently shows, read off its trigger. */
+function hourText(root: ParentNode, prefix: string): string {
+  return root.querySelector(`[data-testid="${prefix}-hour"]`)?.textContent?.trim() ?? '';
+}
 
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -106,7 +117,7 @@ async function openInterval(): Promise<HTMLElement> {
   typeInto(container.querySelector<HTMLTextAreaElement>('#c-prompt')!, 'Poll the queue.');
   tabByLabel(container, 'Recurring').click();
   await waitForElement(container, '#c-rtime');
-  tabByLabel(container, 'Every N min').click();
+  tabByLabel(container, 'Interval').click();
   await waitForElement(container, '#c-from-hour');
   return container;
 }
@@ -137,15 +148,12 @@ describe('the interval scheduler sends a rule the expander can answer', () => {
     const container = await openInterval();
 
     for (const d of ['Sat', 'Sun']) await toggleDayAndSettle(container, d);
-    typeInto(container.querySelector<HTMLInputElement>('#c-from-hour')!, '9');
-    const toHour = [...container.querySelectorAll<HTMLInputElement>('input')].find(
-      (i) => i.getAttribute('aria-label') === 'To hour',
-    )!;
-    typeInto(toHour, '17');
+    await pickTime(container, 'c-from', hourLabel(9));
+    await pickTime(container, 'c-to', hourLabel(17));
     await waitFor(
-      () => container.querySelector<HTMLInputElement>('#c-from-hour')!.value === '9' && toHour.value === '17',
+      () => hourText(container, 'c-from') === hourLabel(9) && hourText(container, 'c-to') === hourLabel(17),
       'the hour window to settle',
-      { describe: () => `from=${container.querySelector<HTMLInputElement>('#c-from-hour')!.value} to=${toHour.value}` },
+      { describe: () => `from=${hourText(container, 'c-from')} to=${hourText(container, 'c-to')}` },
     );
 
     buttonByText(container, 'Book it').click();
@@ -236,11 +244,8 @@ describe('the next-5-runs panel', () => {
     const { previewed } = stub();
     const container = await openInterval();
     // An end hour at or below the start hour cannot make a rule at all.
-    typeInto(container.querySelector<HTMLInputElement>('#c-from-hour')!, '18');
-    const toHour = [...container.querySelectorAll<HTMLInputElement>('input')].find(
-      (i) => i.getAttribute('aria-label') === 'To hour',
-    )!;
-    typeInto(toHour, '9');
+    await pickTime(container, 'c-from', hourLabel(18));
+    await pickTime(container, 'c-to', hourLabel(9));
 
     await waitFor(
       () => (container.querySelector('[data-testid="next-runs"]')?.textContent ?? '').includes('end hour must be after'),

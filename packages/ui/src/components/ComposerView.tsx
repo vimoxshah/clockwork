@@ -14,6 +14,7 @@ import { Select, SelectValue, SelectTrigger, SelectContent, SelectItem } from '.
 import { Switch } from './ui/switch';
 import { AgentPicker } from './AgentPicker';
 import { DateTimePicker } from './ui/datetime-picker';
+import { TimeField, timeStringToMinutes, minutesToTimeString } from './ui/time-field';
 import { Badge } from './ui/card';
 import { Zap, FolderGit2, Bot, Wallet, CalendarClock, AlertCircle, GitBranch, Bell, Send } from 'lucide-react';
 import { cn } from '../lib/cn';
@@ -646,6 +647,15 @@ export default function ComposerView({
               />
             </section>
 
+          </div>
+
+          {/* Schedule gets the full width, not the 2/5 side column. Inside that
+              column the frequency tabs had 250px to share and "Monthly" broke
+              onto a second row — measured, not guessed: the four tabs need
+              251px. Every part of a recurrence (how often, which days, which
+              hours, the next five runs) is also read together, so stacking
+              them in a narrow column was the wrong shape regardless. */}
+          <div className="lg:col-span-5">
             <section id={SCHEDULING_SURFACE.anchorId}>
               <div className="mb-3 flex items-center gap-2">
                 <span className="flex h-6 w-6 items-center justify-center rounded-md bg-surface-active text-dim [&_svg]:h-3.5 [&_svg]:w-3.5">
@@ -686,16 +696,26 @@ export default function ComposerView({
                     <Segmented
                       aria-label="Repeat frequency"
                       size="sm"
-                      className="w-full"
                       value={form.rruleFreq}
                       onChange={(v) => setForm({ ...form, rruleFreq: v })}
                       options={[
-                        { value: 'INTERVAL', label: 'Every N min' },
+                        // "Interval", not "Every N min": the four tabs share a
+                        // ~345px column, and the longer label pushed "Monthly"
+                        // onto a second row. The panel this tab reveals opens
+                        // with "Every · 5/10/15/30 min", so the word does the
+                        // explaining without spending the width.
+                        { value: 'INTERVAL', label: 'Interval', title: 'Every N minutes' },
                         { value: 'DAILY', label: 'Daily' },
                         { value: 'WEEKLY', label: 'Weekly' },
                         { value: 'MONTHLY', label: 'Monthly' },
                       ]}
                     />
+                    {/* Controls left, preview right. The five next runs are what
+                        tells you whether the rule you just built is the rule you
+                        meant, so they belong beside it rather than below the
+                        fold. */}
+                    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
+                      <div className="space-y-3">
                     {form.rruleFreq === 'INTERVAL' && (
                       <div className="space-y-3">
                         <div>
@@ -730,31 +750,33 @@ export default function ComposerView({
                           </div>
                         </div>
                         <div>
-                          <Label htmlFor="c-from-hour">Between (hours, 0–24)</Label>
-                          <div className="flex items-center gap-2">
-                            <Input
+                          <Label htmlFor="c-from-hour">Between</Label>
+                          {/* The window is whole hours — the emitter has no BYMINUTE
+                              for it — so these are TimeField in hour-only mode rather
+                              than a second, differently-shaped time control. The state
+                              stays a string of hours, which is what buildRrule reads. */}
+                          <div className="flex flex-wrap items-center gap-2">
+                            <TimeField
                               id="c-from-hour"
-                              aria-label="From hour"
-                              className="mono w-20"
-                              type="number"
-                              min={0}
-                              max={23}
-                              value={form.intervalFromHour}
-                              onChange={(e) => setForm({ ...form, intervalFromHour: e.target.value })}
+                              testIdPrefix="c-from"
+                              hourOnly
+                              ariaLabelPrefix="From"
+                              value={Number(form.intervalFromHour) * 60}
+                              onChange={(m) => setForm({ ...form, intervalFromHour: String(m / 60) })}
                             />
                             <span className="text-xs text-dim">to</span>
-                            <Input
-                              aria-label="To hour"
-                              className="mono w-20"
-                              type="number"
-                              min={1}
-                              max={24}
-                              value={form.intervalToHour}
-                              onChange={(e) => setForm({ ...form, intervalToHour: e.target.value })}
+                            <TimeField
+                              testIdPrefix="c-to"
+                              hourOnly
+                              allowEndOfDay
+                              ariaLabelPrefix="To"
+                              value={Number(form.intervalToHour) * 60}
+                              onChange={(m) => setForm({ ...form, intervalToHour: String(m / 60) })}
                             />
                           </div>
                           <p className="mt-1 text-xxs text-dim">
-                            The end hour is exclusive, so 9 to 17 is a nine-to-five day and 0 to 24 is all day.
+                            The end hour is exclusive, so 9 AM to 5 PM is a nine-to-five day and
+                            12 AM to 24:00 is all day.
                           </p>
                         </div>
                       </div>
@@ -784,34 +806,45 @@ export default function ComposerView({
                     {form.rruleFreq === 'MONTHLY' && (
                       <div>
                         <Label htmlFor="c-dom">On day of month (1–28)</Label>
-                        <Input
-                          id="c-dom"
-                          className="mono w-24"
-                          type="number"
-                          min={1}
-                          max={28}
-                          value={form.monthlyDay}
-                          onChange={(e) => setForm({ ...form, monthlyDay: e.target.value })}
-                        />
+                        {/* Sized by the WRAPPER, not by a `w-24` on the input.
+                            styles.css sets `input[type='number'] { width: 100% }`
+                            at specificity (0,1,1), which beats every Tailwind
+                            `w-*` utility (0,1,0) — so the class was dead, and it
+                            only showed once this field moved out of a 250px
+                            column into a full-width row and rendered 396px wide
+                            for a two-digit number. */}
+                        <div className="w-24">
+                          <Input
+                            id="c-dom"
+                            className="mono"
+                            type="number"
+                            min={1}
+                            max={28}
+                            value={form.monthlyDay}
+                            onChange={(e) => setForm({ ...form, monthlyDay: e.target.value })}
+                          />
+                        </div>
                       </div>
                     )}
                     {form.rruleFreq !== 'INTERVAL' && (
                       <div>
                         <Label htmlFor="c-rtime">At time</Label>
-                        <input
+                        <TimeField
                           id="c-rtime"
-                          type="time"
-                          className="mono h-9 w-32 rounded-lg border border-strong bg-bg px-3 text-compact text-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-                          value={form.rruleTime}
-                          onChange={(e) => setForm({ ...form, rruleTime: e.target.value })}
+                          testIdPrefix="c-rtime"
+                          ariaLabelPrefix="At time"
+                          value={timeStringToMinutes(form.rruleTime) ?? 9 * 60}
+                          onChange={(m) => setForm({ ...form, rruleTime: minutesToTimeString(m) })}
                         />
                       </div>
                     )}
-                    <NextRunsPanel
-                      rrule={'rrule' in previewRule ? previewRule.rrule : null}
-                      localError={'error' in previewRule ? previewRule.error : null}
-                      tz={form.tz}
-                    />
+                      </div>
+                      <NextRunsPanel
+                        rrule={'rrule' in previewRule ? previewRule.rrule : null}
+                        localError={'error' in previewRule ? previewRule.error : null}
+                        tz={form.tz}
+                      />
+                    </div>
                   </div>
                 )}
                 {form.kind === 'asap' && (

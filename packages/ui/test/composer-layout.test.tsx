@@ -62,10 +62,24 @@ describe('composer grid — the optional delivery sections', () => {
     expect(telegram, 'both optional sections share one row').toBe(slack);
     expect(telegram.className).toContain('lg:col-span-5');
 
-    // And they are NOT in the column that made the row tall.
+    // And they are NOT in the column that made the row tall. Agent profile is
+    // the anchor, not Schedule: Schedule moved to a full-width row of its own
+    // once its frequency tabs turned out to have 250px to share.
+    const profile = columnFor(container, 'Agent profile');
+    expect(profile.className).toContain('lg:col-span-2');
+    expect(profile).not.toBe(telegram);
+  });
+
+  it('gives Schedule the full width rather than the 2/5 side column', async () => {
+    // Measured, not guessed: inside the side column the four frequency tabs had
+    // 250px between them and needed 251px, so "Monthly" wrapped to a second row.
+    stub();
+    const container = await renderComponent(<ComposerView onDone={() => {}} />);
+    await waitForElement(container, '#c-prompt');
     const schedule = columnFor(container, 'Schedule');
-    expect(schedule.className).toContain('lg:col-span-2');
-    expect(schedule).not.toBe(telegram);
+    expect(schedule.className).toContain('lg:col-span-5');
+    expect(schedule, 'its own row, not the one the delivery sections share')
+      .not.toBe(columnFor(container, 'Telegram approvals (optional)'));
   });
 
   it('lets each column end at its own content instead of stretching', async () => {

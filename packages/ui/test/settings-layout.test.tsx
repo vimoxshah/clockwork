@@ -54,8 +54,10 @@ describe('the office-hours controls are one row of sized fields', () => {
 
     const start = form.querySelector('#oh-start')!;
     const end = form.querySelector('#oh-end')!;
-    const startCell = start.closest('div')!;
-    const endCell = end.closest('div')!;
+    // `.oh-time`, not `closest('div')`: the field is now a TimeField, whose own
+    // flex wrapper is the nearest div. The claim is about the CELL either way.
+    const startCell = start.closest('.oh-time')!;
+    const endCell = end.closest('.oh-time')!;
 
     // Same wrapper class == same width rule; adjacent == "To" cannot drift away.
     expect(startCell.className).toBe('oh-time');
@@ -77,8 +79,12 @@ describe('the office-hours controls are one row of sized fields', () => {
     const c = await renderComponent(<OfficeHoursCard version={1} />);
     const form = await waitForElement(c, '.office-hours-form');
     expect(form.querySelector('p.hint')).toBeNull();
-    // Still present, just below the row.
-    expect(c.textContent).toContain('means midnight at the');
+    // Still present, just below the row — and it must describe the control that
+    // is actually there: the field offers 24:00 now, so the old "00:00 means
+    // midnight at the end" reading of it would be a lie in the UI.
+    expect(c.textContent).toContain('24:00');
+    expect(c.textContent, 'the old 00:00 pun is gone from the control and the hint')
+      .not.toContain('00:00 in');
   });
 
   it('sizes every field by what it holds', async () => {

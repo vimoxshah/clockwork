@@ -9,15 +9,13 @@
  * the one part of this component that was never ours. Chromium hides that,
  * which is why it survived: the earlier check was run in the wrong browser.
  */
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { DayPicker } from 'react-day-picker';
 import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from './popover';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './select';
+import { TimeField } from './time-field';
 import { Button } from './button';
 import { cn } from '../../lib/cn';
-
-const p2 = (n: number): string => String(n).padStart(2, '0');
 
 /** Minute granularity. Every schedule surface in the app is on a 5-minute grid. */
 const MINUTE_STEP = 5;
@@ -33,22 +31,6 @@ function fmt(d: Date | undefined): string {
   });
 }
 
-/**
- * Label an hour the way the trigger above it does.
- *
- * The trigger renders through `toLocaleString`, so in en-US it says "02:00 PM"
- * while the hour control said "14" — the same instant, spelled two ways, one
- * inch apart. Deriving the label from the same locale machinery keeps them in
- * step and costs nothing: a 24-hour locale gets "14" in both places.
- */
-function hourLabels(): string[] {
-  const base = new Date(2000, 0, 1);
-  return Array.from({ length: 24 }, (_, h) => {
-    base.setHours(h, 0, 0, 0);
-    return base.toLocaleTimeString(undefined, { hour: 'numeric' });
-  });
-}
-
 export function DateTimePicker({
   value,
   onChange,
@@ -61,16 +43,11 @@ export function DateTimePicker({
   className?: string;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
-  const hours = useMemo(hourLabels, []);
-  const hh = String(value.getHours());
-  // A value off the grid (a prefill, a rule) must still show: snap for display
-  // only, never write it back, or opening the picker would silently move the
-  // time the user already chose.
-  const mm = String(Math.round(value.getMinutes() / MINUTE_STEP) * MINUTE_STEP % 60);
+  const minutes = value.getHours() * 60 + value.getMinutes();
 
-  const setTime = (h: number, m: number): void => {
+  const setMinutes = (m: number): void => {
     const d = new Date(value);
-    d.setHours(h, m, 0, 0);
+    d.setHours(Math.floor(m / 60), m % 60, 0, 0);
     onChange(d);
   };
 
@@ -137,33 +114,18 @@ export function DateTimePicker({
         />
         <div className="flex items-center gap-2 border-t border-border px-3 py-2.5">
           <span className="text-xs text-dim">Time</span>
-          <Select value={hh} onValueChange={(v) => setTime(Number(v), Number(mm))}>
-            <SelectTrigger aria-label="Hour" className="h-8 w-[5.5rem]" data-testid="dtp-hour">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {hours.map((label, h) => (
-                <SelectItem key={h} value={String(h)}>{label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <span className="text-dim">:</span>
-          <Select value={mm} onValueChange={(v) => setTime(Number(hh), Number(v))}>
-            <SelectTrigger aria-label="Minute" className="h-8 w-[4.25rem]" data-testid="dtp-minute">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {Array.from({ length: 60 / MINUTE_STEP }, (_, i) => i * MINUTE_STEP).map((m) => (
-                <SelectItem key={m} value={String(m)}>{p2(m)}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <TimeField
+            value={minutes}
+            onChange={setMinutes}
+            minuteStep={MINUTE_STEP}
+            testIdPrefix="dtp"
+          />
           <Button
             size="sm"
             className="ml-auto"
             onClick={() => {
               const d = new Date();
-              setTime(d.getHours(), (Math.round(d.getMinutes() / MINUTE_STEP) * MINUTE_STEP) % 60);
+              setMinutes(d.getHours() * 60 + (Math.round(d.getMinutes() / MINUTE_STEP) * MINUTE_STEP) % 60);
             }}
           >
             Now
