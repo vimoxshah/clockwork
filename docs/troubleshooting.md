@@ -49,8 +49,13 @@ or `~/.clockwork/delivery-creds.json`) and network reachability.
 
 ## UI shows "Connect to daemon"
 
-The UI needs the API token: `cat ~/.clockwork/api-token` and paste it into the
-connect screen. Tokens rotate if you delete the file and restart the daemon.
+From 0.11.0 there is nothing to paste: the app carries the daemon and signs
+itself in. Seeing this screen means the daemon is not running — the app shows a
+diagnosis page naming the cause and the one command that fixes it.
+
+If you run the daemon yourself (from source), the browser UI still needs the
+token: `cat ~/.clockwork/api-token`. Tokens rotate if you delete the file and
+restart the daemon.
 
 ## License / plan problems
 

@@ -34,8 +34,7 @@ you, rather than on a file you downloaded and never verified.
 
 ## Requirements
 
-- macOS 14 (Sonoma) or later, Apple silicon
-- Node 22+
+- macOS 13 (Ventura) or later, Apple silicon
 - At least one provider CLI on your PATH: `claude`, `codex`, `opencode` or `hermes`
 
 ## What it can reach
@@ -59,7 +58,7 @@ tests do not prove.
 
 ## Links
 
-- Website: https://clockwork.vmoksh-shah179.workers.dev
+- Website: https://vimoxshah.github.io/clockwork
 - Issues: https://github.com/vimoxshah/homebrew-clockwork/issues
 - Email: vmoksh.shah179@gmail.com
 
