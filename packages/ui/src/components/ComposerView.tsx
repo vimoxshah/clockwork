@@ -20,6 +20,11 @@ import { cn } from '../lib/cn';
 import { FolderBrowserDialog } from './FolderBrowserDialog';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from './ui/dialog';
 import { registerFeatureSurface } from './featureSurfaces';
+import {
+  INTERVAL_MINUTES, WEEKDAYS, composeIntervalRule, composeWeeklyRule, composeDailyRule, composeMonthlyRule,
+  type IntervalMinutes, type Weekday,
+} from '../lib/schedule-rule';
+import { NextRunsPanel } from './NextRunsPanel';
 
 /**
  * The RRULE/cron picker lives here, not on the calendar (which only
@@ -55,6 +60,57 @@ export const BUDGET_GUARDS_SURFACE = registerFeatureSurface({
  * dominates the wait either way.
  */
 const ASAP_LEAD_MS = 15_000;
+
+/** Add or remove one day, keeping the list a set. */
+export function toggleDay(days: Weekday[], day: Weekday): Weekday[] {
+  return days.includes(day) ? days.filter((d) => d !== day) : [...days, day];
+}
+
+/** The recurrence fields `buildRrule` reads. Named so the panel can pass the same object. */
+interface RruleFormFields {
+  rruleFreq: 'INTERVAL' | 'DAILY' | 'WEEKLY' | 'MONTHLY';
+  rruleByDay: Weekday[];
+  rruleTime: string;
+  monthlyDay: string;
+  intervalEvery: IntervalMinutes;
+  intervalDays: Weekday[];
+  intervalFromHour: string;
+  intervalToHour: string;
+}
+
+/**
+ * One place that turns the form into a rule string, so the "next runs" panel
+ * previews exactly what Book-it will save. Two sources here would let the panel
+ * confirm a rule the composer never sends.
+ */
+export function buildRrule(form: RruleFormFields): { rrule: string } | { error: string } {
+  if (form.rruleFreq === 'INTERVAL') {
+    if (form.intervalDays.length === 0) return { error: 'Pick at least one day to repeat on.' };
+    const fromHour = Number(form.intervalFromHour);
+    const toHour = Number(form.intervalToHour);
+    if (!Number.isInteger(fromHour) || !Number.isInteger(toHour) || fromHour < 0 || toHour > 24) {
+      return { error: 'The hour window must be whole hours between 0 and 24.' };
+    }
+    if (toHour <= fromHour) return { error: 'The end hour must be after the start hour.' };
+    return {
+      rrule: composeIntervalRule({
+        every: form.intervalEvery, days: form.intervalDays, fromHour, toHour,
+      }),
+    };
+  }
+  const [hh, mm] = form.rruleTime.split(':').map(Number);
+  if (!Number.isInteger(hh) || !Number.isInteger(mm)) return { error: 'Pick a valid recurrence time.' };
+  if (form.rruleFreq === 'DAILY') return { rrule: composeDailyRule(hh!, mm!) };
+  if (form.rruleFreq === 'WEEKLY') {
+    if (form.rruleByDay.length === 0) return { error: 'Pick at least one day to repeat on.' };
+    return { rrule: composeWeeklyRule(form.rruleByDay, hh!, mm!) };
+  }
+  const dom = Number(form.monthlyDay);
+  if (!Number.isInteger(dom) || dom < 1 || dom > 28) {
+    return { error: 'Monthly day must be 1–28 (safe across months).' };
+  }
+  return { rrule: composeMonthlyRule(dom, hh!, mm!) };
+}
 
 function defaultSlot(): Date {
   const d = new Date(Date.now() + 60 * 60_000);
@@ -121,7 +177,7 @@ interface ProfileRow {
   avatar?: string | null;
 }
 
-const DOW = [
+const DOW: Array<{ value: Weekday; label: string }> = [
   { value: 'MO', label: 'Mon' },
   { value: 'TU', label: 'Tue' },
   { value: 'WE', label: 'Wed' },
@@ -188,8 +244,15 @@ export default function ComposerView({
     // task never ran.
     kind: 'once' as 'once' | 'rrule' | 'asap',
     runAt: prefill ? new Date(prefill.runAtLocal) : defaultSlot(),
-    rruleFreq: 'WEEKLY' as 'DAILY' | 'WEEKLY' | 'MONTHLY',
-    rruleByDay: 'MO',
+    rruleFreq: 'WEEKLY' as 'INTERVAL' | 'DAILY' | 'WEEKLY' | 'MONTHLY',
+    // Multi-day, where it used to be one day. `BYDAY=MO,WE,FR` was always legal
+    // in the rule; only the picker was single-select.
+    rruleByDay: ['MO'] as Weekday[],
+    intervalEvery: 15 as IntervalMinutes,
+    intervalDays: [...WEEKDAYS] as Weekday[],
+    intervalFromHour: '0',
+    /** Exclusive, so 9–17 is a nine-to-five day and 0–24 is all day. */
+    intervalToHour: '24',
     rruleTime: '09:00',
     monthlyDay: String(new Date().getDate()),
     tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -219,6 +282,9 @@ export default function ComposerView({
     }
   }, [prefill]);
 
+  // The panel must preview EXACTLY what Book-it will send, so both read the
+  // same builder rather than each assembling a string of their own.
+  const previewRule = buildRrule(form);
   const selectedProfile = profiles.find((p) => p.id === form.profileId) ?? null;
   const detectedProviders = providers.filter((p) => p.detected);
   const providerOptions = [
@@ -260,18 +326,9 @@ export default function ComposerView({
       // the clock moves between building this payload and validating it.
       schedule = { kind: 'once', runAt: Date.now() + ASAP_LEAD_MS, tz: form.tz };
     } else {
-      const [hh, mm] = form.rruleTime.split(':').map(Number);
-      if (!Number.isInteger(hh) || !Number.isInteger(mm)) return setError('Pick a valid recurrence time.');
-      let rrule: string;
-      if (form.rruleFreq === 'DAILY') rrule = `FREQ=DAILY;BYHOUR=${hh};BYMINUTE=${mm}`;
-      else if (form.rruleFreq === 'WEEKLY') rrule = `FREQ=WEEKLY;BYDAY=${form.rruleByDay};BYHOUR=${hh};BYMINUTE=${mm}`;
-      else {
-        const dom = Number(form.monthlyDay);
-        if (!Number.isInteger(dom) || dom < 1 || dom > 28)
-          return setError('Monthly day must be 1–28 (safe across months).');
-        rrule = `FREQ=MONTHLY;BYMONTHDAY=${dom};BYHOUR=${hh};BYMINUTE=${mm}`;
-      }
-      schedule = { kind: 'rrule', rrule, tz: form.tz };
+      const built = buildRrule(form);
+      if ('error' in built) return setError(built.error);
+      schedule = { kind: 'rrule', rrule: built.rrule, tz: form.tz };
     }
 
     const delivery = buildTaskDelivery(form.telegramChatId, form.telegramIsGroup, form.telegramAllowedUserIds, {
@@ -616,11 +673,75 @@ export default function ComposerView({
                       value={form.rruleFreq}
                       onChange={(v) => setForm({ ...form, rruleFreq: v })}
                       options={[
+                        { value: 'INTERVAL', label: 'Every N min' },
                         { value: 'DAILY', label: 'Daily' },
                         { value: 'WEEKLY', label: 'Weekly' },
                         { value: 'MONTHLY', label: 'Monthly' },
                       ]}
                     />
+                    {form.rruleFreq === 'INTERVAL' && (
+                      <div className="space-y-3">
+                        <div>
+                          <Label>Every</Label>
+                          <Segmented
+                            aria-label="Interval"
+                            size="sm"
+                            className="w-full"
+                            value={String(form.intervalEvery)}
+                            onChange={(v) => setForm({ ...form, intervalEvery: Number(v) as IntervalMinutes })}
+                            options={INTERVAL_MINUTES.map((m) => ({ value: String(m), label: `${m} min` }))}
+                          />
+                        </div>
+                        <div>
+                          <Label>On</Label>
+                          <div className="flex gap-1">
+                            {DOW.map((d) => (
+                              <button
+                                key={d.value}
+                                onClick={() => setForm({ ...form, intervalDays: toggleDay(form.intervalDays, d.value) })}
+                                aria-pressed={form.intervalDays.includes(d.value)}
+                                className={cn(
+                                  'h-8 w-full rounded-md border text-xxs font-medium',
+                                  form.intervalDays.includes(d.value)
+                                    ? 'border-accent bg-accent text-[var(--accent-fg)]'
+                                    : 'border-border text-muted hover:bg-surface-hover hover:text-fg',
+                                )}
+                              >
+                                {d.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <Label htmlFor="c-from-hour">Between (hours, 0–24)</Label>
+                          <div className="flex items-center gap-2">
+                            <Input
+                              id="c-from-hour"
+                              aria-label="From hour"
+                              className="mono w-20"
+                              type="number"
+                              min={0}
+                              max={23}
+                              value={form.intervalFromHour}
+                              onChange={(e) => setForm({ ...form, intervalFromHour: e.target.value })}
+                            />
+                            <span className="text-xs text-dim">to</span>
+                            <Input
+                              aria-label="To hour"
+                              className="mono w-20"
+                              type="number"
+                              min={1}
+                              max={24}
+                              value={form.intervalToHour}
+                              onChange={(e) => setForm({ ...form, intervalToHour: e.target.value })}
+                            />
+                          </div>
+                          <p className="mt-1 text-xxs text-dim">
+                            The end hour is exclusive, so 9 to 17 is a nine-to-five day and 0 to 24 is all day.
+                          </p>
+                        </div>
+                      </div>
+                    )}
                     {form.rruleFreq === 'WEEKLY' && (
                       <div>
                         <Label>On</Label>
@@ -628,11 +749,11 @@ export default function ComposerView({
                           {DOW.map((d) => (
                             <button
                               key={d.value}
-                              onClick={() => setForm({ ...form, rruleByDay: d.value })}
-                              aria-pressed={form.rruleByDay === d.value}
+                              onClick={() => setForm({ ...form, rruleByDay: toggleDay(form.rruleByDay, d.value) })}
+                              aria-pressed={form.rruleByDay.includes(d.value)}
                               className={cn(
                                 'h-8 w-full rounded-md border text-xxs font-medium',
-                                form.rruleByDay === d.value
+                                form.rruleByDay.includes(d.value)
                                   ? 'border-accent bg-accent text-[var(--accent-fg)]'
                                   : 'border-border text-muted hover:bg-surface-hover hover:text-fg',
                               )}
@@ -657,16 +778,23 @@ export default function ComposerView({
                         />
                       </div>
                     )}
-                    <div>
-                      <Label htmlFor="c-rtime">At time</Label>
-                      <input
-                        id="c-rtime"
-                        type="time"
-                        className="mono h-9 w-32 rounded-lg border border-strong bg-bg px-3 text-compact text-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-                        value={form.rruleTime}
-                        onChange={(e) => setForm({ ...form, rruleTime: e.target.value })}
-                      />
-                    </div>
+                    {form.rruleFreq !== 'INTERVAL' && (
+                      <div>
+                        <Label htmlFor="c-rtime">At time</Label>
+                        <input
+                          id="c-rtime"
+                          type="time"
+                          className="mono h-9 w-32 rounded-lg border border-strong bg-bg px-3 text-compact text-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                          value={form.rruleTime}
+                          onChange={(e) => setForm({ ...form, rruleTime: e.target.value })}
+                        />
+                      </div>
+                    )}
+                    <NextRunsPanel
+                      rrule={'rrule' in previewRule ? previewRule.rrule : null}
+                      localError={'error' in previewRule ? previewRule.error : null}
+                      tz={form.tz}
+                    />
                   </div>
                 )}
                 {form.kind === 'asap' && (

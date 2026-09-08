@@ -599,6 +599,11 @@ export function fallbackIcsLabel(filename: string): string {
   return base || 'Imported calendar';
 }
 
+/** POST /schedule/preview: the runs, or the guard's refusal. */
+export type SchedulePreviewT =
+  | { runs: number[]; tz: string; count: number; error?: undefined }
+  | { error: string; reason: 'unreachable' | 'slow_anchor' | 'count_too_large' | 'unparseable'; runs?: undefined };
+
 export const api = {
   health: () => req<Health>('GET', '/health'),
   byok: () => req<{ configs: unknown[]; meta: unknown }>('GET', '/byok'),
@@ -621,6 +626,12 @@ export const api = {
   deleteTrigger: (id: string) => req<void>('DELETE', `/triggers/${id}`),
   tasks: () => req<TaskViewT[]>('GET', '/tasks'),
   createTask: (t: unknown) => req<TaskViewT>('POST', '/tasks', t),
+  /**
+   * Next runs for a rule being typed. Creates nothing.
+   * `req` does not throw on 4xx, so a refusal arrives as the error arm of
+   * this union rather than a rejection — the caller has to look at it.
+   */
+  previewSchedule: (s: unknown) => req<SchedulePreviewT>('POST', '/schedule/preview', s),
   patchTask: (id: string, p: unknown) => req<TaskViewT>('PATCH', `/tasks/${id}`, p),
   deleteTask: (id: string) => req<{ deleted: boolean }>('DELETE', `/tasks/${id}`),
   runNow: (id: string) => req<{ runId: string }>('POST', `/tasks/${id}/run-now`),
