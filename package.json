@@ -15,7 +15,7 @@
     "build": "pnpm -r --filter './packages/*' build",
     "daemon:dev": "pnpm --filter @clockwork/daemon dev",
     "bundle:stage": "node tools/stage-bundle.mjs",
-    "app:build": "pnpm build && node tools/stage-bundle.mjs && ./node_modules/.bin/tauri build"
+    "app:build": "pnpm build && node tools/stage-bundle.mjs && APPLE_SIGNING_IDENTITY=\"-\" ./node_modules/.bin/tauri build"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
