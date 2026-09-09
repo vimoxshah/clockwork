@@ -74,7 +74,7 @@ trust this specific binary, so verify it first:
 
 ```bash
 # 1. Check the hash matches the published one
-shasum -a 256 ~/Downloads/Clockwork_0.11.0_aarch64.dmg
+shasum -a 256 ~/Downloads/Clockwork_0.11.1_aarch64.dmg
 curl -s https://github.com/vimoxshah/clockwork/releases/latest/download/checksums-sha256.txt
 ```
 
