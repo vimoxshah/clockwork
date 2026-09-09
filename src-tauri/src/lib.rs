@@ -143,7 +143,68 @@ fn parse_agent_node_path(xml: &str) -> Option<String> {
     Some(after[open..open + close].to_string())
 }
 
-/// Install (or re-point) the LaunchAgent so scheduled runs outlive the window.
+/// What `ensure_launch_agent` should do, given what it observed.
+///
+/// Pure, because the interesting part is the decision and the rest is three
+/// `Command`s. The bug this encodes was a missing third case: the old code
+/// asked only whether the plist named this bundle's Node and returned early
+/// when it did, which is a question about a FILE, not about whether launchd
+/// has the job.
+#[derive(Debug, PartialEq, Eq)]
+enum AgentAction {
+    /// Plist names this bundle and launchd holds the job.
+    Nothing,
+    /// Plist is already right; launchd just does not know about it.
+    Bootstrap,
+    /// No plist, or it names a different Node — write it and load it.
+    Install,
+}
+
+fn agent_action(recorded_node: Option<&str>, want_node: &str, loaded: bool) -> AgentAction {
+    if recorded_node != Some(want_node) {
+        return AgentAction::Install;
+    }
+    if loaded {
+        AgentAction::Nothing
+    } else {
+        AgentAction::Bootstrap
+    }
+}
+
+/// Does launchd hold this label in the user's GUI session right now?
+///
+/// `launchctl print` exits non-zero for a label the session does not know,
+/// which is precisely the state reading the plist cannot detect.
+fn launch_agent_loaded() -> bool {
+    let Some(uid) = current_uid() else { return false };
+    Command::new("/bin/launchctl")
+        .args(["print", &format!("gui/{uid}/{LAUNCHD_LABEL}")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Load a plist that is already correct. No `bootout` first: there is nothing
+/// to unload, and booting out a job that does not exist is the one case where
+/// launchctl's error is worth not provoking.
+fn bootstrap_launch_agent() {
+    let Some(uid) = current_uid() else { return };
+    let plist = home().join(PLIST_REL);
+    let _ = Command::new("/bin/launchctl")
+        .args([
+            "bootstrap",
+            &format!("gui/{uid}"),
+            &plist.to_string_lossy().to_string(),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+/// Install (or re-point, or merely re-load) the LaunchAgent so scheduled runs
+/// outlive the window.
 ///
 /// Automatic and unprompted, because the alternative reads as "installed" and
 /// is not: a daemon that merely outlives the app still dies at the next
@@ -156,20 +217,35 @@ fn parse_agent_node_path(xml: &str) -> Option<String> {
 /// launchd pointing at a binary that is no longer there — an app that worked
 /// yesterday and is silently dead today. Comparing the recorded path to the
 /// running bundle's on every launch costs one file read and closes it.
+///
+/// RE-LOADED is the third case, and it was missing. A correct plist and a
+/// registered job are different facts: `launchctl bootout` leaves the file
+/// untouched, and so does anything else that drops the job. The old early
+/// return then did nothing, `wait_for_daemon` sat out its six seconds waiting
+/// for a service nothing had started, and the app came up with no daemon
+/// behind it. Reproduced by hand: boot the agent out, relaunch, and the
+/// daemon never returns. Reachable without a terminal too — reinstalling the
+/// same version over itself leaves the path identical, so a job launchd has
+/// forgotten stays forgotten.
 fn ensure_launch_agent(b: &Bundle) {
     let want = b.node.to_string_lossy().to_string();
-    if agent_node_path().as_deref() == Some(want.as_str()) {
-        return;
+    match agent_action(agent_node_path().as_deref(), &want, launch_agent_loaded()) {
+        AgentAction::Nothing => {}
+        AgentAction::Bootstrap => bootstrap_launch_agent(),
+        AgentAction::Install => {
+            // `install` pins `process.execPath` into the plist, so running the
+            // CLI WITH the bundled Node is what makes the plist point at the
+            // bundled Node. It boots out and bootstraps for itself
+            // (packages/daemon/src/cli.ts), so it needs no help loading.
+            let _ = Command::new(&b.node)
+                .arg(&b.cli)
+                .arg("install")
+                .arg(&b.entry)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
     }
-    // `install` pins `process.execPath` into the plist, so running the CLI
-    // WITH the bundled Node is what makes the plist point at the bundled Node.
-    let _ = Command::new(&b.node)
-        .arg(&b.cli)
-        .arg("install")
-        .arg(&b.entry)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
 }
 
 fn wait_for_daemon(attempts: u32) -> bool {
@@ -553,6 +629,54 @@ mod tests {
         assert_eq!(
             macos.parent().unwrap().join("Resources").join("app").join("packages").join("daemon").join("dist").join("main.js"),
             std::path::Path::new("/Apps/Clockwork.app/Contents/Resources/app/packages/daemon/dist/main.js")
+        );
+    }
+
+    /// The bug: a correct plist and a registered job are different facts, and
+    /// the old code only ever checked the first. Booting the agent out leaves
+    /// the file untouched, so it kept returning "nothing to do" while no
+    /// daemon existed.
+    #[test]
+    fn a_forgotten_job_with_a_correct_plist_is_bootstrapped_not_ignored() {
+        let want = "/Applications/Clockwork.app/Contents/MacOS/node";
+        assert_eq!(
+            agent_action(Some(want), want, false),
+            AgentAction::Bootstrap,
+            "plist already names this bundle, so re-installing is wasteful — but it must still be LOADED",
+        );
+    }
+
+    #[test]
+    fn a_correct_plist_launchd_already_holds_is_left_alone() {
+        let want = "/Applications/Clockwork.app/Contents/MacOS/node";
+        assert_eq!(agent_action(Some(want), want, true), AgentAction::Nothing);
+    }
+
+    #[test]
+    fn a_plist_naming_another_node_is_reinstalled_even_when_loaded() {
+        // The moved-bundle case: launchd is happily running a job whose Node
+        // no longer exists at that path. Loaded is not the same as correct.
+        assert_eq!(
+            agent_action(
+                Some("/Users/me/Downloads/Clockwork.app/Contents/MacOS/node"),
+                "/Applications/Clockwork.app/Contents/MacOS/node",
+                true,
+            ),
+            AgentAction::Install,
+        );
+    }
+
+    #[test]
+    fn no_plist_at_all_is_an_install() {
+        assert_eq!(
+            agent_action(None, "/Applications/Clockwork.app/Contents/MacOS/node", false),
+            AgentAction::Install,
+        );
+        // Even if launchd somehow claims the label, an unreadable or missing
+        // plist means we cannot prove it points here — write the one we want.
+        assert_eq!(
+            agent_action(None, "/Applications/Clockwork.app/Contents/MacOS/node", true),
+            AgentAction::Install,
         );
     }
 }
