@@ -1,6 +1,6 @@
 cask "clockwork" do
-  version "0.11.0"
-  sha256 "53b9780c1452479f03457bec7578a778aea74c8d8a9a60cd04f7143dfe84b6c0"
+  version "0.11.1"
+  sha256 "5ed6d41663ce8f915c3c32ee0c55d8bb9f3f9ee5307d642d20ccbbf8e82ffffe"
 
   # Straight from the GitHub release, which is where the artifact and its
   # published checksum canonically live. It used to point at the marketing
