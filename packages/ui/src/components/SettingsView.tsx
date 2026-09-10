@@ -23,9 +23,10 @@ import { registerFeatureSurface } from './featureSurfaces';
  * The capabilities THIS FILE mounts, declared next to the mounts themselves so
  * the plan matrix in LicenseCard can stop ticking features that have no screen
  * (see featureSurfaces.ts for why this is not one central list). Office hours
- * and earned autonomy register inside their own card files; these four have no
+ * and earned autonomy register inside their own card files; these five have no
  * file of their own to register from — ProvidersCard and TriggersCard live at
- * the bottom of this one, and ByokCard is mounted here.
+ * the bottom of this one, QuietHoursCard sits right below, and ByokCard is
+ * mounted here.
  */
 registerFeatureSurface({ key: 'byok_providers', tab: 'settings', where: 'Settings › API providers (BYOK)', anchorId: 'byok-providers' });
 // The BYOK connect flow is where a custom OpenAI-compatible base URL is
@@ -33,6 +34,10 @@ registerFeatureSurface({ key: 'byok_providers', tab: 'settings', where: 'Setting
 registerFeatureSurface({ key: 'custom_endpoints', tab: 'settings', where: 'Settings › API providers (BYOK)', anchorId: 'byok-providers' });
 registerFeatureSurface({ key: 'cli_engines', tab: 'settings', where: 'Settings › CLI engines', anchorId: 'cli-engines' });
 registerFeatureSurface({ key: 'event_triggers', tab: 'settings', where: 'Settings › Event triggers', anchorId: 'event-triggers' });
+// T1-8: the scheduler has honoured delivery_json.quietHours since ADR-030;
+// DeliveryConfig just never carried the key, so this is the first build where
+// setting it has anywhere to go.
+registerFeatureSurface({ key: 'quiet_hours', tab: 'settings', where: 'Settings › Quiet hours', anchorId: 'quiet-hours' });
 
 export default function SettingsView({ version }: { version: number }): JSX.Element {
   const { pref, setPref } = useTheme();
@@ -128,6 +133,11 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
       <section className="settings-card settings-card--wide">
       <h3 className="section-title" id="office-hours">Office hours</h3>
       <OfficeHoursCard version={version} />
+      </section>
+
+      <section className="settings-card settings-card--wide">
+      <h3 className="section-title" id="quiet-hours">Quiet hours</h3>
+      <QuietHoursCard version={version} />
       </section>
 
       <section className="settings-card">
@@ -1034,6 +1044,142 @@ export function DeliveryCard({ version }: { version: number }): JSX.Element {
           {smtpMsg}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Quiet hours (ADR-030, T1-8) — the setter `scheduler.ts` has been waiting on.
+ *
+ * `readQuietHours` reads `delivery_json.quietHours` off a TASK row, and when a
+ * due fire time lands inside `[startHour, endHour)` in the owning SCHEDULE's
+ * own `tz`, defers the run AND pre-claims a fresh `pending` occurrence at the
+ * window's end (`scheduler.ts`, the `INSERT OR IGNORE` right after the
+ * deferral). `DeliveryConfig` just never carried the `quietHours` key, so zod
+ * stripped it on every write — this card, and the schema field beside it, are
+ * the whole fix.
+ *
+ * NOT the same control as Office hours, on purpose. Office hours is one
+ * global on/off switch plus shared windows (`OfficeHoursCard`,
+ * `PUT /workforce/office-hours`); quiet hours has no such table — it lives on
+ * the task row, per task, evaluated in that task's own schedule zone. So
+ * unlike Office hours this card has to name a task before it can set
+ * anything, the same "pick a task" affordance `TriggersCard` already uses
+ * below. Sharing a settings PAGE with Office hours is deliberate; sharing its
+ * mechanism is not (docs/agent-workforce.md F3 spells out why the two ledger
+ * behaviours differ, and scheduler.ts is out of this card's reach either way).
+ *
+ * A real gap, stated on screen rather than hidden: `GET /tasks` never returns
+ * a task's `delivery` (`api.ts`'s `view()` omits it — a narrower projection
+ * than the row itself, not a bug this card can fix from here), so the fields
+ * below cannot be pre-filled with what a task already has, and `TaskPatch`
+ * treats `delivery` as ONE json column: `TaskRepo.patch` replaces it whole
+ * when the key is present at all, it does not merge sub-keys. Saving quiet
+ * hours here therefore REPLACES the task's whole delivery config — safe for a
+ * task with no other channel set, destructive for one that already has
+ * Telegram, Slack or email configured (ComposerView is still the only place
+ * that sets those, and only at creation — this is the first UI path that
+ * touches `delivery` afterward). The hint below says so; it does not soften
+ * it into "advanced settings may reset."
+ */
+export function QuietHoursCard({ version }: { version: number }): JSX.Element {
+  const tasks = useAsync(() => api.tasks(), [version]);
+  const [taskId, setTaskId] = useState('');
+  const [startHour, setStartHour] = useState('23');
+  const [endHour, setEndHour] = useState('7');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  /** '' fails closed rather than reading as hour 0 (`Number('') === 0`). */
+  const parseHour = (raw: string): number | null => {
+    if (raw.trim() === '') return null;
+    const n = Number(raw);
+    return Number.isInteger(n) && n >= 0 && n <= 23 ? n : null;
+  };
+  const start = parseHour(startHour);
+  const end = parseHour(endHour);
+  const canSave = Boolean(taskId) && start !== null && end !== null && !busy;
+
+  const save = async (): Promise<void> => {
+    if (start === null || end === null) return;
+    setBusy(true);
+    setErr(null);
+    setMsg(null);
+    try {
+      await api.patchTask(taskId, { delivery: { quietHours: { startHour: start, endHour: end } } });
+      setMsg('Quiet hours saved.');
+    } catch (e) {
+      setErr(String((e as Error).message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div>
+      <p className="hint" style={{ marginTop: 0 }}>
+        A window in which a task never fires. A run due inside it waits until the window ends and the
+        wait is recorded, not dropped — critical tasks still bypass it. Hours wrap midnight: 23 → 7
+        means quiet from 11pm to 7am, in the task's own schedule time zone.
+      </p>
+      <p className="hint">
+        The daemon does not send a task's current quiet hours back, so the fields below always start
+        blank, and <strong>Save replaces this task's whole delivery configuration</strong> — OS
+        notifications, Telegram, Slack, email — not quiet hours alone. Safe for a task with none of
+        those set; for one that already has Telegram, Slack or email configured, that channel is
+        dropped unless it is re-entered elsewhere first.
+      </p>
+      {tasks.error && <div className="error-banner">{tasks.error}</div>}
+      <div className="row3" style={{ alignItems: 'end' }}>
+        <div>
+          <label className="f">Task</label>
+          <Select value={taskId || '__none__'} onValueChange={(v) => setTaskId(v === '__none__' ? '' : v)}>
+            <SelectTrigger data-testid="quiet-hours-task-select"><SelectValue placeholder="— pick a task —" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__">— pick a task —</SelectItem>
+              {(tasks.data ?? []).map((t) => (
+                <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <label className="f" htmlFor="qh-start">Quiet from (hour)</label>
+          <input
+            id="qh-start"
+            type="number"
+            min={0}
+            max={23}
+            value={startHour}
+            onChange={(e) => setStartHour(e.target.value)}
+            data-testid="quiet-hours-start"
+          />
+        </div>
+        <div>
+          <label className="f" htmlFor="qh-end">Until (hour)</label>
+          <input
+            id="qh-end"
+            type="number"
+            min={0}
+            max={23}
+            value={endHour}
+            onChange={(e) => setEndHour(e.target.value)}
+            data-testid="quiet-hours-end"
+          />
+        </div>
+        <button
+          className="btn primary"
+          style={{ justifySelf: 'start' }}
+          disabled={!canSave}
+          onClick={() => void save()}
+          data-testid="quiet-hours-save"
+        >
+          {busy ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+      {msg && <div className="ok-banner">{msg}</div>}
+      {err && <div className="error-banner" role="alert">{err}</div>}
     </div>
   );
 }

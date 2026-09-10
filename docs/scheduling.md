@@ -129,20 +129,22 @@ approval is never shifted by this feature.
   does, and it leaves the occurrence ledger's primary key, the claim
   transaction, and all 18 `scheduler.test.ts` fixtures unmodified — that
   invariant was a hard constraint during implementation. But:
-  - **It does not pre-claim a row at the resume instant.** Quiet hours
-    inserts a fresh `pending` claim there; office hours deliberately does
-    not, because the tick at the resume instant has to win its own claim. A
-    row pre-claimed here would make that tick's claim a no-op, `if (!claimed)
-    return` would fire, and the schedule would be pinned at the deferral
-    forever.
-  - **It bumps `next_fire` for every schedule kind, `once` included.** Quiet
-    hours bumps only recurring schedules. Office hours has to bump one-shots
-    too: the claim transaction that just ran has already NULLed a `once`
-    schedule's `next_fire`, and a dropped one-shot is lost work, not a
-    skipped repeat.
+  - **It does not pre-claim a row at the resume instant**, because the tick at
+    the resume instant has to win its own claim. A row pre-claimed here would
+    make that tick's claim a no-op, `if (!claimed) return` would fire, and the
+    schedule would be pinned at the deferral forever.
+  - **It bumps `next_fire` for every schedule kind, `once` included.** The
+    claim transaction that just ran has already NULLed a `once` schedule's
+    `next_fire`, and a dropped one-shot is lost work, not a skipped repeat.
 
-  Both differences are in `scheduler.ts`, in the office-hours branch, with the
-  same reasoning in a comment beside them.
+  **Quiet hours now follows both rules too, and until 2026-09-10 it followed
+  neither.** These were written up as office-hours *differences* because office
+  hours was built second and reasoned about the hazard properly; quiet hours had
+  shipped the other way with no ADR arguing for it. Both failures were real and
+  both were reachable: a recurring schedule deferred by quiet hours was pinned
+  at its resume instant forever, and a `once` schedule was dropped outright.
+  There is now one rule for both branches, with the reasoning in a comment
+  beside each. ADR-030 records the repair.
 - Windows never cross midnight (`endMin > startMin`); a shift that does is two
   rows. The search for the next open window gives up after 14 days and
   defers no further — a badly configured window set stops deferring rather

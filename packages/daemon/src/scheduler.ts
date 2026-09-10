@@ -195,15 +195,16 @@ export class Scheduler {
           .prepare(`UPDATE schedule_occurrences SET disposition='deferred' WHERE schedule_id=? AND occurrence_at=?`)
           .run(sched.id, fireAt);
         this.deps.notify('missed', task.name, `Deferred past quiet hours — rescheduled to ${new Date(resumeAt).toLocaleString()}.`);
-        // Re-claim the pushed occurrence so it still fires after the window.
-        this.deps.db
-          .prepare(
-            `INSERT OR IGNORE INTO schedule_occurrences (schedule_id, occurrence_at, disposition, claimed_at)
-             VALUES (?, ?, 'pending', ?)`,
-          )
-          .run(sched.id, resumeAt, now);
-        const bump = this.deps.db.prepare('UPDATE schedules SET next_fire=? WHERE id=? AND kind != \'once\'');
-        if (sched.kind !== 'once') bump.run(resumeAt, sched.id);
+        // Repoint next_fire at the resume instant and deliberately DO NOT
+        // pre-claim a ledger row there: the tick at resumeAt has to win its
+        // own claim, or `if (!claimed) return` fires first and the schedule
+        // is pinned here forever. 'once' is bumped too — the claim tx above
+        // NULLed its next_fire, and a dropped one-shot is lost work.
+        // Both rules are ADR-038's, recorded for the office-hours branch
+        // below because it was built second; ADR-030 was never written and
+        // argued nothing for the pre-claim quiet hours originally shipped
+        // with. Same hazard, same handling, one mechanism.
+        this.deps.db.prepare('UPDATE schedules SET next_fire=? WHERE id=?').run(resumeAt, sched.id);
         return;
       }
       // Office hours (F3, spec §4): a task whose profile is flagged

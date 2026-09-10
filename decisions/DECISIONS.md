@@ -235,9 +235,6 @@ ADR-034 already noted in passing that "ADR-026…033 are cited in code but never
 **ADR-029 — cost & reliability analytics (spend/success-rate aggregation surfaced to the user)**
 `packages/daemon/src/api.ts:1000`; `packages/ui/src/components/AnalyticsView.tsx:2`.
 
-**ADR-030 — quiet hours (defer a fire into a task's local-time no-run window)**
-`packages/shared/src/schemas.ts:216`; `packages/daemon/src/scheduler.ts:188,301`; `packages/daemon/test/quiet-hours.test.ts:2`.
-
 **ADR-031 — retention + audit log (goal #41 retention controls, goal #40 append-only audit log)**
 `packages/daemon/src/retention-audit.ts:2`.
 
@@ -292,3 +289,20 @@ ADR-034 already noted in passing that "ADR-026…033 are cited in code but never
 **Alternatives rejected:** a Clockwork-hosted "publish this proof" link for F12 (reintroduces the exact cloud dependency the product's local-first positioning rejects, and the export's entire value proposition is that the user, not Clockwork, controls where it is hosted); an opt-out flag for masking (a flag that can be turned off is a flag that will eventually be turned off by habit, for a report about to leave the trust boundary that made the unmasked version safe to view in the inbox in the first place).
 **Why:** Both features touch data on its way out of Clockwork's control — an event about to land in a third-party calendar app, an HTML file about to be hosted publicly — so the "check it, don't believe it" argument only holds if there is genuinely no code path back into a Clockwork-run channel, verifiable by reading two small files end to end.
 **Consequence:** F9 now has a producer, and `docs/agent-workforce.md` §F9 documents the convention an agent follows plus every bound the parse enforces. What is still stated plainly there, because it is still true: Clockwork injects nothing into your prompts, so a task or profile that never asks for suggestions never gets any. F12's `includeTranscript` default is a security-relevant choice — any future change to it must be treated as one, not a routine tweak.
+
+
+## ADR-030 — Quiet hours defers by repointing `next_fire` only; it never pre-claims the resume instant, and it bumps every schedule kind
+**Decision:** A fire deferred into a task's local-time no-run window sets `schedules.next_fire = resumeAt` and does nothing else to the occurrence ledger. It does **not** insert a `pending` row at `resumeAt`, and it bumps `next_fire` for **every** schedule kind, `once` included. These are ADR-038's two rules, applied to both deferral branches instead of one.
+
+**Context — written late, and the delay is the finding.** This ADR was owed from the day quiet hours shipped and sat in the "Referenced but unwritten ADRs" index with three citations and no reasoning. Because nothing argued for the original mechanism, nothing flagged that it was wrong. It shipped pre-claiming a `pending` row at the resume instant and bumping only recurring kinds, and both halves were broken:
+
+- **Recurring: pinned forever.** `schedule_occurrences` is keyed `(schedule_id, occurrence_at)` (`migrations/0001_init.sql:66`). The pre-claimed row meant the tick at `resumeAt` got `changes === 0` from its own `INSERT OR IGNORE`, read `claimed = false`, and returned at `scheduler.ts:132` before enqueueing. `next_fire` stayed at `resumeAt` — now in the past — and the schedule never fired again.
+- **`once`: dropped outright.** The claim transaction had already NULLed a one-shot's `next_fire`, and the `kind != 'once'` guard skipped the bump. The tick query filters on `next_fire IS NOT NULL`, so the schedule was never selected again and the orphaned pending row at `resumeAt` was unreachable. Not delayed — lost.
+
+ADR-038 (office hours, built second) had already reasoned the hazard out correctly and recorded both rules — *"a row pre-claimed here would make that claim a no-op, `if (!claimed) return` would fire, and the schedule would be pinned at the deferral forever"*. That entry describes the quiet-hours bug precisely, as a hypothetical, without anyone noticing it was a live defect in the sibling branch twelve lines above.
+
+**Alternatives rejected:** keeping the pre-claim and making the resume tick tolerate an existing row — that means touching the claim transaction, which `plan/AGENT-WORKFORCE-SPEC.md` fenced off and which every one of the 18 `scheduler.test.ts` fixtures depends on. Fixing only the recurring half — it would have left `once` schedules silently dropped, which is worse than a delay and was the failure actually holding the Settings card.
+
+**Why:** a deferral is a promise that the work happens later. A mechanism that cannot hand the occurrence to a future tick is not a deferral, it is a silent cancellation — and quiet hours is exactly the feature a user switches on believing it only moves things.
+
+**Consequence:** quiet hours and office hours are now one mechanism, so the "two deliberate differences" framing in `docs/scheduling.md`, `docs/agent-workforce.md` and ADR-038 is retired. `packages/daemon/test/quiet-hours-resume.test.ts` pins the full cycle — deferred, then actually enqueued at the resume instant — which no test covered before; four of its eight cases fail against the old code. The Settings card that makes quiet hours reachable (T1-8) was held until this landed, because shipping a switch for a feature that silently kills a schedule is worse than shipping no switch at all.

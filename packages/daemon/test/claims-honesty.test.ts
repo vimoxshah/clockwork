@@ -295,10 +295,15 @@ describe('the test inventory reports what a re-run actually produces', () => {
 // 3. Office hours is NOT the quiet-hours mechanism. The code says so on purpose.
 // ---------------------------------------------------------------------------
 describe('office hours is described as the code implements it', () => {
-  it('the code really does differ from quiet hours in both halves', () => {
-    // Ground the doc claim in the source, so a future scheduler change that
-    // made the two identical would fail here rather than silently make the
-    // corrected prose wrong again.
+  it('both deferral branches now follow the same two rules', () => {
+    // INVERTED 2026-09-10 (ADR-030). This used to assert that quiet hours
+    // pre-claimed and skipped 'once' — that it DIFFERED from office hours in
+    // both halves. It did, and both differences were bugs: the pre-claimed row
+    // made the resume tick's own claim a no-op so a recurring schedule was
+    // pinned forever, and the skipped bump left a one-shot's next_fire NULL so
+    // it was dropped outright. The tripwire was pinning the defect as contract.
+    // It now asserts the repair: NEITHER branch pre-claims, and BOTH bump
+    // every kind. A future change that reintroduces either shape fails here.
     const src = read(SCHEDULER);
     // Comments out: the office-hours branch explains in prose exactly why it
     // does NOT do the thing the words "INSERT OR IGNORE" would otherwise match.
@@ -309,10 +314,20 @@ describe('office hours is described as the code implements it', () => {
     );
     // The SQL is written with escaped quotes in the source, so match loosely.
     const ONCE_GUARD = /kind\s*!=\s*\\?'once\\?'/;
-    expect(quiet).toContain('INSERT OR IGNORE INTO schedule_occurrences');
-    expect(quiet).toMatch(ONCE_GUARD);
+    expect(
+      quiet,
+      'quiet hours pre-claims the resume instant again — the resume tick cannot then win its own claim, and the schedule is pinned there forever (ADR-030)',
+    ).not.toContain('INSERT OR IGNORE');
+    expect(
+      quiet,
+      "quiet hours skips 'once' again — the claim tx already NULLed its next_fire, so the one-shot is dropped rather than delayed (ADR-030)",
+    ).not.toMatch(ONCE_GUARD);
     expect(office, 'office hours now pre-claims a ledger row; the docs say it does not').not.toContain('INSERT OR IGNORE');
     expect(office, "office hours now skips 'once' schedules; the docs say it bumps every kind").not.toMatch(ONCE_GUARD);
+    // Blindness guard: both slices must be real code, or the four assertions
+    // above pass vacuously on an empty string when a marker gets renamed.
+    expect(quiet.length, 'the quiet-hours slice is empty — a marker was renamed').toBeGreaterThan(200);
+    expect(office.length, 'the office-hours slice is empty — a marker was renamed').toBeGreaterThan(200);
   });
 
   for (const [label, file, heading] of [

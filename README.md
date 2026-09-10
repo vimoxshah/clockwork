@@ -470,16 +470,21 @@ Open, reproducible, and written down here rather than discovered by you:
   task is saved, with an `unreachable` verdict — but the tick path that fires
   scheduled runs is deliberately left unguarded, so a hazardous row saved
   before the guard existed can still hang.
-- **Four older capabilities have no screen, and two of them have no setter
-  either.** Retention is API-only (`PUT /retention`), and an outbound webhook's
-  URL is API-only (a task's or profile's delivery config). **Quiet hours has no
-  reachable setter at all:** the scheduler honours `delivery_json.quietHours`,
-  but `DeliveryConfig` in `packages/shared/src/schemas.ts` carries no
-  `quietHours` key, and zod strips unknown keys — so the field is dropped on the
-  way in, and only a direct write to SQLite can set it. **Container execution is
-  a probe, not a target:** `GET /targets` reports whether Docker is available and
-  nothing dispatches a run to it. None of the four registers a surface, which is
-  why the capability matrix does not tick them.
+- **Three older capabilities still have no screen.** Retention is API-only
+  (`PUT /retention`), an outbound webhook's URL is API-only (a task's or
+  profile's delivery config), and **container execution is a probe, not a
+  target**: `GET /targets` reports whether Docker is available and nothing
+  dispatches a run to it. All three have a working setter or nothing to set;
+  none registers a surface, which is why the capability matrix leaves them
+  unticked. **Quiet hours is no longer one of them.** `DeliveryConfig` carries
+  a `quietHours` key, Settings has a card beside Office hours, and the
+  `quiet_hours` surface is registered. It also *works* now, which it did not
+  before: the deferral used to pre-claim the resume instant, which made the
+  resume tick's own claim a no-op — so a deferred recurring schedule stuck at
+  that instant and never fired again, and a deferred one-shot was dropped
+  outright. ADR-030 records
+  the repair, and the reason nobody caught it earlier is that ADR-030 had never
+  been written.
 - **Keep-awake holds the Mac awake, but cannot wake it.** The daemon arms a
   macOS power assertion (`caffeinate`) for a run's budgeted window and releases
   it afterwards. It declines on battery unless you set
