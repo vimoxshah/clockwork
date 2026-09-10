@@ -1,8 +1,19 @@
 name: release
 
-# Build + package macOS DMG on version tags, create GitHub Release with
-# checksums. Signing/notarization runs only when secrets are configured;
-# otherwise the artifact is produced unsigned (documented in docs/install.md).
+# Build + package the macOS DMGs on version tags, then create ONE GitHub
+# Release whose checksums file covers both of them. Signing/notarization runs
+# only when secrets are configured; otherwise the artifact is produced unsigned
+# (documented in docs/install.md).
+#
+# T1-2 — two architectures, one release, one free runner. `macos-13` (Intel) no
+# longer exists as a hosted runner: actions/runner-images lists macOS 14, 15
+# and 26, and every remaining x64 image (macos-15-intel, macos-14-large) is a
+# Larger Runner, which GitHub restricts to organisations on Team or Enterprise
+# Cloud. This is an individual account, so that tier is unreachable at any
+# price and the Intel DMG is CROSS-COMPILED from the free arm64 runner:
+# an official darwin-x64 Node tarball, better-sqlite3's x86_64 prebuild,
+# `tauri build --target x86_64-apple-darwin`, and Rosetta 2 (present on the
+# arm64 macOS images) to RUN the result during verification.
 
 on:
   push:
@@ -14,7 +25,37 @@ permissions:
 
 jobs:
   dmg:
-    runs-on: macos-14 # Apple Silicon
+    name: dmg (${{ matrix.dmg_arch }})
+    runs-on: macos-14 # Apple Silicon; the x64 leg cross-compiles from here
+    strategy:
+      # One leg failing must not cancel the other. They produce different
+      # artifacts, and the surviving leg's log is how you tell "the cross
+      # compilation broke" from "the build broke".
+      fail-fast: false
+      matrix:
+        include:
+          # Three spellings of one architecture, and they are all different:
+          #   triple      what rustc/Tauri take after --target
+          #   dmg_arch    what tauri-bundler writes into the DMG file name
+          #               (its macos::dmg module maps x86_64 -> "x64")
+          #   mach_o_arch what `file` prints for the Mach-O it produced
+          # Naming them in the matrix keeps the guesswork out of the steps.
+          - triple: aarch64-apple-darwin
+            dmg_arch: aarch64
+            mach_o_arch: arm64
+            # No --target on the native leg: same command as before this
+            # matrix existed, same output path, and one cargo target dir
+            # shared with `cargo test`.
+            tauri_target: ''
+            bundle_dir: src-tauri/target/release/bundle/dmg
+          - triple: x86_64-apple-darwin
+            dmg_arch: x64
+            mach_o_arch: x86_64
+            tauri_target: --target x86_64-apple-darwin
+            # --target moves the WHOLE bundle tree under the triple. Get this
+            # wrong and the verify step globs an empty directory, finds
+            # nothing, and cannot tell you that it checked nothing.
+            bundle_dir: src-tauri/target/x86_64-apple-darwin/release/bundle/dmg
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -24,28 +65,128 @@ jobs:
           cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin
+          # The host target comes with the toolchain; this adds the one we
+          # cross-compile to. On the native leg the two are the same string.
+          targets: ${{ matrix.triple }}
       - name: Install Tauri system deps (macOS)
         run: brew install pkg-config create-dmg
+
+      - name: Fetch a darwin-x64 Node to ship in the Intel DMG
+        if: matrix.dmg_arch == 'x64'
+        run: |
+          # The version is READ OFF THE RUNNER's Node rather than pinned here.
+          # better-sqlite3 prebuilds are per NODE_MODULE_VERSION, and the
+          # prebuild fetched during staging is chosen by the Node doing the
+          # staging — so the Node that ships must be the same version, or the
+          # DMG crash-loops on `NODE_MODULE_VERSION 137 ... requires 147`.
+          # Same version, different architecture: that is the whole trick.
+          NODE_VERSION="$(node -p process.version)"
+          TARBALL="node-${NODE_VERSION}-darwin-x64.tar.gz"
+          DEST="${RUNNER_TEMP}/node-x64"
+          mkdir -p "$DEST"
+          cd "${RUNNER_TEMP}"
+          curl -fsSLO "https://nodejs.org/dist/${NODE_VERSION}/${TARBALL}"
+          curl -fsSLO "https://nodejs.org/dist/${NODE_VERSION}/SHASUMS256.txt"
+          # Exact field match, not a substring: SHASUMS256.txt lists
+          # ...darwin-x64.tar.xz one line away and `grep "$TARBALL"` would
+          # happily verify the wrong row's digest against the wrong file.
+          awk -v f="$TARBALL" '$2 == f { print $1 "  " f }' SHASUMS256.txt > want.sha256
+          test -s want.sha256 || { echo "::error::${TARBALL} is not listed in nodejs.org's SHASUMS256.txt"; exit 1; }
+          shasum -a 256 -c want.sha256
+          tar -xzf "$TARBALL" -C "$DEST" --strip-components=1
+          ARCH_OF_NODE="$(file -b "${DEST}/bin/node")"
+          echo "downloaded node: ${ARCH_OF_NODE}"
+          case "$ARCH_OF_NODE" in
+            *x86_64*) ;;
+            *) echo "::error::the darwin-x64 tarball produced a ${ARCH_OF_NODE}"; exit 1 ;;
+          esac
+          # Rosetta 2 has to be here. Staging RUNS this binary (it installs
+          # better-sqlite3 and opens a database with it) and so does the DMG
+          # verification below. GitHub's arm64 macOS images ship Rosetta
+          # (install-rosetta.sh in the runner-images build manifest). If it is
+          # ever dropped, FAIL — an Intel DMG nothing could execute must not
+          # become a published Intel DMG.
+          "${DEST}/bin/node" -p "'rosetta ok: ' + process.arch + ' ' + process.version" \
+            || { echo "::error::cannot execute an x86_64 binary on this runner — Rosetta 2 is missing, so nothing below could verify the Intel DMG"; exit 1; }
+          echo "CW_X64_NODE_BIN=${DEST}/bin" >> "$GITHUB_ENV"
 
       - name: Install deps + build workspace
         run: |
           pnpm install --frozen-lockfile
           pnpm build
-          pnpm test
-          # BEFORE cargo: `externalBin` in tauri.conf.json makes
-          # binaries/node-<triple> a COMPILE-TIME input, so the Tauri build
-          # script fails with "resource path doesn't exist" — even for
-          # `cargo test`. The first v0.11.0 tag push died exactly here. It also
-          # has to run before the bundler collects resources: without it the
-          # DMG is a window with nothing behind it. It stages the Node running
-          # HERE and installs better-sqlite3 with it, so the ABI matches by
-          # construction.
-          node tools/stage-bundle.mjs
-          # The Tauri shell is where the daemon supervision lives — the plist
-          # parser, the version-skew restart, the failure diagnosis. None of it
-          # is reachable from vitest.
-          cd src-tauri && cargo test && cd ..
+
+      - name: Unit + scenario tests
+        if: matrix.dmg_arch == 'aarch64'
+        # Runs on the native leg only, and that is a scope statement rather
+        # than a saving: this suite is JavaScript on the runner's own Node, so
+        # both legs would execute the identical thing on the identical host
+        # architecture. `needs: dmg` makes the release wait for every leg, so
+        # a red suite here still blocks the release.
+        run: pnpm test
+
+      - name: Stage the .app payload (native)
+        if: matrix.dmg_arch == 'aarch64'
+        # BEFORE cargo: `externalBin` in tauri.conf.json makes
+        # binaries/node-<triple> a COMPILE-TIME input, so the Tauri build
+        # script fails with "resource path doesn't exist" — even for
+        # `cargo test`. The first v0.11.0 tag push died exactly here. It also
+        # has to run before the bundler collects resources: without it the
+        # DMG is a window with nothing behind it. It stages the Node running
+        # HERE and installs better-sqlite3 with it, so the ABI matches by
+        # construction.
+        run: node tools/stage-bundle.mjs
+
+      - name: Stage the .app payload (cross-compiled for x86_64)
+        if: matrix.dmg_arch == 'x64'
+        run: |
+          # Everything here runs UNDER THE TARGET's Node, through Rosetta, and
+          # that is the load-bearing detail rather than a flourish.
+          #
+          # `pnpm deploy` (inside stage-bundle.mjs) does not re-run
+          # better-sqlite3's install script: it clones the package from the
+          # content-addressable store INCLUDING the build that store already
+          # cached, and the side-effects cache is keyed by the running Node's
+          # own platform-arch. Measured on an arm64 host: with
+          # npm_config_arch=x64 alone, with the side-effects cache switched
+          # off, and against an empty store, the staged binding came out
+          # `Mach-O 64-bit bundle arm64` all three times — an arm64 .node
+          # inside an Intel app, which fails on a user's Mac and nowhere else.
+          # Running the deploy under the x64 Node changes that cache key, so
+          # the install script really executes and prebuild-install fetches
+          # the x86_64 prebuild. Then the staged binding is
+          # `Mach-O 64-bit bundle x86_64` and stage-bundle.mjs's own probe
+          # opens a database with it.
+          #
+          # PATH is prepended for this ONE command, never exported: the x64
+          # Node has to be what `pnpm`'s `#!/usr/bin/env node` picks up, and
+          # it must NOT be what `npx tauri build` picks up — the Tauri CLI
+          # loads an arm64 .node and would die under it.
+          #
+          # npm_config_arch/npm_config_platform are belt and braces. Here
+          # prebuild-install already derives the target from the Node running
+          # it; these keep it right if a future pnpm starts re-running the
+          # install script during deploy.
+          PATH="${CW_X64_NODE_BIN}:${PATH}" \
+          CW_TARGET_TRIPLE=x86_64-apple-darwin \
+          CW_STAGE_NODE="${CW_X64_NODE_BIN}/node" \
+          npm_config_arch=x64 \
+          npm_config_platform=darwin \
+            "${CW_X64_NODE_BIN}/node" tools/stage-bundle.mjs
+
+      - name: Rust shell tests
+        if: matrix.dmg_arch == 'aarch64'
+        # The Tauri shell is where the daemon supervision lives — the plist
+        # parser, the version-skew restart, the failure diagnosis. None of it
+        # is reachable from vitest.
+        #
+        # Native leg only, and NOT because of the runtime. `cargo test`
+        # without --target builds for the HOST, and `externalBin` then demands
+        # binaries/node-aarch64-apple-darwin at compile time — which the cross
+        # leg deliberately does not stage. `cargo test --target
+        # x86_64-apple-darwin` would satisfy it by recompiling the whole
+        # dependency graph for x86_64 to run the same architecture-independent
+        # assertions, so this leg leaves them to the leg above.
+        run: cd src-tauri && cargo test
 
       - name: Import signing identity (if configured)
         if: env.APPLE_CERT_P12 != ''
@@ -79,7 +220,7 @@ jobs:
             export APPLE_SIGNING_IDENTITY="-"
             echo "No signing certificate configured — building UNSIGNED DMG (documented in release notes)."
           fi
-          npx tauri build --bundles dmg
+          npx tauri build ${{ matrix.tauri_target }} --bundles dmg
 
       - name: Verify the bundle can actually run
         run: |
@@ -95,8 +236,16 @@ jobs:
           # was no bundled node. Checking the mounted image is also the
           # stronger claim: it is the bits that ship, not the bits they came
           # from.
-          DMG=$(ls "$PWD"/src-tauri/target/release/bundle/dmg/Clockwork_*_aarch64.dmg | head -1)
-          test -f "$DMG" || { echo "::error::no DMG was produced"; exit 1; }
+          # The version segment is matched as [0-9]* so this can never pick up
+          # the stable-named copy the release job makes later.
+          DMG=""
+          for f in "$PWD"/${{ matrix.bundle_dir }}/Clockwork_[0-9]*_${{ matrix.dmg_arch }}.dmg; do DMG="$f"; break; done
+          if [ ! -f "$DMG" ]; then
+            echo "::error::no ${{ matrix.dmg_arch }} DMG was produced in ${{ matrix.bundle_dir }}"
+            echo "what the bundler did write:"
+            ls -la "$PWD"/${{ matrix.bundle_dir }} || echo "  (that directory does not exist — --target moves it under the triple)"
+            exit 1
+          fi
           MNT=$(mktemp -d)
           hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MNT" >/dev/null
           trap 'hdiutil detach "$MNT" -force >/dev/null 2>&1 || true' EXIT
@@ -110,45 +259,123 @@ jobs:
           test -x "$NODE"  || { echo "::error::no bundled node at $NODE"; exit 1; }
           test -f "$ENTRY" || { echo "::error::no daemon entry at $ENTRY"; exit 1; }
           test -d "$SQLITE" || { echo "::error::better-sqlite3 missing from the bundle at $SQLITE"; exit 1; }
+          # T1-2: the architecture of the bits, not of the file name. A DMG
+          # called _x64 carrying an arm64 Node passes every other check in
+          # this step and dies on the first Intel Mac that opens it. Both
+          # halves are checked because they come from different places: the
+          # Node from a downloaded tarball, the .node from a prebuild fetched
+          # during staging.
+          BINDING="$SQLITE/build/Release/better_sqlite3.node"
+          test -f "$BINDING" || { echo "::error::better-sqlite3 shipped without its compiled binding at $BINDING"; exit 1; }
+          for pair in "node:$NODE" "better_sqlite3.node:$BINDING"; do
+            what="${pair%%:*}"
+            where="${pair#*:}"
+            got="$(file -b "$where")"
+            echo "bundled ${what}: ${got}"
+            case "$got" in
+              *${{ matrix.mach_o_arch }}*) ;;
+              *) echo "::error::bundled ${what} is \"${got}\" inside a ${{ matrix.dmg_arch }} DMG — refusing to publish a mislabelled build"; exit 1 ;;
+            esac
+          done
           # Opening a database, not merely requiring it: better-sqlite3 loads
           # its binding lazily, so require alone exits 0 under a Node whose ABI
           # the compiled .node cannot satisfy.
+          # On the x64 leg this executes the bundled x86_64 Node THROUGH
+          # ROSETTA on an arm64 host. What that proves: the shipped Node and
+          # the shipped binding are both x86_64, agree on ABI, and open a real
+          # database. What it does NOT prove: that the app launches on real
+          # Intel hardware, which no arm64 runner can show. T1-2's "boots the
+          # daemon on an Intel Mac" still wants a human with an Intel Mac.
           "$NODE" -e "new (require('$SQLITE'))(':memory:')" \
             || { echo "::error::the bundled node cannot open a database — ABI mismatch"; exit 1; }
           # And that the daemon itself loads, which the probe above does not say.
           "$NODE" --input-type=module -e "await import('$ENTRY')" >/dev/null 2>&1 \
             || { echo "::error::the bundled daemon entry does not import cleanly"; exit 1; }
           echo "bundled node: $("$NODE" -v); daemon entry imports; better-sqlite3 opens"
+          if [ "${{ matrix.dmg_arch }}" = "x64" ]; then
+            echo "the two runs above executed an x86_64 Node under Rosetta 2 on an arm64 runner"
+          fi
 
       - name: Report signing state (informational)
         run: |
           # Same reason as the verify step: the intermediate .app is gone by
           # now, so read the signature off the copy inside the DMG.
-          DMG=$(ls "$PWD"/src-tauri/target/release/bundle/dmg/Clockwork_*_aarch64.dmg | head -1)
+          DMG=""
+          for f in "$PWD"/${{ matrix.bundle_dir }}/Clockwork_[0-9]*_${{ matrix.dmg_arch }}.dmg; do DMG="$f"; break; done
+          test -f "$DMG" || { echo "::error::no ${{ matrix.dmg_arch }} DMG to report on"; exit 1; }
           MNT=$(mktemp -d)
           hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MNT" >/dev/null
           trap 'hdiutil detach "$MNT" -force >/dev/null 2>&1 || true' EXIT
-          codesign -dvvv "$MNT/Clockwork.app" 2>&1 | grep -E "Authority|Signature|flags" || true
+          # $APP is set HERE. It used to be read from the verify step's shell,
+          # which is a different process, so `spctl` was assessing the empty
+          # string and the `|| true` hid it.
+          APP="$MNT/Clockwork.app"
+          codesign -dvvv "$APP" 2>&1 | grep -E "Authority|Signature|flags" || true
           # Not a gate: without an Apple Developer ID in the repo secrets this
           # is ad-hoc signed and Gatekeeper WILL refuse it on a fresh Mac.
           # Failing here would only stop us shipping the unsigned build we
           # have decided to ship; saying so plainly is the honest half.
           spctl --assess --type execute -vv "$APP" 2>&1 | head -3 || true
 
-      - name: Checksums
-        id: sum
+      - name: Hand the DMG to the release job
+        uses: actions/upload-artifact@v4
+        with:
+          # One artifact per architecture. The release job collects them, and
+          # it is the ONLY job that creates a release or writes a checksums
+          # file — see the note on that job.
+          name: dmg-${{ matrix.dmg_arch }}
+          path: ${{ matrix.bundle_dir }}/Clockwork_*_${{ matrix.dmg_arch }}.dmg
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: one release, both architectures
+    # Both legs, then one publisher. The alternative — each leg creating the
+    # release and uploading its own checksums-sha256.txt — is a race with a
+    # silent loser: two jobs POST /releases, one gets the 422 and falls back to
+    # reading the existing release, and then each overwrites the other's
+    # checksums file with one that names only its own DMG. Whoever finishes
+    # second decides what the release claims to contain. Collecting artifacts
+    # in one job removes the race instead of narrowing it.
+    needs: dmg
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: macos-14
+    steps:
+      - name: Collect both DMGs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dmg-*
+          merge-multiple: true
+          path: dist
+
+      - name: Checksums (one file, both architectures)
+        working-directory: dist
         run: |
-          cd src-tauri/target/release/bundle/dmg
-          # Stable-named copy so the landing page can point at
-          # /releases/latest/download/Clockwork_aarch64.dmg and never go stale.
-          # The versioned file stays: the Homebrew cask pins its sha256 to it.
-          cp Clockwork_*_aarch64.dmg Clockwork_aarch64.dmg
-          shasum -a 256 *.dmg > checksums-sha256.txt
+          # Refuse a half-architecture release. `needs: dmg` already fails
+          # this job when a leg fails, but fail-fast:false plus a leg that
+          # somehow produced no artifact would otherwise publish a release
+          # that silently offers one Mac and not the other.
+          for arch in aarch64 x64; do
+            found=0
+            for f in Clockwork_[0-9]*_"$arch".dmg; do
+              test -f "$f" || continue
+              found=$((found + 1))
+              # Stable-named copy so the landing page can point at
+              # /releases/latest/download/Clockwork_<arch>.dmg and never go
+              # stale. The versioned file stays: the Homebrew cask pins its
+              # sha256 to it, one digest per architecture.
+              cp "$f" "Clockwork_${arch}.dmg"
+            done
+            test "$found" -eq 1 || { echo "::error::expected exactly one versioned ${arch} DMG, found ${found} — refusing to publish a half-architecture release"; exit 1; }
+          done
+          # `--` rather than `./*.dmg`: both stop a leading dash being read as
+          # an option, but `./` would then be baked into every name inside
+          # checksums-sha256.txt, and every previous release published bare
+          # names for `shasum -a 256 -c` to check.
+          shasum -a 256 -- *.dmg > checksums-sha256.txt
           cat checksums-sha256.txt
-          echo "dmg=$(ls Clockwork_[0-9]*_aarch64.dmg)" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release + upload assets (REST, no gh)
-        if: startsWith(github.ref, 'refs/tags/')
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
@@ -163,7 +390,11 @@ jobs:
           \`\`\`
 
           ### Install
-          1. Download Clockwork_${VER}_aarch64.dmg (Apple Silicon; Clockwork_aarch64.dmg is the same file under a stable name)
+          1. Download the DMG for your Mac. Both are built from this tag:
+             - Apple Silicon: Clockwork_${VER}_aarch64.dmg
+             - Intel: Clockwork_${VER}_x64.dmg
+             (Clockwork_aarch64.dmg and Clockwork_x64.dmg are the same two
+             files under stable names, for links that should not go stale.)
           2. Open the DMG and drag Clockwork to Applications
           3. Launch. That is the whole install — the app carries the daemon and
              its own Node, registers its background service so scheduled runs
@@ -171,7 +402,7 @@ jobs:
              pnpm, no Node to install, no token to paste.
 
           ### Requirements
-          - macOS 13+ · Apple Silicon
+          - macOS 13+ · Apple Silicon or Intel
           - git, and one provider CLI you are already logged in to
             (claude/codex/opencode/hermes). These are yours and cannot be bundled;
             \`clockworkd doctor\` names either one when it is missing.
@@ -182,7 +413,10 @@ jobs:
           Privacy & Security on first launch.
 
           ### Known limitations
-          Jobs execute when the machine is awake."
+          Jobs execute when the machine is awake. The Intel build is
+          cross-compiled on an Apple Silicon runner and verified there under
+          Rosetta 2 — its Node and its SQLite binding are x86_64 and open a
+          database, but no Intel Mac has launched the app in CI."
           PAYLOAD=$(jq -n --arg tag "$TAG" --arg name "Clockwork ${TAG}" --arg body "$NOTE" \
             '{tag_name:$tag,name:$name,body:$body,draft:false,prerelease:false}')
           RELEASE=$(curl -sf -X POST \
@@ -192,7 +426,7 @@ jobs:
             curl -sf "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/$TAG")
           ID=$(echo "$RELEASE" | jq -r '.id')
           UPLOAD="https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/$ID/assets?name="
-          cd src-tauri/target/release/bundle/dmg
+          cd dist
           for f in *.dmg checksums-sha256.txt; do
             curl -sf -X POST \
               -H "Authorization: Bearer $GITHUB_TOKEN" \

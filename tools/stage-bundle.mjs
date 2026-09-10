@@ -113,28 +113,79 @@ function main() {
 
   // Tauri finds an external binary by the target triple appended to the name,
   // so the file has to be spelled for the machine this build targets.
-  const triple = execFileSync('rustc', ['-vV'], { encoding: 'utf8' })
+  //
+  // T1-2: that used to be `rustc -vV`'s HOST triple with `process.execPath`
+  // copied beside it — correct only when building for the machine you are on.
+  // GitHub retired the macos-13 Intel runner and every remaining x64 image is
+  // a Larger Runner restricted to Team/Enterprise orgs, so an Intel DMG has to
+  // be cross-compiled from the free arm64 runner. Without an override this
+  // script would have named an arm64 binary `node-x86_64-apple-darwin`: a file
+  // claiming an architecture its bytes do not have, which is a lie inside the
+  // build and worse than shipping nothing.
+  //
+  // CW_TARGET_TRIPLE names the target; CW_STAGE_NODE points at a Node built
+  // for it. Both or neither — a triple with the running Node beside it is
+  // exactly the mismatch above, so that combination is refused.
+  const hostTriple = execFileSync('rustc', ['-vV'], { encoding: 'utf8' })
     .split('\n')
     .find((l) => l.startsWith('host:'))
     ?.slice('host:'.length)
     .trim();
-  if (!triple) throw new Error('could not read the host target triple from `rustc -vV`');
+  if (!hostTriple) throw new Error('could not read the host target triple from `rustc -vV`');
+
+  const wantTriple = process.env.CW_TARGET_TRIPLE?.trim();
+  const wantNode = process.env.CW_STAGE_NODE?.trim();
+  if (Boolean(wantTriple) !== Boolean(wantNode)) {
+    throw new Error(
+      'CW_TARGET_TRIPLE and CW_STAGE_NODE must be set together. '
+        + `Got triple=${wantTriple ?? '(unset)'} node=${wantNode ?? '(unset)'}. `
+        + 'A target triple with the running Node beside it names a binary for an '
+        + 'architecture it is not.',
+    );
+  }
+  const triple = wantTriple || hostTriple;
+  const nodeSrc = wantNode || process.execPath;
+  if (wantNode && !existsSync(nodeSrc)) throw new Error(`CW_STAGE_NODE does not exist: ${nodeSrc}`);
+
   mkdirSync(BINARIES, { recursive: true });
   const nodeDest = path.join(BINARIES, `node-${triple}`);
   rmSync(nodeDest, { force: true });
-  cpSync(process.execPath, nodeDest);
+  cpSync(nodeSrc, nodeDest);
   chmodSync(nodeDest, 0o755);
+
+  // The name promises an architecture; check the bytes deliver it. `file`
+  // reports the Mach-O arch, and a cross-staged binary that silently turned
+  // out to be the host's would otherwise only fail on a user's machine.
+  const arch = triple.startsWith('x86_64') ? 'x86_64' : 'arm64';
+  const machO = execFileSync('file', ['-b', nodeDest], { encoding: 'utf8' }).trim();
+  if (!machO.includes(arch)) {
+    throw new Error(`staged node is "${machO}" but is named node-${triple} — refusing to bundle a mislabelled binary`);
+  }
 
   // Prove the staged pair works together before it is ever bundled. Opening a
   // database rather than requiring the package: better-sqlite3 loads its
   // binding lazily, so a require-only probe exits 0 under a Node whose ABI the
   // compiled .node cannot satisfy (packages/daemon/src/cli.ts says the same).
   const binding = path.join(daemonDest, 'node_modules', 'better-sqlite3');
-  execFileSync(nodeDest, ['-e', `new (require(${JSON.stringify(binding)}))(':memory:')`], { stdio: 'inherit' });
+  // Cross-staged: the probe runs the TARGET's Node, which on an arm64 host
+  // needs Rosetta. It is present on GitHub's arm64 macOS images, so this still
+  // runs in CI — but say which case failed rather than surfacing a bare ENOEXEC.
+  try {
+    execFileSync(nodeDest, ['-e', `new (require(${JSON.stringify(binding)}))(':memory:')`], { stdio: 'inherit' });
+  } catch (e) {
+    const cross = triple !== hostTriple;
+    throw new Error(
+      cross
+        ? `the staged ${triple} node could not open a database on this ${hostTriple} host. `
+          + 'Either Rosetta is absent, or better-sqlite3 was not installed for the target '
+          + `(set npm_config_arch/npm_config_platform before staging). Original: ${e.message}`
+        : e.message,
+    );
+  }
 
   const leftover = countSymlinks(STAGE);
   console.log(`staged ${STAGE}`);
-  console.log(`  node: ${nodeDest} (${process.version}, ${triple})`);
+  console.log(`  node: ${nodeDest} (${machO})${triple !== hostTriple ? ` — CROSS-STAGED from ${hostTriple}` : ''}`);
   console.log(`  symlinks remaining: ${leftover}`);
   console.log(`  better-sqlite3: opens a database under the staged node`);
   if (leftover > 0) {
