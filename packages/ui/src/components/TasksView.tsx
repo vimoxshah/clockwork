@@ -23,7 +23,7 @@
  * daemon would answer, before drawing a button.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { api, type PlanExecutePairT, type RunRowT, type TaskViewT } from '../api';
+import { api, getToken, type PlanExecutePairT, type RunRowT, type TaskViewT } from '../api';
 import { useAsync } from '../useAsync';
 import { Select, SelectValue, SelectTrigger, SelectContent, SelectItem } from './ui/select';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -222,6 +222,39 @@ export function humanNextFire(ts: number, now: Date = new Date()): string {
   return `${new Date(ts).toLocaleDateString(undefined, sameYear ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' })} ${time}`;
 }
 
+/**
+ * T4-8: download a task as a shareable `clockwork.template.v1` file. Hits the
+ * daemon route directly (bearer-token fetch → blob → object URL), the same
+ * reason ProposedEvents' `downloadIcs` does: the shared `api.ts` request
+ * helper (`../api`) parses every response as JSON-then-typed and has no
+ * generic "give me the raw bytes" escape hatch, and `api.ts` is out of this
+ * task's touch scope regardless. Throws (rather than swallowing, unlike
+ * `downloadIcs`) so the caller's `act()` can surface a real failure instead
+ * of a silent no-op — an export the user cannot get is not a minor miss.
+ */
+async function downloadTaskTemplate(taskId: string): Promise<void> {
+  const res = await fetch(`/tasks/${taskId}/export-template`, {
+    headers: { authorization: `Bearer ${getToken()}` },
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}) as Record<string, unknown>);
+    throw new Error(typeof body.error === 'string' ? body.error : `export failed (${res.status})`);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  // Same filename shape as the daemon's own `templateExportFilenameFor`
+  // (templates.ts) — duplicated here rather than read off the response's
+  // Content-Disposition header, the same call ProofOfWorkExport.tsx already
+  // made for the proof-of-work export's filename.
+  a.download = `clockwork-template-${taskId}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 export default function TasksView({ version }: { version: number }): JSX.Element {
   const tasks = useAsync(() => api.tasks(), [version]);
   const queue = useAsync(() => api.queue(), [version]);
@@ -240,6 +273,8 @@ export default function TasksView({ version }: { version: number }): JSX.Element
   const [actionErr, setActionErr] = useState<string | null>(null);
   const [editing, setEditing] = useState<TaskViewT | null>(null);
   const [deleting, setDeleting] = useState<TaskViewT | null>(null);
+  /** T4-8: the "Import template" dialog — a page-level action, not a per-row one. */
+  const [importing, setImporting] = useState(false);
   const [q, setQ] = useState('');
   const [status, setStatus] = useState<StatusFilter>('all');
   const [sort, setSort] = useState<SortKey>('recent');
@@ -370,6 +405,7 @@ export default function TasksView({ version }: { version: number }): JSX.Element
         onToggle={() => void act(() => api.patchTask(t.id, { enabled: !t.enabled, version: t.version }))}
         onEdit={() => setEditing(t)}
         onDelete={() => setDeleting(t)}
+        onExport={() => void act(() => downloadTaskTemplate(t.id))}
         onReviewPlan={() => {
           if (executePair?.planRunId) openRunInInbox(executePair.planRunId);
           else openInbox();
@@ -475,6 +511,12 @@ export default function TasksView({ version }: { version: number }): JSX.Element
               aria-label="Refresh tasks"
             >
               ⟳
+            </button>
+            {/* T4-8: a page-level action (any file, not one row's) — round-trips
+                through the same `/templates/preview` + `/templates/import`
+                routes a row's own "Export template" produces a file for. */}
+            <button className="btn small" onClick={() => setImporting(true)} data-testid="import-template-open">
+              Import template
             </button>
           </div>
 
@@ -601,6 +643,18 @@ export default function TasksView({ version }: { version: number }): JSX.Element
           }}
         />
       )}
+
+      {importing && (
+        <ImportTemplateDialog
+          onClose={() => setImporting(false)}
+          onImported={(msg) => {
+            setImporting(false);
+            setNotice(msg);
+            setTimeout(() => setNotice(null), 4000);
+            tasks.reload();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -615,6 +669,7 @@ function TaskRow({
   onToggle,
   onEdit,
   onDelete,
+  onExport,
   onReviewPlan,
   onViewPair,
 }: {
@@ -629,6 +684,8 @@ function TaskRow({
   onToggle: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  /** T4-8: download this task as a shareable `clockwork.template.v1` file. */
+  onExport: () => void;
   onReviewPlan: () => void;
   onViewPair: () => void;
 }): JSX.Element {
@@ -712,14 +769,16 @@ function TaskRow({
           confirm step is unchanged: `onDelete` still only sets TasksView's
           `deleting` state, which still opens the same `ConfirmDialog`
           (below, TasksView.tsx) — moving the trigger does not touch it. */}
-      <TaskRowMenu taskName={task.name} onDelete={onDelete} />
+      <TaskRowMenu taskName={task.name} onDelete={onDelete} onExport={onExport} />
     </div>
   );
 }
 
 /**
- * The row's overflow menu. Today it holds only Delete — T4-5's Solution names
- * just Delete for demotion, Edit/Pause stay top-level buttons.
+ * The row's overflow menu. T4-5 put Delete here for demotion (Edit/Pause stay
+ * top-level buttons); T4-8 added Export template beside it — sharing a job is
+ * an occasional action like Delete, not an everyday one like Run now, so it
+ * earns a menu slot rather than a fifth top-level button.
  *
  * Hand-rolled rather than the app's Radix `Popover` (already used by
  * ModelSelector/ui/popover.tsx): this test suite avoids opening Radix's
@@ -729,7 +788,15 @@ function TaskRow({
  * suite structurally could not exercise; a plain toggle + outside-click needs
  * no such API and is fully testable with a real DOM click.
  */
-function TaskRowMenu({ taskName, onDelete }: { taskName: string; onDelete: () => void }): JSX.Element {
+function TaskRowMenu({
+  taskName,
+  onDelete,
+  onExport,
+}: {
+  taskName: string;
+  onDelete: () => void;
+  onExport: () => void;
+}): JSX.Element {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -757,6 +824,19 @@ function TaskRowMenu({ taskName, onDelete }: { taskName: string; onDelete: () =>
       </button>
       {open && (
         <div className="row-menu-panel" role="menu" data-testid="row-menu-panel">
+          <button
+            type="button"
+            role="menuitem"
+            className="btn small"
+            aria-label={`Export ${taskName} as a template`}
+            data-testid="row-menu-export"
+            onClick={() => {
+              setOpen(false);
+              onExport();
+            }}
+          >
+            Export template
+          </button>
           <button
             type="button"
             role="menuitem"
@@ -885,6 +965,157 @@ function EditDialog({
           <button className="btn" onClick={onClose}>Cancel</button>
           <button className="btn primary" disabled={busy || !name.trim() || !prompt.trim()} onClick={() => void save()}>
             Save
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface TemplatePreviewFlag {
+  level: 'red' | 'yellow' | 'info';
+  text: string;
+}
+
+/**
+ * T4-8: import ANY `clockwork.template.v1` file — a stranger's, or one just
+ * downloaded from this same screen's own row "Export template" — through the
+ * EXISTING `POST /templates/preview` then `POST /templates/import` routes
+ * (api.ts). There is no special-cased "self-import" shortcut: dropping a
+ * file this screen just exported and dropping a stranger's file here hit the
+ * exact same code path, so the security preview and the arrives-disabled
+ * rule apply identically to both — that IS the round trip T4-8 asks for.
+ *
+ * Raw `fetch` + bearer header, not `../api`'s wrapped client, for the same
+ * touch-scope reason `downloadTaskTemplate` above is:
+ * `packages/ui/src/api.ts` is out of this task's edit set, and its `req<T>`
+ * helper is not exported for a caller outside that file to reuse anyway.
+ */
+function ImportTemplateDialog({
+  onClose,
+  onImported,
+}: {
+  onClose: () => void;
+  onImported: (msg: string) => void;
+}): JSX.Element {
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [parsed, setParsed] = useState<Record<string, unknown> | null>(null);
+  const [flags, setFlags] = useState<TemplatePreviewFlag[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  interface TemplateRouteResponse {
+    error?: string;
+    preview?: { flags?: TemplatePreviewFlag[] };
+  }
+
+  const post = async (path: string, body: unknown): Promise<{ ok: boolean; body: TemplateRouteResponse }> => {
+    const res = await fetch(path, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${getToken()}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const json = await res.json().catch(() => ({}) as TemplateRouteResponse);
+    return { ok: res.ok, body: json as TemplateRouteResponse };
+  };
+
+  /** Selecting a file previews it immediately — nothing is imported until "Import" is clicked. */
+  const onFile = async (file: File): Promise<void> => {
+    setErr(null);
+    setFlags(null);
+    setParsed(null);
+    setFileName(file.name);
+    let json: unknown;
+    try {
+      json = JSON.parse(await file.text());
+    } catch {
+      setErr(`“${file.name}” is not valid JSON.`);
+      return;
+    }
+    try {
+      const { ok, body } = await post('/templates/preview', json);
+      if (!ok) {
+        setErr(typeof body.error === 'string' ? body.error : 'preview failed');
+        return;
+      }
+      setParsed(json as Record<string, unknown>);
+      setFlags(body.preview?.flags ?? []);
+    } catch (e) {
+      setErr(String((e as Error).message ?? e));
+    }
+  };
+
+  const doImport = async (): Promise<void> => {
+    if (!parsed) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const { ok, body } = await post('/templates/import', parsed);
+      if (!ok) {
+        setErr(typeof body.error === 'string' ? body.error : 'import failed');
+        return;
+      }
+      const name = typeof parsed.name === 'string' ? parsed.name : 'template';
+      onImported(`Imported “${name}” — disabled, review the security preview before enabling.`);
+    } catch (e) {
+      setErr(String((e as Error).message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // S-74 client-side courtesy only — the real refusal is server-side: a red
+  // flag still 422s at `/templates/import` (see `securityPreview`,
+  // templates.ts) even if this check were bypassed entirely.
+  const hasRed = flags?.some((f) => f.level === 'red') ?? false;
+
+  return (
+    <div className="dialog-backdrop" onClick={onClose} role="dialog" aria-modal="true">
+      <div className="dialog" onClick={(e) => e.stopPropagation()}>
+        <h3>Import template</h3>
+        <p className="hint" style={{ margin: '0 0 8px' }}>
+          Any clockwork.template.v1 file — your own export, or one someone sent you. It goes through the same
+          security preview as every import, and arrives disabled either way.
+        </p>
+        <label className="f">Template file (.json)</label>
+        <input
+          type="file"
+          accept="application/json,.json"
+          aria-label="Template file"
+          data-testid="import-template-file"
+          disabled={busy}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            e.target.value = '';
+            if (f) void onFile(f);
+          }}
+        />
+        {fileName && <div className="hint">{fileName}</div>}
+        {flags && (
+          <ul data-testid="import-template-flags" style={{ margin: '8px 0', paddingLeft: 18 }}>
+            {flags.map((f, i) => (
+              <li key={i} data-testid={`import-template-flag-${f.level}`}>
+                <strong>{f.level.toUpperCase()}</strong> — {f.text}
+              </li>
+            ))}
+          </ul>
+        )}
+        {err && (
+          <div className="error-banner" role="alert">
+            {err}
+          </div>
+        )}
+        <div className="actions">
+          <button className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="btn primary"
+            disabled={!parsed || hasRed || busy}
+            data-testid="import-template-confirm"
+            onClick={() => void doImport()}
+          >
+            {busy ? 'Importing…' : 'Import (arrives disabled)'}
           </button>
         </div>
       </div>

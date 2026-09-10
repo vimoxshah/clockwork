@@ -4,7 +4,16 @@
  * comment on `COMPOSER_TEMPLATES` there and on `loadBundledTemplates` in
  * `../src/templates.ts` for why a single source of truth was not reachable
  * within that task's touch scope (`packages/ui` has no `resolveJsonModule`,
- * and there is no daemon route serving the bundled files to the browser).
+ * and there was no daemon route serving the bundled files to the browser).
+ *
+ * STILL TRUE AFTER T4-8: `GET /templates/bundled` (api.ts) now serves the
+ * bundled files over HTTP, but `ComposerView.tsx` does not consume it — T4-8's
+ * touch scope was `templates.ts` / `api.ts` / `TasksView.tsx`, not
+ * `ComposerView.tsx`. So `COMPOSER_TEMPLATES` is still a separate,
+ * hand-mirrored copy, and this pin is still the only thing standing between
+ * "shipped" and "silently drifting" for it. A future task that points
+ * ComposerView at the new route instead of its own constant is what would
+ * finally retire this file.
  *
  * An unpinned duplicate is a drift bug with a delay fuse. This is the pin —
  * same idiom as `landing-honesty.test.ts`'s `cards()`: read the two source

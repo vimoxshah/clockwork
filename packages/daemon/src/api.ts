@@ -1273,7 +1273,22 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
   });
 
   // ---- templates (T-203) ----
-  const { securityPreview, validateTemplateApply } = await import('./templates.js');
+  const {
+    securityPreview,
+    validateTemplateApply,
+    loadBundledTemplates,
+    exportTaskTemplate,
+    templateExportFilenameFor,
+    collapseImportPermissionMode,
+    IMPORT_GRANT,
+  } = await import('./templates.js');
+  // T4-8: resolved the same package/skill-pack-relative-to-compiled-source
+  // convention `makeSkillResolver(...)` gets from main.ts:467 — api.ts sits
+  // beside main.ts at the same depth in both src/ and the compiled dist/, so
+  // this repo-root-relative path is correct in either location. main.ts
+  // itself is out of this task's touch scope, so the resolution is done here
+  // rather than threaded through `deps`.
+  const bundledTemplatesDir = path.resolve(import.meta.dirname, '../../../resources/templates');
 
   /** S-74: preview WITHOUT importing — full prompt/permissions/budget diff vs defaults. */
   /**
@@ -1342,15 +1357,15 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
         prompt: String(tpl.prompt ?? ''),
         profileId: undefined,
         repoPath: undefined, // S-75: user re-picks at apply
-        permissionMode: tpl.permissionMode === 'plan' ? 'plan' : 'acceptEdits',
-        budget: { maxUsd: 2, maxTurns: 50, timeoutSec: 3600 },
-        schedule: { kind: 'queue', tz: 'UTC' }, // imported = not scheduled until reviewed
-        missedPolicy: 'run-late',
+        permissionMode: collapseImportPermissionMode(tpl.permissionMode),
+        budget: { ...IMPORT_GRANT.budget },
+        schedule: { ...IMPORT_GRANT.schedule }, // imported = not scheduled until reviewed
+        missedPolicy: IMPORT_GRANT.missedPolicy,
         missedWindowSec: 21_600,
-        overlapPolicy: 'skip',
+        overlapPolicy: IMPORT_GRANT.overlapPolicy,
         retryOnTransient: false,
         context: { files: [] },
-        delivery: { osNotify: true },
+        delivery: { ...IMPORT_GRANT.delivery },
       },
       null,
       null,
@@ -1359,6 +1374,35 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     deps.db.prepare('UPDATE tasks SET enabled=0 WHERE id=?').run(created.id);
     broadcast({ type: 'task.changed', taskId: created.id, at: Date.now() });
     return reply.code(201).send({ task: view(created), flags: preview.flags });
+  });
+
+  /**
+   * T4-8: export a task as a shareable template. `exportTaskTemplate`
+   * (templates.ts) masks the prompt and declares only what `/templates/import`
+   * above will actually grant — round-tripping the downloaded file through
+   * `POST /templates/preview` then `POST /templates/import` applies the exact
+   * same security preview and disabled-on-arrival rule to it as to a
+   * stranger's file, because it IS the same schema through the same routes.
+   */
+  app.get('/tasks/:id/export-template', async (req, reply) => {
+    const row = tasks.get((req.params as any).id);
+    if (!row) return reply.code(404).send({ error: 'not_found' });
+    const tpl = exportTaskTemplate(row);
+    audit('task.export_template', 'task', row.id, {});
+    return reply
+      .header('Content-Type', 'application/json; charset=utf-8')
+      .header('Content-Disposition', `attachment; filename="${templateExportFilenameFor(row.id)}"`)
+      .send(JSON.stringify(tpl, null, 2));
+  });
+
+  /**
+   * T4-8: the five canonical templates under resources/templates/, reachable
+   * over HTTP now instead of only by the loader and a test — see the doc
+   * comment on `loadBundledTemplates` (templates.ts) for what this does and
+   * does not change about ComposerView.tsx's separate hand-mirrored copy.
+   */
+  app.get('/templates/bundled', async () => {
+    return { templates: loadBundledTemplates(bundledTemplatesDir) };
   });
 
   /** S-75: apply with variable fill + validation. */

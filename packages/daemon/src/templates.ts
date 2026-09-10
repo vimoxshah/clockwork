@@ -5,6 +5,7 @@
  */
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { maskSecrets } from '@clockwork/runner';
 import type { DB } from './db.js';
 
 export interface TemplateFile {
@@ -19,7 +20,7 @@ export interface TemplateFile {
   schedule?: unknown;
   missedPolicy?: string;
   overlapPolicy?: string;
-  /** Declarative only — `/templates/import` (api.ts) hardcodes `{ osNotify: true }` regardless, same posture as budget/schedule below. */
+  /** Declarative only — `/templates/import` (api.ts) hardcodes `{ osNotify: true }` regardless, same posture as budget/schedule below. T4-8: that hardcoded grant is now `IMPORT_GRANT.delivery` below, the single source both directions read from. */
   delivery?: { osNotify: boolean };
 }
 
@@ -36,20 +37,22 @@ export interface TemplateFile {
  * Sorted by filename for a deterministic list (`readdirSync` order is not
  * guaranteed across platforms).
  *
- * STAGED, NOT WIRED: as of T4-7 this function has NO production caller —
- * `grep -rn loadBundledTemplates packages/*\/src` finds only this
- * definition. Nothing in the running daemon reads resources/templates/ yet;
- * `api.ts` (owned by a later wave this task may not touch) has no route that
- * serves a bundled template to a client. T4-8 ("Export a template, share a
- * job") is the named consumer — it already owns both `templates.ts` and
- * `api.ts` and is the natural place to add a `GET /templates` (or similar)
- * route backed by this function. Until that wave lands, the five JSON files
- * are reachable only by this loader and by the composer's separate,
- * hand-mirrored `COMPOSER_TEMPLATES` copy (ComposerView.tsx) — the two are
- * kept honest against each other by
- * `packages/daemon/test/templates-composer-sync.test.ts`, which is the thing
- * actually standing between "shipped" and "staged and silently drifting" for
- * as long as this loader has no caller.
+ * WIRED (T4-8): `GET /templates/bundled` (api.ts) now calls this function on
+ * every request (no caching — five small files), so the five JSON files are
+ * reachable over the daemon's own HTTP API, not merely by this loader and a
+ * test. `packages/daemon/test/templates-bundled-route.test.ts` proves the
+ * route itself, over `app.inject`, the same way `templates-library.test.ts`
+ * proves `/templates/preview` + `/templates/import`.
+ *
+ * ComposerView.tsx's quick-fill list is UNCHANGED by this: T4-8's touch scope
+ * was `templates.ts` / `api.ts` / `TasksView.tsx`, not `ComposerView.tsx`, so
+ * the composer still carries its own hand-mirrored `COMPOSER_TEMPLATES`
+ * constant rather than fetching this route. That means
+ * `packages/daemon/test/templates-composer-sync.test.ts` is NOT made
+ * redundant by this route — it remains the only thing standing between
+ * "shipped" and "silently drifting" for the composer's copy. A future task
+ * that points ComposerView at `GET /templates/bundled` instead of its own
+ * constant is what would finally retire that sync test.
  */
 export function loadBundledTemplates(dir: string): TemplateFile[] {
   if (!existsSync(dir)) return [];
@@ -66,6 +69,86 @@ export function loadBundledTemplates(dir: string): TemplateFile[] {
     }
   }
   return out;
+}
+
+/**
+ * T4-8: the "hardcoded power" `/templates/import` (api.ts) grants an
+ * imported task, regardless of what the template file itself declares for
+ * these fields. Single source of truth for BOTH directions — the import
+ * route applies exactly this, and `exportTaskTemplate` below declares
+ * exactly this, so the two can never drift apart and a template can never
+ * end up claiming more than import will actually honour (a file that says
+ * "$50 budget" and silently becomes "$2" the moment it is imported). Values
+ * mirror what the route already hardcoded before this constant existed:
+ * `TaskCreate`'s own safe defaults (shared/schemas.ts) for budget, a
+ * queue/no-schedule for "not scheduled until reviewed", and `run-late`/
+ * `skip`/`osNotify: true` as the least-surprising defaults for a task
+ * nobody has reviewed yet.
+ */
+export const IMPORT_GRANT = {
+  budget: { maxUsd: 2, maxTurns: 50, timeoutSec: 3600 },
+  schedule: { kind: 'queue', tz: 'UTC' },
+  missedPolicy: 'run-late',
+  overlapPolicy: 'skip',
+  delivery: { osNotify: true },
+} as const;
+
+/**
+ * `/templates/import`'s own permission-mode collapse, pulled out so export
+ * and import can never disagree about what a given mode becomes: `'plan'`
+ * passes through, every other value (including the schema-legal but
+ * UI-unreachable `'default'`, and any invented string a hand-edited or
+ * stranger's file might carry) becomes `'acceptEdits'`. `bypassPermissions`
+ * is not a case here — `permissionModes` (shared/schemas.ts) does not offer
+ * it in H1 at all, and `securityPreview` below independently red-flags it if
+ * a file claims it anyway.
+ */
+export function collapseImportPermissionMode(mode: unknown): 'plan' | 'acceptEdits' {
+  return mode === 'plan' ? 'plan' : 'acceptEdits';
+}
+
+/**
+ * T4-8: build a shareable template from a task row. The prompt is masked
+ * with the same `maskSecrets` proof-of-work.ts uses for run reports — an
+ * exported file is something the user hands to someone else, same posture:
+ * masking is not optional and has no flag.
+ *
+ * Every "hardcoded power" field (budget/schedule/missedPolicy/overlapPolicy/
+ * delivery) is declared from `IMPORT_GRANT` above, NEVER the task's live
+ * values — see that constant's doc comment for why declaring the task's
+ * real budget would be a lie the moment anyone imports the file back.
+ * `permissionMode` goes through the same `collapseImportPermissionMode`
+ * import itself applies, so what the file declares is always exactly what
+ * re-importing it would produce, for every legal value.
+ *
+ * `repoPath`/`baseBranch`/`profileSlug` are omitted on purpose:
+ * `/templates/import` discards all three unconditionally (S-75 — repoPath is
+ * re-picked, no profile is ever granted on import), repoPath/baseBranch are
+ * the EXPORTING user's own filesystem detail with no meaning to a recipient,
+ * and profileSlug — even though this runs server-side and could resolve one
+ * from `row.profile_id` — would assert a capability import throws away
+ * anyway and that the recipient's install may not even ship. That is
+ * deliberately different from the five curated files under
+ * resources/templates/, which DO declare profileSlug: those are the
+ * profile's own canonical advertisement, not a live user task.
+ */
+export function exportTaskTemplate(task: { name: string; prompt: string; permission_mode: string }): TemplateFile {
+  return {
+    schema: 'clockwork.template.v1',
+    name: task.name,
+    prompt: maskSecrets(task.prompt),
+    permissionMode: collapseImportPermissionMode(task.permission_mode),
+    budget: { ...IMPORT_GRANT.budget },
+    schedule: { ...IMPORT_GRANT.schedule },
+    missedPolicy: IMPORT_GRANT.missedPolicy,
+    overlapPolicy: IMPORT_GRANT.overlapPolicy,
+    delivery: { ...IMPORT_GRANT.delivery },
+  };
+}
+
+/** Deterministic download filename for a task's template export (T4-8) — same idiom as proofFilenameFor/icsFilenameFor. */
+export function templateExportFilenameFor(taskId: string): string {
+  return `clockwork-template-${taskId}.json`;
 }
 
 /** S-74 security preview: what differs from safe defaults; bypassPermissions flagged red. */
