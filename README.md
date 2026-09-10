@@ -108,8 +108,24 @@ REPEAT  Make it weekly. Search your retained run history.
   paid route: `GET /policies` and `GET /audit` answer **402** on the free tier,
   which is the tier every install runs at today, and neither has a screen. The
   retention sweep runs on a cadence and at startup (default 90 days / 1000 runs
-  per task, `packages/daemon/src/retention-audit.ts`) and has no screen either.
+  per task, `packages/daemon/src/retention-audit.ts`), and **Settings › Retention**
+  now shows what the next sweep will delete and when, with both numbers
+  editable behind a confirmation that names them.
   `requireApprovalOverUsd` is stored and validated but nothing consumes it yet
+- 👀 **Watch it work** — a live output tail while a run executes, with cost and
+  turns ticking beside it, and a catch-up read so a tab opened mid-run is not
+  blank. An approval raised while you are watching is answerable in the same view
+- 🌅 **The morning after** — the Inbox opens on a digest when runs are unread:
+  what needs you, what did not finish cleanly, what it spent, how many branches
+  are waiting. Counted the way the Analytics tab counts, deliberately, so the
+  two cannot disagree
+- 🍎 **A menu-bar item** — next run, running count, and a badge you cannot miss
+  when an approval is waiting, while the window is shut. Closing the window hides
+  it; quitting still leaves the scheduler running, because launchd owns the daemon
+- 🧰 **Five jobs you can book without typing a prompt** — Monday dependency
+  triage, flaky-test sweep, Friday docs-drift check, morning repo-health digest,
+  pre-release changelog draft. Export any task as a template and share it; import
+  puts it through the same security preview a stranger's file gets
 - 📊 **Cost & reliability analytics** — spend by task/provider/day with
   optimization suggestions that surface money-burning failures. Runs still in
   flight count as runs and as spend, are reported separately, and are excluded
@@ -339,12 +355,24 @@ restart banner when the running daemon and the one on disk disagree.
 
 ## 🚀 First run in 60 seconds
 
-1. Open Clockwork → **+ New task**
-2. Name it "Nightly dependency triage", pick the **Dep Surgeon** profile
-3. Choose your repo, set a $1 cap, leave provider = Claude Code
-4. Schedule: weekly, Monday 07:00 — or just hit **ASAP**
-5. Come back later: the report is in your **Inbox** — branch, diffstat, cost.
-   Record a verdict while you are there; several features read it.
+Open Clockwork and press **Run a sample job now**. That is the whole procedure.
+
+Clockwork points the read-only **Code Reviewer** at the first git repository it
+can find — one you have booked work against before, one it cloned for you, or
+the first one the folder picker shows in your home folder — caps the run at
+$0.50, starts it immediately, and opens the live view so you watch it work. If
+it finds no repository it says so, names where it looked, and offers a small
+bundled snippet instead; it never guesses a folder.
+
+**That first run cannot change anything.** It runs in permission mode `plan`,
+inside a throwaway worktree, under a sandbox profile that mounts your
+repository read-only — three separate reasons, none of them a paragraph in a
+prompt.
+
+Prefer to drive it yourself? **+ New task** takes a name, a profile, a repo, a
+cap and a schedule — or start from one of five shipped templates. Either way
+the report lands in your **Inbox** with the branch, the diffstat and the cost.
+Record a verdict while you are there; several features read it.
 
 ## ⌨️ Keyboard shortcuts
 
@@ -352,12 +380,11 @@ restart banner when the running daemon and the one on disk disagree.
 |---|---|
 | `⌘K` | Command palette (navigate, themes, create) |
 | `⌘N` | New task |
-| `⌘1–4` | Calendar / Inbox / Tasks / Agents |
+| `⌘1–5` | Calendar / Inbox / Tasks / Agents / Analytics |
 | `⌘,` | Settings |
 | `/` | Focus inbox search |
 
-Analytics sits between Tasks and **+ New task** in the tab bar and has no
-shortcut of its own. Full list: [docs/SHORTCUTS.md](docs/SHORTCUTS.md)
+Full list: [docs/SHORTCUTS.md](docs/SHORTCUTS.md)
 
 ## 🏗 Architecture
 
@@ -466,25 +493,33 @@ Open, reproducible, and written down here rather than discovered by you:
   `FREQ=HOURLY;INTERVAL=2;BYHOUR=3`, whose hours stay even — never terminates
   inside rrule 2.8.1's skip loop. It behaved that way before the anchor work and
   it behaves that way after, because the reachable residues depend only on
-  `gcd(INTERVAL, 24)`. `guardSchedule` now refuses exactly this shape when a
-  task is saved, with an `unreachable` verdict — but the tick path that fires
-  scheduled runs is deliberately left unguarded, so a hazardous row saved
-  before the guard existed can still hang.
-- **Three older capabilities still have no screen.** Retention is API-only
-  (`PUT /retention`), an outbound webhook's URL is API-only (a task's or
-  profile's delivery config), and **container execution is a probe, not a
-  target**: `GET /targets` reports whether Docker is available and nothing
-  dispatches a run to it. All three have a working setter or nothing to set;
-  none registers a surface, which is why the capability matrix leaves them
-  unticked. **Quiet hours is no longer one of them.** `DeliveryConfig` carries
-  a `quietHours` key, Settings has a card beside Office hours, and the
-  `quiet_hours` surface is registered. It also *works* now, which it did not
-  before: the deferral used to pre-claim the resume instant, which made the
-  resume tick's own claim a no-op — so a deferred recurring schedule stuck at
-  that instant and never fired again, and a deferred one-shot was dropped
-  outright. ADR-030 records
-  the repair, and the reason nobody caught it earlier is that ADR-030 had never
-  been written.
+  `gcd(INTERVAL, 24)`. `guardSchedule` refuses exactly this shape when a
+  task is saved, with an `unreachable` verdict, and a one-time sweep at daemon
+  startup (`sweepHazardousSchedules`, `packages/daemon/src/main.ts`) runs the
+  same check over every enabled recurring row saved before that guard existed:
+  each one it refuses is disabled and gets an inbox item naming the rule and the
+  fix, so a database carrying one boots into a stopped task rather than a wedged
+  daemon. The tick path itself is still deliberately unguarded, and that is
+  where the residue now sits — a hazardous rule written straight into SQLite
+  while the daemon is running stays live until the next restart sweeps it.
+- **One older capability still has no screen: container execution.**
+  `GET /targets` reports whether Docker is available and nothing dispatches a
+  run to it — a probe, not a target, with nothing to set. It registers no
+  surface, which is why the capability matrix leaves it unticked. **The other
+  three are no longer among them.** `DeliveryConfig` carries a `quietHours` key
+  (`{ startHour, endHour }`) and Settings has a Quiet hours card beside Office
+  hours — and it *works* now: the deferral used to pre-claim the resume
+  instant, which made the resume tick's own claim a no-op, so a deferred
+  recurring schedule stuck at that instant and never fired again and a deferred
+  one-shot was dropped outright (ADR-030). Retention has a card showing what the
+  next sweep will delete and when, with both numbers editable behind a
+  confirmation that names them — and its free-tier cap used to sit *below* the
+  90-day window every install ships with, so `PUT /retention` refused the value
+  it had just handed you. An outbound webhook's URL is a field in the composer's
+  delivery block. That URL is settable at task creation only: `view()` does not
+  return a task's current `delivery` and `patch()` replaces it wholesale rather
+  than merging, so editing one afterwards would drop the rest of that task's
+  delivery config. A profile's delivery config is still API-only.
 - **Keep-awake holds the Mac awake, but cannot wake it.** The daemon arms a
   macOS power assertion (`caffeinate`) for a run's budgeted window and releases
   it afterwards. It declines on battery unless you set
@@ -581,11 +616,21 @@ An overclaim here is a red build, not a marketing choice.
 - [ ] Chaining v2 (fan-in/out DAGs)
 - [ ] RRULE expansion for external calendars — `packages/daemon/src/ics.ts`
       emits one `(recurring)` base occurrence per recurring event instead
+- [x] Manual check-for-updates — a click, never a timer, from the menu bar and
+      from Settings; the four outcomes are stated and a failed check never
+      reports "up to date". No automatic or signed update path exists
+- [x] A live run tail, a morning digest, a menu-bar item, five bookable
+      templates and template export
+- [x] An accessibility and keyboard sweep that runs in CI and can fail — both
+      audits previously exited 0 unconditionally, and one was scoped to a CSS
+      class the app had stopped using
 - [x] Per-day calendar aggregation and a bounded `/calendar` payload —
       `GET /calendar?group=day` returns one row per non-empty day with its
       outcome breakdown, both modes cap at 5,000 rows per collection, and every
       response reports the bound it applied and whether it hit it
-- [ ] Signed & notarized desktop builds
+- [ ] Signed & notarized desktop builds — needs an Apple Developer
+      certificate ($99/yr); the release workflow already imports one when
+      `APPLE_CERT_P12` is present and ad-hoc signs when it is not
 - [ ] Kubernetes / cloud execution targets beyond Docker
 - [ ] SSO / SCIM for enterprise deployments
 
