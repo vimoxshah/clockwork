@@ -487,6 +487,23 @@ label.f { display: block; color: var(--muted); font-size: 12px; margin: 12px 0 4
 
 .empty { color: var(--dim); text-align: center; padding: 48px 0; }
 .section-title { margin: 0 0 8px; font-size: 15px; }
+/* The Finished disclosure IS a section-title, but a <button> — reset the
+   button chrome back to plain text so opening it does not look like a new
+   control appeared. */
+.section-title.disclosure { display: flex; align-items: center; gap: 6px; background: none; border: none; padding: 0; cursor: pointer; color: var(--fg); font: inherit; font-weight: 600; }
+.section-title.disclosure:hover { color: var(--accent); }
+
+/* Tasks row overflow menu (T4-5): demotes Delete out of the row's flat
+   button line so it no longer sits at Run now's visual weight. Hand-rolled,
+   not the app's Radix Popover — see TaskRowMenu's own comment for why. */
+.row-menu { position: relative; }
+.row-menu-panel {
+  position: absolute; top: 100%; right: 0; margin-top: 4px; z-index: 10;
+  display: flex; flex-direction: column; min-width: 120px; padding: 4px;
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: 9px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+.row-menu-panel .btn { display: flex; width: 100%; justify-content: flex-start; }
 
 /* dialog */
 .dialog-backdrop {

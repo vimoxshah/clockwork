@@ -22,8 +22,8 @@
  * The pair list is fetched alongside the tasks and the row asks it what the
  * daemon would answer, before drawing a button.
  */
-import { useEffect, useMemo, useState } from 'react';
-import { api, type PlanExecutePairT, type TaskViewT } from '../api';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { api, type PlanExecutePairT, type RunRowT, type TaskViewT } from '../api';
 import { useAsync } from '../useAsync';
 import { Select, SelectValue, SelectTrigger, SelectContent, SelectItem } from './ui/select';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -35,6 +35,7 @@ import RepoJobsSection from './RepoJobsSection';
 import { REPO_JOBS_SURFACE } from './RepoJobsSection';
 import { openInbox, openRunInInbox } from './workforce-common';
 import { registerFeatureSurface } from './featureSurfaces';
+import { chipFor, stateLabel } from '../lib/runState';
 
 /**
  * Chaining is created and edited here (EditDialog's "Chain after" picker,
@@ -136,12 +137,105 @@ export function executeHalfGate(pair: PlanExecutePairT): {
   }
 }
 
+/**
+ * T4-5: the list is meant to read like a schedule — grouped by shape, not one
+ * flat pile. The proof of recurrence is "has run AND still has a next fire":
+ * a one-off's `nextFire` goes null the moment its one occurrence runs (daemon
+ * scheduler.ts NULLs it for `kind === 'once'` right after firing), so a task
+ * that has run at least once and STILL carries a non-null `nextFire` cannot
+ * be a one-off — only a recurring schedule reaches that combination. A
+ * schedule that has never fired is indistinguishable from a one-off until its
+ * first run lands, so a brand-new recurring task is filed as One-off for
+ * exactly one run and reclassifies itself afterward. That is an honest,
+ * self-correcting reading of the two fields the daemon actually hands back
+ * (`nextFire` nullness, run history) — there is no `schedule.kind` on
+ * TaskViewT to read directly (daemon api.ts `view()` strips it), and this
+ * view may not add one.
+ *
+ * `nextFire` is read from the `schedules` row regardless of `enabled`
+ * (daemon api.ts: `GET /tasks` and `PATCH /tasks/:id` both do
+ * `tasks.scheduleFor(id).next_fire`), and a plain `{enabled}` PATCH never
+ * touches that row (repo.ts `patch()` only writes `next_fire` inside
+ * `if (input.schedule)`) — so pausing a recurring task does NOT null its
+ * `nextFire`. That is what keeps a paused-but-recurring task out of
+ * Finished: it still has a future fire on file, it just will not be acted on
+ * while paused.
+ */
+export type TaskGroup = 'recurring' | 'oneOff' | 'finished';
+
+/**
+ * `hasRun` is "has at least one TERMINAL run", not "has any run row at all" —
+ * a task whose only run is still in flight has not produced an outcome yet,
+ * so it reads as not-yet-run rather than as finished.
+ */
+export function taskBucket(task: Pick<TaskViewT, 'nextFire'>, hasRun: boolean): TaskGroup {
+  if (!hasRun) return 'oneOff';
+  return task.nextFire != null ? 'recurring' : 'finished';
+}
+
+/** Run states that have not produced a result yet — the opposite of `chipFor`'s 'running'/'needs-you' buckets. */
+export function isTerminalRun(state: string): boolean {
+  const c = chipFor(state);
+  return c !== 'running' && c !== 'needs-you';
+}
+
+/**
+ * The two most recent TERMINAL runs for a task, cost compared. `runs` must
+ * already be newest-first (GET /runs is: repo.ts orders `DESC`) — this does
+ * not re-sort. Fewer than two terminal runs means there is nothing to trend
+ * against yet, so the element is omitted rather than drawn with one point.
+ */
+export function costTrendFor(
+  runsNewestFirst: Array<Pick<RunRowT, 'cost_usd'>>,
+): { direction: 'up' | 'down' | 'flat'; deltaUsd: number } | null {
+  if (runsNewestFirst.length < 2) return null;
+  const [latest, prev] = runsNewestFirst;
+  const deltaUsd = latest.cost_usd - prev.cost_usd;
+  return { direction: deltaUsd > 0 ? 'up' : deltaUsd < 0 ? 'down' : 'flat', deltaUsd: Math.abs(deltaUsd) };
+}
+
+/** A repo path's last segment — the readable part; the full path still lives in `title` for hover. */
+export function repoBasename(path: string): string {
+  const trimmed = path.replace(/\/+$/, '');
+  const idx = trimmed.lastIndexOf('/');
+  return idx >= 0 ? trimmed.slice(idx + 1) : trimmed;
+}
+
+/**
+ * Next fire in human words instead of a raw locale timestamp (T4-5). Mirrors
+ * the shape of `App.tsx`'s `formatNextFire` (today = bare time, this week =
+ * weekday, further = a date) but is a separate function, not an import of
+ * it: App.tsx imports TasksView, so TasksView importing back from App.tsx
+ * would be a circular import — and pulling the shared logic out into its own
+ * module would mean editing App.tsx, which is outside this task's touch set.
+ * `now` defaults to the real clock and takes an override so tests can pin a
+ * moment, the same shape `formatNextFire` uses.
+ */
+export function humanNextFire(ts: number, now: Date = new Date()): string {
+  const time = new Date(ts).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const midnight = (d: Date): number => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((midnight(new Date(ts)) - midnight(now)) / 86_400_000);
+  if (days === 0) return `today ${time}`;
+  if (days === 1) return `tomorrow ${time}`;
+  if (days > 1 && days < 7) return `${new Date(ts).toLocaleDateString(undefined, { weekday: 'long' })} ${time}`;
+  const sameYear = new Date(ts).getFullYear() === now.getFullYear();
+  return `${new Date(ts).toLocaleDateString(undefined, sameYear ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' })} ${time}`;
+}
+
 export default function TasksView({ version }: { version: number }): JSX.Element {
   const tasks = useAsync(() => api.tasks(), [version]);
   const queue = useAsync(() => api.queue(), [version]);
   // F1: fetched HERE, not inside the pairs section — the task rows need the
   // same answer to decide whether Run now / Enable can succeed at all.
   const pairs = useAsync(() => api.planExecuteList(), [version]);
+  // T4-5: last outcome, cost trend and the Recurring/One-off/Finished split
+  // all read run HISTORY, which TaskViewT does not carry. `api.runs` already
+  // exists and is already called this way, unfiltered and batched, by
+  // InboxView (`limit: 200`) and TimesheetsPanel (`limit: 1000`) — one fetch
+  // grouped by task_id client-side, not one request per row. 1000 is the
+  // daemon's own cap (repo.ts RunRepo.list: `Math.min(filter.limit ?? 200,
+  // 1000)`).
+  const runs = useAsync(() => api.runs({ limit: 1000 }), [version]);
   const [notice, setNotice] = useState<string | null>(null);
   const [actionErr, setActionErr] = useState<string | null>(null);
   const [editing, setEditing] = useState<TaskViewT | null>(null);
@@ -150,6 +244,8 @@ export default function TasksView({ version }: { version: number }): JSX.Element
   const [status, setStatus] = useState<StatusFilter>('all');
   const [sort, setSort] = useState<SortKey>('recent');
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  /** Finished starts collapsed (T4-5) — it is the "already happened" pile, not today's work. */
+  const [finishedOpen, setFinishedOpen] = useState(false);
   const [section, setSection] = useState<Section>(() => {
     const saved = localStorage.getItem(SECTION_KEY) as Section | null;
     return saved && SECTIONS.some((s) => s.key === saved) ? saved : 'tasks';
@@ -192,6 +288,35 @@ export default function TasksView({ version }: { version: number }): JSX.Element
     return rows;
   }, [tasks.data, q, status, sort]);
 
+  /**
+   * task_id → its TERMINAL runs, newest first. GET /runs is already ordered
+   * `DESC` (daemon repo.ts), so any per-task subsequence of it stays
+   * newest-first without a re-sort. A run still in flight proves nothing
+   * about the last OUTCOME, so it is left out here on purpose.
+   */
+  const runsByTask = useMemo(() => {
+    const m = new Map<string, RunRowT[]>();
+    for (const r of runs.data ?? []) {
+      if (!isTerminalRun(r.state)) continue;
+      const list = m.get(r.task_id);
+      if (list) list.push(r);
+      else m.set(r.task_id, [r]);
+    }
+    return m;
+  }, [runs.data]);
+
+  /** Recurring, then One-off, then Finished (T4-5) — see `taskBucket` for the rule. */
+  const grouped = useMemo(() => {
+    const recurring: TaskViewT[] = [];
+    const oneOff: TaskViewT[] = [];
+    const finished: TaskViewT[] = [];
+    for (const t of filtered) {
+      const bucket = taskBucket(t, (runsByTask.get(t.id)?.length ?? 0) > 0);
+      (bucket === 'recurring' ? recurring : bucket === 'oneOff' ? oneOff : finished).push(t);
+    }
+    return { recurring, oneOff, finished };
+  }, [filtered, runsByTask]);
+
   const act = async (fn: () => Promise<unknown>, okMsg?: string): Promise<void> => {
     setActionErr(null);
     try {
@@ -202,6 +327,9 @@ export default function TasksView({ version }: { version: number }): JSX.Element
       }
       tasks.reload();
       queue.reload();
+      // A run just landed or changed — the outcome chip / cost trend it feeds
+      // would otherwise stay stale until the next unrelated reload.
+      runs.reload();
     } catch (e) {
       setActionErr(String((e as Error).message ?? e));
     }
@@ -218,7 +346,46 @@ export default function TasksView({ version }: { version: number }): JSX.Element
   // A FAILED lookup is different from a slow one: hiding every action because
   // one request failed is worse than the bug being fixed, so the rows render
   // and the banner below says plainly what could not be checked.
+  //
+  // `runs` is deliberately NOT in this gate (S-review/advisor): it only
+  // feeds the outcome chip, the cost trend and the Recurring/One-off split,
+  // none of which the row NEEDS to draw safely — unlike the pair lookup,
+  // nothing here decides whether a button would 409. A slow or failed
+  // history fetch degrades those extras, it does not withhold the row.
   const rowsReady = !tasks.loading && !tasks.error && !pairs.loading;
+
+  const renderRow = (t: TaskViewT): JSX.Element => {
+    const executePair = byExecuteTask.get(t.id) ?? null;
+    const planPair = byPlanTask.get(t.id) ?? null;
+    const taskRuns = runsByTask.get(t.id) ?? [];
+    return (
+      <TaskRow
+        key={t.id}
+        task={t}
+        role={executePair ? 'execute' : planPair ? 'plan' : 'plain'}
+        pair={executePair ?? planPair}
+        lastOutcome={taskRuns[0] ?? null}
+        costTrend={costTrendFor(taskRuns)}
+        onRunNow={() => void act(() => api.runNow(t.id), `Run queued for “${t.name}” — watch the calendar or inbox.`)}
+        onToggle={() => void act(() => api.patchTask(t.id, { enabled: !t.enabled, version: t.version }))}
+        onEdit={() => setEditing(t)}
+        onDelete={() => setDeleting(t)}
+        onReviewPlan={() => {
+          if (executePair?.planRunId) openRunInInbox(executePair.planRunId);
+          else openInbox();
+        }}
+        onViewPair={() => setSection('pairs')}
+      />
+    );
+  };
+
+  // "Show N more" paginates Recurring then One-off, in that order — the two
+  // groups a reader sees without opening anything. Finished stays outside
+  // this budget entirely: it is collapsed by default, and once opened it
+  // shows in full rather than adding a second, nested "show more".
+  const recurringVisible = grouped.recurring.slice(0, visibleCount);
+  const oneOffVisible = grouped.oneOff.slice(0, Math.max(0, visibleCount - grouped.recurring.length));
+  const activeTotal = grouped.recurring.length + grouped.oneOff.length;
 
   return (
     <div className="tasks-page">
@@ -302,7 +469,11 @@ export default function TasksView({ version }: { version: number }): JSX.Element
                 ? `${filtered.length} of ${tasks.data?.length ?? 0}`
                 : `${filtered.length} task${filtered.length === 1 ? '' : 's'}`}
             </span>
-            <button className="btn small" onClick={() => { tasks.reload(); queue.reload(); pairs.reload(); }} aria-label="Refresh tasks">
+            <button
+              className="btn small"
+              onClick={() => { tasks.reload(); queue.reload(); pairs.reload(); runs.reload(); }}
+              aria-label="Refresh tasks"
+            >
               ⟳
             </button>
           </div>
@@ -314,6 +485,15 @@ export default function TasksView({ version }: { version: number }): JSX.Element
               Couldn’t check plan-then-execute pairs: {pairs.error}. Rows are shown without that check, so on the
               execute half of a pair “Run now” and “Enable” may be refused.
               <div><button className="btn small" style={{ marginTop: 8 }} onClick={pairs.reload}>Retry</button></div>
+            </div>
+          )}
+          {/* Quiet, not `role="alert"` (S-review/advisor): this is a soft
+              degradation — rows still render, they just carry no outcome
+              chip, no cost trend, and read as One-off until history loads. */}
+          {runs.error && (
+            <div className="hint" data-testid="runs-unknown">
+              Couldn’t load run history: {runs.error}. Last-outcome, cost trend and the Recurring/One-off split are
+              unavailable until this loads. <button className="btn small" onClick={runs.reload}>Retry</button>
             </div>
           )}
 
@@ -359,36 +539,37 @@ export default function TasksView({ version }: { version: number }): JSX.Element
             </div>
           )}
 
-          {/* ---- list ---- */}
-          {rowsReady && (
-            <div className="tasklist">
-              {filtered.slice(0, visibleCount).map((t) => {
-                const executePair = byExecuteTask.get(t.id) ?? null;
-                const planPair = byPlanTask.get(t.id) ?? null;
-                return (
-                  <TaskRow
-                    key={t.id}
-                    task={t}
-                    role={executePair ? 'execute' : planPair ? 'plan' : 'plain'}
-                    pair={executePair ?? planPair}
-                    onRunNow={() => void act(() => api.runNow(t.id), `Run queued for “${t.name}” — watch the calendar or inbox.`)}
-                    onToggle={() => void act(() => api.patchTask(t.id, { enabled: !t.enabled, version: t.version }))}
-                    onEdit={() => setEditing(t)}
-                    onDelete={() => setDeleting(t)}
-                    onReviewPlan={() => {
-                      if (executePair?.planRunId) openRunInInbox(executePair.planRunId);
-                      else openInbox();
-                    }}
-                    onViewPair={() => setSection('pairs')}
-                  />
-                );
-              })}
+          {/* ---- list: Recurring, then One-off, then Finished (collapsed) — T4-5 ---- */}
+          {rowsReady && grouped.recurring.length > 0 && (
+            <div style={{ marginBottom: 20 }} data-testid="tasks-group-recurring">
+              <h3 className="section-title">Recurring</h3>
+              <div className="tasklist">{recurringVisible.map(renderRow)}</div>
             </div>
           )}
-          {rowsReady && visibleCount < filtered.length && (
+          {rowsReady && grouped.oneOff.length > 0 && (
+            <div style={{ marginBottom: 20 }} data-testid="tasks-group-oneoff">
+              <h3 className="section-title">One-off</h3>
+              <div className="tasklist">{oneOffVisible.map(renderRow)}</div>
+            </div>
+          )}
+          {rowsReady && activeTotal > 0 && visibleCount < activeTotal && (
             <button className="btn small" style={{ marginTop: 12 }} onClick={() => setVisibleCount((c) => c + PAGE_SIZE)} data-testid="task-more">
-              Show {Math.min(PAGE_SIZE, filtered.length - visibleCount)} more ({filtered.length - visibleCount} hidden)
+              Show {Math.min(PAGE_SIZE, activeTotal - visibleCount)} more ({activeTotal - visibleCount} hidden)
             </button>
+          )}
+          {rowsReady && grouped.finished.length > 0 && (
+            <div style={{ marginTop: 20 }} data-testid="tasks-group-finished">
+              <button
+                type="button"
+                className="section-title disclosure"
+                aria-expanded={finishedOpen}
+                data-testid="tasks-finished-toggle"
+                onClick={() => setFinishedOpen((o) => !o)}
+              >
+                {finishedOpen ? '▾' : '▸'} Finished ({grouped.finished.length})
+              </button>
+              {finishedOpen && <div className="tasklist" style={{ marginTop: 8 }}>{grouped.finished.map(renderRow)}</div>}
+            </div>
           )}
         </>
       )}
@@ -428,6 +609,8 @@ function TaskRow({
   task,
   role,
   pair,
+  lastOutcome,
+  costTrend,
   onRunNow,
   onToggle,
   onEdit,
@@ -438,6 +621,10 @@ function TaskRow({
   task: TaskViewT;
   role: PairRole;
   pair: PlanExecutePairT | null;
+  /** Most recent TERMINAL run for this task, or null when there is none (or history has not loaded). */
+  lastOutcome: RunRowT | null;
+  /** Cost vs the terminal run before it, or null below two terminal runs. */
+  costTrend: { direction: 'up' | 'down' | 'flat'; deltaUsd: number } | null;
   onRunNow: () => void;
   onToggle: () => void;
   onEdit: () => void;
@@ -455,6 +642,11 @@ function TaskRow({
       <div className="grow">
         <strong>
           {task.name}{' '}
+          {lastOutcome && (
+            <span className={`chip ${chipFor(lastOutcome.state)}`} data-testid="last-outcome">
+              last: {stateLabel(lastOutcome.state)}
+            </span>
+          )}{' '}
           {gate ? (
             <span className={`chip ${gate.chipClass}`}>{gate.chipLabel}</span>
           ) : (
@@ -463,9 +655,20 @@ function TaskRow({
           {role === 'plan' && <span className="chip">plan half</span>}
         </strong>
         <div className="hint" style={{ margin: 0 }}>
-          next {task.enabled ? (task.nextFire ? new Date(task.nextFire).toLocaleString() : '—') : '—'}
+          next {task.enabled ? (task.nextFire ? humanNextFire(task.nextFire) : '—') : '—'}
           {' · '}${task.budget.maxUsd} · {task.permissionMode}
-          {task.repoPath ? ` · ${task.repoPath}` : ' · scratch'}
+          {' · '}
+          {task.repoPath ? (
+            <span title={task.repoPath}>{repoBasename(task.repoPath)}</span>
+          ) : (
+            'no repo — scratch task'
+          )}
+          {/* "flat" (delta 0) is not a trend worth a line — only up/down draw. */}
+          {costTrend && costTrend.direction !== 'flat' && (
+            <span data-testid="cost-trend">
+              {' · '}cost {costTrend.direction === 'up' ? '↑' : '↓'} ${costTrend.deltaUsd.toFixed(2)} vs last run
+            </span>
+          )}
         </div>
         {gate && (
           <div className="hint" style={{ marginTop: 4 }} data-testid="execute-half-reason">
@@ -504,9 +707,70 @@ function TaskRow({
       <button className="btn small" onClick={onEdit}>
         Edit
       </button>
-      <button className="btn danger small" onClick={onDelete} aria-label={`Delete ${task.name}`}>
-        Delete
+      {/* T4-5: Delete demoted into an overflow menu — Run now stays the only
+          primary action and Delete no longer sits at its visual weight. The
+          confirm step is unchanged: `onDelete` still only sets TasksView's
+          `deleting` state, which still opens the same `ConfirmDialog`
+          (below, TasksView.tsx) — moving the trigger does not touch it. */}
+      <TaskRowMenu taskName={task.name} onDelete={onDelete} />
+    </div>
+  );
+}
+
+/**
+ * The row's overflow menu. Today it holds only Delete — T4-5's Solution names
+ * just Delete for demotion, Edit/Pause stay top-level buttons.
+ *
+ * Hand-rolled rather than the app's Radix `Popover` (already used by
+ * ModelSelector/ui/popover.tsx): this test suite avoids opening Radix's
+ * popper-based pickers in jsdom on purpose — "Radix Select is never opened
+ * here on purpose — it needs pointer-capture APIs jsdom does not implement"
+ * (tasks-workforce.test.tsx, file header). A Radix menu here would be UI this
+ * suite structurally could not exercise; a plain toggle + outside-click needs
+ * no such API and is fully testable with a real DOM click.
+ */
+function TaskRowMenu({ taskName, onDelete }: { taskName: string; onDelete: () => void }): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocMouseDown = (e: MouseEvent): void => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocMouseDown);
+    return () => document.removeEventListener('mousedown', onDocMouseDown);
+  }, [open]);
+
+  return (
+    <div className="row-menu" ref={ref}>
+      <button
+        type="button"
+        className="btn small"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={`More actions for ${taskName}`}
+        data-testid="row-menu-trigger"
+        onClick={() => setOpen((o) => !o)}
+      >
+        ⋮
       </button>
+      {open && (
+        <div className="row-menu-panel" role="menu" data-testid="row-menu-panel">
+          <button
+            type="button"
+            role="menuitem"
+            className="btn danger small"
+            aria-label={`Delete ${taskName}`}
+            onClick={() => {
+              setOpen(false);
+              onDelete();
+            }}
+          >
+            Delete
+          </button>
+        </div>
+      )}
     </div>
   );
 }

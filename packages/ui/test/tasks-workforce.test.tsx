@@ -25,7 +25,7 @@ import { describe, expect, it, afterEach, beforeEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { PlanExecutePairT, RepoJobOfferT, TaskViewT } from '../src/api';
+import type { PlanExecutePairT, RepoJobOfferT, RunRowT, TaskViewT } from '../src/api';
 import { renderComponent, waitFor, waitForElement, waitForText, waitForTextGone } from './helpers/dom';
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
@@ -87,6 +87,24 @@ function offer(over: Partial<RepoJobOfferT> = {}): RepoJobOfferT {
     taskId: null,
     discoveredAt: 1_700_000_000_000,
     decidedAt: null,
+    ...over,
+  };
+}
+
+/** A TERMINAL run by default — most fixtures here feed last-outcome/cost-trend, which only read terminal runs. */
+function run(over: Partial<RunRowT> & { id: string; task_id: string }): RunRowT {
+  return {
+    state: 'completed',
+    outcome_reason: null,
+    cost_usd: 0,
+    turns: 1,
+    started_at: 1_700_000_000_000,
+    ended_at: 1_700_000_050_000,
+    scheduled_for: 1_700_000_000_000,
+    branch: null,
+    worktree_path: null,
+    report_json: null,
+    jobspec_json: '{}',
     ...over,
   };
 }
@@ -254,8 +272,22 @@ describe('the execute half of a plan-then-execute pair (the 409 bug)', () => {
     const c = await renderTasks([pair({ status: 'awaiting_approval', planRunId: 'run_plan' })]);
     const rows = [...c.querySelectorAll('[data-testid="task-row"]')];
     expect(rows).toHaveLength(1);
-    expect(labels(rows[0]!)).toEqual(expect.arrayContaining(['Run now', 'Enable', 'Edit', 'Delete']));
-    expect(textOf(rows[0]!)).toContain('paused');
+    const row = rows[0]!;
+    // T4-5: Delete moved into the row's overflow menu — it is no longer one
+    // of the row's own top-level buttons, Run now still is (updated from the
+    // pre-T4-5 layout, which drew all four at equal weight).
+    expect(labels(row)).toEqual(expect.arrayContaining(['Run now', 'Enable', 'Edit']));
+    expect(labels(row), 'Delete must not be a top-level button').not.toContain('Delete');
+    expect(textOf(row)).toContain('paused');
+
+    // The confirm step must survive the move: the overflow still reaches a
+    // real Delete control, and clicking it still opens the same
+    // ConfirmDialog rather than deleting outright.
+    click(row.querySelector('[aria-label="More actions for Weekly docs sweep"]'));
+    const deleteItem = await waitForElement(c, '[aria-label="Delete Weekly docs sweep"]');
+    click(deleteItem);
+    await waitForElement(c, '[role="dialog"]');
+    expect(textOf(c.querySelector('[role="dialog"]'))).toContain('Delete “Weekly docs sweep”?');
   });
 
   it('refuses Run now while the plan has not been written yet, and says why', async () => {
@@ -337,6 +369,180 @@ describe('executeHalfGate — the daemon rule, stated once', () => {
     for (const [status, canRun] of Object.entries(allowed)) {
       expect(executeHalfGate(pair({ status: status as PlanExecutePairT['status'] })).canRunNow, status).toBe(canRun);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T4-5 — "a tasks list that reads like a schedule": Recurring/One-off/
+// Finished grouping, the scratch label, and Delete demoted into an overflow
+// menu behind Run now.
+// ---------------------------------------------------------------------------
+
+describe('T4-5 pure helpers — humanNextFire, taskBucket, costTrendFor, repoBasename', () => {
+  it('humanNextFire: today is a bare time, tomorrow says so, the next six days carry the weekday, further out carries a date', async () => {
+    const { humanNextFire } = await import('../src/components/TasksView');
+    const NOW = new Date(2026, 8, 6, 14, 7); // Sunday 6 Sep 2026, 14:07
+    const clock = { hour: 'numeric', minute: '2-digit' } as const;
+
+    const laterToday = new Date(2026, 8, 6, 21, 30);
+    expect(humanNextFire(laterToday.getTime(), NOW)).toBe(`today ${laterToday.toLocaleTimeString(undefined, clock)}`);
+
+    const tomorrow = new Date(2026, 8, 7, 9, 0);
+    expect(humanNextFire(tomorrow.getTime(), NOW)).toBe(`tomorrow ${tomorrow.toLocaleTimeString(undefined, clock)}`);
+
+    const laterThisWeek = new Date(2026, 8, 10, 9, 0); // Thursday, 4 days out
+    expect(humanNextFire(laterThisWeek.getTime(), NOW)).toBe(
+      `${laterThisWeek.toLocaleDateString(undefined, { weekday: 'long' })} ${laterThisWeek.toLocaleTimeString(undefined, clock)}`,
+    );
+
+    const nextMonth = new Date(2026, 9, 20, 9, 0);
+    expect(humanNextFire(nextMonth.getTime(), NOW)).toBe(
+      `${nextMonth.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${nextMonth.toLocaleTimeString(undefined, clock)}`,
+    );
+
+    const nextYear = new Date(2027, 0, 4, 9, 0);
+    expect(humanNextFire(nextYear.getTime(), NOW)).toBe(
+      `${nextYear.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })} ${nextYear.toLocaleTimeString(undefined, clock)}`,
+    );
+  });
+
+  it('taskBucket: no run is One-off, a run plus a future fire is Recurring, a run with none left is Finished', async () => {
+    const { taskBucket } = await import('../src/components/TasksView');
+    expect(taskBucket({ nextFire: null }, false)).toBe('oneOff');
+    // never fired yet — indistinguishable from a fresh one-off until it runs once (documented, self-correcting)
+    expect(taskBucket({ nextFire: 4_102_444_800_000 }, false)).toBe('oneOff');
+    expect(taskBucket({ nextFire: 4_102_444_800_000 }, true)).toBe('recurring');
+    expect(taskBucket({ nextFire: null }, true)).toBe('finished');
+  });
+
+  it('costTrendFor: needs two terminal runs; direction follows the newest against the one before it', async () => {
+    const { costTrendFor } = await import('../src/components/TasksView');
+    expect(costTrendFor([])).toBeNull();
+    expect(costTrendFor([{ cost_usd: 2 }])).toBeNull();
+    expect(costTrendFor([{ cost_usd: 2 }, { cost_usd: 1 }])).toEqual({ direction: 'up', deltaUsd: 1 });
+    expect(costTrendFor([{ cost_usd: 1 }, { cost_usd: 2 }])).toEqual({ direction: 'down', deltaUsd: 1 });
+    expect(costTrendFor([{ cost_usd: 1 }, { cost_usd: 1 }])).toEqual({ direction: 'flat', deltaUsd: 0 });
+  });
+
+  it('repoBasename: the last path segment, trailing slashes ignored', async () => {
+    const { repoBasename } = await import('../src/components/TasksView');
+    expect(repoBasename('/Users/vimoxshah/Desktop/Vimox/poc/clockwork')).toBe('clockwork');
+    expect(repoBasename('/Users/me/dev/widget/')).toBe('widget');
+    expect(repoBasename('solo')).toBe('solo');
+  });
+});
+
+describe('T4-5: the tasks list reads like a schedule', () => {
+  const RECURRING_TASK = task({
+    id: 'task_recurring',
+    name: 'Weekly dep triage',
+    enabled: true,
+    nextFire: 4_102_444_800_000, // far future; bucketing only cares that it is non-null
+    repoPath: '/Users/vimoxshah/Desktop/Vimox/poc/clockwork',
+  });
+  const ONEOFF_TASK = task({
+    id: 'task_oneoff',
+    name: 'OpenCode UI verify',
+    enabled: true,
+    nextFire: 4_102_444_800_000,
+    // no runs stubbed for this id below — that is what keeps it One-off
+  });
+  const FINISHED_TASK = task({
+    id: 'task_finished',
+    name: 'Hermes live E2E',
+    enabled: false,
+    nextFire: null,
+  });
+  // Newest-first per task, matching what GET /runs actually returns — the
+  // component trusts this order rather than re-sorting.
+  const RUNS: RunRowT[] = [
+    run({ id: 'r_rec_2', task_id: 'task_recurring', state: 'completed', cost_usd: 1.5, scheduled_for: 900 }),
+    run({ id: 'r_rec_1', task_id: 'task_recurring', state: 'failed', cost_usd: 1.0, scheduled_for: 100 }),
+    run({ id: 'r_fin_1', task_id: 'task_finished', state: 'completed', cost_usd: 2.25, scheduled_for: 500 }),
+  ];
+
+  async function renderGrouped(): Promise<HTMLDivElement> {
+    stubRoutes({
+      '/tasks': () => [RECURRING_TASK, ONEOFF_TASK, FINISHED_TASK],
+      '/queue': () => [],
+      '/workforce/plan-execute': () => ({ pairs: [] }),
+      '/runs': () => RUNS,
+    });
+    const { default: TasksView } = await import('../src/components/TasksView');
+    const c = await render(<TasksView version={1} />);
+    await waitForText(c, '3 tasks');
+    // Grouping and the outcome chip both need the /runs batch too — wait for
+    // evidence it landed (the recurring task's outcome chip) before reading
+    // group membership, rather than assuming it beat GET /tasks.
+    await waitForElement(c, '[data-testid="last-outcome"]');
+    return c;
+  }
+
+  it('groups Recurring before One-off before a collapsed Finished', async () => {
+    const c = await renderGrouped();
+    const groupIds = [...c.querySelectorAll('[data-testid^="tasks-group-"]')].map((el) => el.getAttribute('data-testid'));
+    expect(groupIds, 'group order in the DOM').toEqual(['tasks-group-recurring', 'tasks-group-oneoff', 'tasks-group-finished']);
+
+    expect(textOf(c.querySelector('[data-testid="tasks-group-recurring"]'))).toContain('Weekly dep triage');
+    expect(textOf(c.querySelector('[data-testid="tasks-group-oneoff"]'))).toContain('OpenCode UI verify');
+
+    // Finished is collapsed by default: the heading and count show, the row does not.
+    const finishedSection = c.querySelector('[data-testid="tasks-group-finished"]')!;
+    expect(textOf(finishedSection)).toContain('Finished (1)');
+    expect(textOf(finishedSection)).not.toContain('Hermes live E2E');
+    click(c.querySelector('[data-testid="tasks-finished-toggle"]'));
+    await waitForText(c, 'Hermes live E2E');
+  });
+
+  it('never renders the bare internal word "scratch"; a repo-less task reads "no repo — scratch task"', async () => {
+    const c = await renderGrouped();
+    // Expand Finished too, so its (also repo-less) row is covered by the
+    // whole-container check below, not just the two always-visible groups.
+    click(c.querySelector('[data-testid="tasks-finished-toggle"]'));
+    await waitForText(c, 'Hermes live E2E');
+
+    // The OLD bug (landing-page/screens/09-approvals-tasks.png): a repo-less
+    // row ended its hint line in the bare token itself, "· scratch". The
+    // fix's own replacement text legitimately contains the substring
+    // "scratch" (inside "scratch task"), so the check targets the old exact
+    // form specifically rather than the word in isolation.
+    expect(c.textContent).not.toContain('· scratch');
+    expect(c.textContent).toContain('no repo — scratch task');
+
+    // The row that DOES have a repo shows a basename, not the raw absolute
+    // path, and carries the full path on hover via `title`.
+    const recurringSection = c.querySelector('[data-testid="tasks-group-recurring"]')!;
+    expect(textOf(recurringSection)).toContain('clockwork');
+    expect(textOf(recurringSection)).not.toContain('/Users/vimoxshah/Desktop/Vimox/poc/clockwork');
+    const repoSpan = [...recurringSection.querySelectorAll('span')].find(
+      (s) => s.getAttribute('title') === '/Users/vimoxshah/Desktop/Vimox/poc/clockwork',
+    );
+    expect(repoSpan, 'the full path lives in title, for hover').not.toBeUndefined();
+    expect(repoSpan!.textContent).toBe('clockwork');
+  });
+
+  it('demotes Delete into an overflow menu — Run now stays the only top-level primary action', async () => {
+    const c = await renderGrouped();
+    const oneOffSection = c.querySelector('[data-testid="tasks-group-oneoff"]')!;
+    const row = oneOffSection.querySelector('[data-testid="task-row"]')!;
+    expect(labels(row), 'Run now is still a top-level button').toContain('Run now');
+    expect(labels(row), 'Delete is not a top-level button').not.toContain('Delete');
+
+    click(row.querySelector('[aria-label="More actions for OpenCode UI verify"]'));
+    const deleteItem = await waitForElement(c, '[aria-label="Delete OpenCode UI verify"]');
+    expect(deleteItem.closest('[role="menu"]'), 'Delete lives inside the overflow menu').not.toBeNull();
+  });
+
+  it('shows the last outcome as a chip and a cost trend once there is history, and neither when there is none', async () => {
+    const c = await renderGrouped();
+    const recurringSection = c.querySelector('[data-testid="tasks-group-recurring"]')!;
+    expect(textOf(recurringSection.querySelector('[data-testid="last-outcome"]'))).toContain('Completed'); // the newest run (r_rec_2)
+    expect(textOf(recurringSection.querySelector('[data-testid="cost-trend"]'))).toContain('↑'); // 1.5 vs 1.0 before it
+
+    // The one-off task has no run history at all — omitted, not a fake chip.
+    const oneOffSection = c.querySelector('[data-testid="tasks-group-oneoff"]')!;
+    expect(oneOffSection.querySelector('[data-testid="last-outcome"]')).toBeNull();
+    expect(oneOffSection.querySelector('[data-testid="cost-trend"]')).toBeNull();
   });
 });
 
