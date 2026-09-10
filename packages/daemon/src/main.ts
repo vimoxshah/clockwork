@@ -1,11 +1,12 @@
 /**
- * Daemon entrypoint: win the single-instance race, open DB, migrate, seed
- * profiles, recovery sweep, start scheduler + run manager + API. Runs as a
+ * Daemon entrypoint: win the single-instance race, open DB, migrate, repair
+ * schedules saved before the recurrence guard existed (T1-12), seed profiles,
+ * recovery sweep, start scheduler + run manager + API. Runs as a
  * login-session LaunchAgent (T-108).
  */
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { openDatabase, createMigrator } from './db.js';
+import { openDatabase, createMigrator, type DB } from './db.js';
 import { readFileSync, readdirSync } from 'node:fs';
 import { acquireInstanceLock, readInstanceLockHolder, type HolderRecord, type LostReason } from './single-instance.js';
 import { RetentionAudit } from './retention-audit.js';
@@ -15,12 +16,14 @@ import { RunManager } from './run-manager.js';
 import { KeepAwake } from './keep-awake.js';
 import { SafetyJournal } from '@clockwork/runner';
 import { buildServer } from './api.js';
-import { TaskRepo, ProfileRepo } from './repo.js';
+import { TaskRepo, ProfileRepo, type TaskRow } from './repo.js';
 import { seedBuiltinProfiles, makeSkillResolver } from './profiles.js';
 import { Notifier } from './notifier.js';
-import { readPrefs } from './api.js';
+import { readPrefs, MAX_RRULE_COUNT } from './api.js';
 import { loadDeliveryCreds } from './delivery.js';
 import { TelegramApprovalsPoller } from './telegram-approvals.js';
+import { guardSchedule, type GuardReason } from './schedule-guard.js';
+import { newId } from '@clockwork/shared';
 
 // Single source of truth: the daemon package.json. Keeps --version, /health,
 // and the UI footer in lockstep with releases (no more hardcoded literals).
@@ -199,6 +202,215 @@ function writeStderr(message: string): void {
   process.stderr.write(`${message}\n`);
 }
 
+// ---------------------------------------------------------------------------
+// T1-12 — repair schedules saved before `guardSchedule` existed
+// ---------------------------------------------------------------------------
+
+/** One hazardous row, and what the sweep did about it. */
+export interface HazardSweepEntry {
+  taskId: string;
+  taskName: string;
+  scheduleId: string;
+  rrule: string;
+  reason: GuardReason;
+  /** The guard's own message — it already composes the fix. */
+  detail: string;
+  /** The placeholder run that carries the inbox item. */
+  runId: string;
+}
+
+export interface HazardSweepResult {
+  /** Enabled recurring rows examined. */
+  checked: number;
+  /** Rows disabled by THIS boot. Empty on every boot after the one that repaired them. */
+  disabled: HazardSweepEntry[];
+  /** Rows the guard refused but the repair could not write. The boot continues. */
+  failed: number;
+}
+
+/** Short, stable code for the run row; the prose lives in the report summary. */
+const HAZARD_OUTCOME = 'schedule_hazard';
+
+/**
+ * What the inbox item says. It names the task, the rule verbatim, the guard's
+ * verdict and the guard's own remedy sentence, then says what was and was not
+ * done — because a schedule that stopped firing with no explanation is the
+ * failure mode this whole sweep exists to avoid.
+ */
+export function hazardNoticeText(entry: Omit<HazardSweepEntry, 'runId'>): string {
+  return [
+    `Clockwork disabled this task's schedule at startup, before the first tick.`,
+    '',
+    'Its recurrence rule is one rrule 2.8.1 cannot expand: asking for the next occurrence '
+      + 'never returns, so the tick that reached this task would have taken the whole daemon '
+      + 'with it. The rule was saved before the check that now refuses this shape at save '
+      + 'time, which is why it was still here.',
+    '',
+    `    task     ${entry.taskName}`,
+    `    rule     ${entry.rrule}`,
+    `    verdict  ${entry.reason}`,
+    '',
+    entry.detail,
+    '',
+    'Nothing ran, nothing was deleted, and no other task was touched. Edit this task\'s '
+      + 'recurrence and save it: the same check runs on save, so a corrected rule switches the '
+      + 'schedule back on, and a rule that is still hazardous is refused with this message '
+      + 'instead of being accepted.',
+  ].join('\n');
+}
+
+/**
+ * Run `guardSchedule` over every enabled recurring row once, at boot, and
+ * disable the ones it refuses.
+ *
+ * WHY THIS EXISTS. `api.ts` refuses these shapes AT SAVE and deliberately
+ * leaves the tick path unguarded (`api.ts:786`): a hazardous row saved before
+ * the check existed "would go from slow to throwing, and that is a different
+ * change from refusing new ones". That reasoning is right about the tick and
+ * leaves exactly one hole — an install already carrying such a row still has a
+ * daemon that hangs on it, and nothing says so. `FREQ=HOURLY;INTERVAL=2;
+ * BYHOUR=3` never terminates inside rrule 2.8.1, and both readers of a STORED
+ * rule reach it: the scheduler tick (`scheduler.ts:171`) and the calendar
+ * aggregate (`api.ts:1901`). Both are gated on `schedules.enabled = 1`, so
+ * clearing that flag is what closes the hole for both.
+ *
+ * DISABLE, NEVER THROW. A daemon that refuses to boot over one bad row is
+ * worse than the hang it is avoiding, and the row is the user's data.
+ *
+ * IT CANNOT ITSELF HANG. `guardSchedule` answers from the rule TEXT with
+ * modular arithmetic and never calls into rrule — that is the first line of
+ * its header — so this loop costs O(rows x BY parts) whatever the rows say.
+ * Nothing here expands a rule.
+ *
+ * IDEMPOTENT BY CONSTRUCTION, not by a marker. The query only sees
+ * `schedules.enabled = 1` and the repair sets it to 0, so a second boot finds
+ * nothing and raises nothing. A marker table was considered and rejected: it
+ * would make a row that came back to `enabled = 1` be SKIPPED, which is the
+ * one outcome that leaves the daemon able to hang again.
+ *
+ * A ROW THAT COMES BACK IS REPAIRED AGAIN, deliberately. `schedules.enabled`
+ * has exactly one writer that can set it to 1 — `TaskRepo.patch`
+ * (`repo.ts:186`), reached only when the request carries a `schedule`, which
+ * `validateAndMaterialize` puts through this same guard first. So there is no
+ * guard-free path back to `enabled = 1` with a hazardous rule: a user who
+ * re-enables the TASK (`PATCH /tasks/:id {enabled:true}`) never touches the
+ * schedule row at all. A hazardous `enabled = 1` row at boot is therefore
+ * never a validated user choice — it is pre-guard data or a direct write to
+ * SQLite — so it is disabled again and the user is told again. Told, not
+ * silently overruled.
+ *
+ * @param db the migrated database.
+ * @param now timestamp to stamp the repair and its inbox item with.
+ * @param log where the one-line summary goes; stderr in production.
+ * @returns what was examined, what was disabled, and what could not be written.
+ */
+export function sweepHazardousSchedules(
+  db: DB,
+  now: number = Date.now(),
+  log: (message: string) => void = writeStderr,
+): HazardSweepResult {
+  // `tasks.enabled` is deliberately NOT in this predicate, though the tick
+  // requires it. A paused task's hazardous row is one `PATCH /tasks/:id
+  // {enabled:true}` away from being live again, and that route does not
+  // re-validate the schedule — so leaving it armed would just move the hang
+  // behind a toggle. `deleted_at` IS in it: a soft-deleted task has no screen
+  // to show an inbox item on.
+  const rows = db
+    .prepare(
+      `SELECT s.id AS schedule_id, s.rrule AS rrule, t.id AS task_id, t.name AS task_name
+         FROM schedules s JOIN tasks t ON t.id = s.task_id
+        WHERE s.enabled = 1 AND s.kind = 'rrule' AND t.deleted_at IS NULL`,
+    )
+    .all() as unknown as Array<{ schedule_id: string; rrule: string | null; task_id: string; task_name: string }>;
+
+  const disabled: HazardSweepEntry[] = [];
+  let failed = 0;
+
+  for (const row of rows) {
+    const verdict = guardSchedule('rrule', row.rrule, MAX_RRULE_COUNT);
+    if (verdict.safe) continue;
+    // Every refusal counts, not just `unreachable`. The guard's verdict IS the
+    // definition of hazardous here; filtering by reason would be re-tuning an
+    // analysis this sweep is meant to reuse unchanged.
+    const base = {
+      taskId: row.task_id,
+      taskName: row.task_name,
+      scheduleId: row.schedule_id,
+      rrule: (row.rrule ?? '').trim(),
+      reason: verdict.reason,
+      detail: verdict.detail,
+    };
+    try {
+      const runId = newId();
+      const task = db.prepare('SELECT * FROM tasks WHERE id=?').get(row.task_id) as unknown as TaskRow;
+      // `buildJobSpec` rather than a hand-rolled stub: the inbox list reads
+      // `json_extract(jobspec_json, '$.taskName')` (api.ts:1859) and the report
+      // view parses the same blob, so a placeholder run has to carry a
+      // well-formed one. Nothing executes it — `pump()` only ever dequeues
+      // `queued`, and `recoverySweep` does not look at `awaiting_user`.
+      const spec = buildJobSpec(runId, task, now, now, db);
+      const summary = hazardNoticeText(base);
+      const tx = db.transaction(() => {
+        db.prepare('UPDATE schedules SET enabled=0, next_fire=NULL WHERE id=?').run(row.schedule_id);
+        // `awaiting_user` is the state the scheduler already uses for a
+        // placeholder run that exists only to put a question in front of a
+        // human (`scheduler.ts:158`), and it is what the Inbox's "Needs you"
+        // filter matches on. `occurrence_at` stays NULL: there is no
+        // occurrence, which is the entire complaint.
+        db.prepare(
+          `INSERT INTO runs (id, task_id, schedule_id, jobspec_json, state, state_changed_at, scheduled_for, outcome_reason, report_json)
+           VALUES (?, ?, ?, ?, 'awaiting_user', ?, ?, ?, ?)`,
+        ).run(
+          runId,
+          row.task_id,
+          row.schedule_id,
+          JSON.stringify(spec),
+          now,
+          now,
+          HAZARD_OUTCOME,
+          JSON.stringify({ taskName: row.task_name, summary, artifacts: [] }),
+        );
+        db.prepare('INSERT INTO events (at, run_id, kind, data_json) VALUES (?, ?, ?, ?)').run(
+          now,
+          runId,
+          'state_changed',
+          JSON.stringify({ to: 'awaiting_user', reason: HAZARD_OUTCOME }),
+        );
+        // The "record the reason" half, in the append-only control-plane log
+        // (migration 0004, goal #40). Not a fallback for the inbox item —
+        // `RetentionAudit.sweep` only deletes runs in a TERMINAL state
+        // (retention-audit.ts:79), and `awaiting_user` is not one, so the
+        // notice is not pruned. This is the machine-readable record beside the
+        // human-readable one, and the only one that survives the user
+        // deleting the task.
+        db.prepare(
+          `INSERT INTO audit_log (at, actor, action, target_type, target_id, detail_json)
+           VALUES (?, 'daemon', 'schedule.hazard_disabled', 'schedule', ?, ?)`,
+        ).run(now, row.schedule_id, JSON.stringify({ ...base, runId }));
+      });
+      tx();
+      disabled.push({ ...base, runId });
+    } catch (err) {
+      // One unwritable row must not cost the others their repair, and must not
+      // cost the daemon its boot.
+      failed++;
+      log(
+        `[schedule-sweep] could not repair schedule ${row.schedule_id} on task "${row.task_name}" `
+          + `(${base.reason}): ${(err as Error).message}. It is still enabled and can still hang the tick.`,
+      );
+    }
+  }
+
+  if (disabled.length > 0) {
+    log(
+      `[schedule-sweep] checked ${rows.length} recurring schedule(s) and disabled ${disabled.length} that rrule 2.8.1 `
+        + `cannot expand; each disabled task has an inbox item naming its rule and the fix. Fix the recurrence and save `
+        + `the task to switch it back on.`,
+    );
+  }
+  return { checked: rows.length, disabled, failed };
+}
+
 export async function main(argv: string[] = process.argv): Promise<number> {
   const dataDir = process.env.CLOCKWORK_HOME ?? `${process.env.HOME}/.clockwork`;
   const port = parseInt(process.env.CLOCKWORK_PORT ?? '4747', 10);
@@ -236,6 +448,19 @@ export async function main(argv: string[] = process.argv): Promise<number> {
     .sort()
     .map((f) => ({ id: f.replace(/\.sql$/, ''), sql: readFileSync(resolve(migrationsDir, f), 'utf8') }));
   createMigrator(db, migrations, file).migrate();
+
+  // T1-12. The earliest correct point: the schema is current, and NOTHING has
+  // read a stored rule yet — `buildServer` (below) is not listening,
+  // `recoverySweep` does not touch schedules, and `scheduler.start` fires its
+  // first tick further down. Both readers of a stored rule can hang on a
+  // pre-guard row, so the repair has to land before either of them runs. It
+  // never throws by design; the catch is for the impossible one, because a
+  // daemon that will not boot is worse than the hazard it was avoiding.
+  try {
+    sweepHazardousSchedules(db);
+  } catch (err) {
+    process.stderr.write(`[schedule-sweep] sweep failed: ${(err as Error).message}. Boot continues.\n`);
+  }
 
   const profileRepo = new ProfileRepo(db);
   seedBuiltinProfiles(profileRepo);
@@ -374,8 +599,6 @@ export async function main(argv: string[] = process.argv): Promise<number> {
   process.on('SIGTERM', shutdown);
   return 0;
 }
-
-void buildJobSpec; // re-exported for tests
 
 /** CLI entrypoint when executed directly (node dist/main.js / clockworkd). */
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
