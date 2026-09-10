@@ -53,3 +53,73 @@ jobs:
           done
           echo "daemon failed to become healthy"
           exit 1
+
+  # T1-13: a real Chromium click-through against the real served app, not just
+  # a /health curl. CW_ENGINE=mock (runner-child.ts) + CW_MOCK_STEP_MS make the
+  # scheduler -> run-manager -> mock engine -> finalize pipeline deterministic
+  # and require no real provider CLI, API spend, or network call. Runs the
+  # promoted subset only (packages/ui/e2e/smoke/) — the rest of e2e/ is
+  # debugging tools, not tests.
+  smoke:
+    runs-on: macos-14
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build all packages
+        run: pnpm build
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      # Chromium only (not the full playwright install) — no --with-deps,
+      # that flag shells out to apt-get and macOS doesn't have one. No npx —
+      # the `playwright` CLI is already a root devDependency; npx would try a
+      # registry fetch, which the job isn't allowed to need.
+      - name: Install Playwright Chromium
+        run: ./node_modules/.bin/playwright install chromium
+
+      - name: Playwright smoke (book/run/report + command palette)
+        env:
+          CW_ENGINE: mock
+          CW_MOCK_STEP_MS: "250"
+        run: |
+          node packages/daemon/dist/main.js > daemon.log 2>&1 &
+          echo $! > daemon.pid
+          trap 'kill "$(cat daemon.pid)" 2>/dev/null || true' EXIT
+
+          ready=0
+          for i in $(seq 1 20); do
+            if curl -sf http://127.0.0.1:4747/health | grep -q '"ok":true'; then
+              ready=1
+              break
+            fi
+            sleep 0.5
+          done
+          if [ "$ready" != "1" ]; then
+            echo "daemon failed to become healthy"
+            exit 1
+          fi
+
+          # tsx isn't hoisted to the workspace root (it's @clockwork/daemon's
+          # devDependency) — invoke it from there rather than add a root
+          # dependency or reach for a network-fetching `npx tsx`.
+          ./packages/daemon/node_modules/.bin/tsx packages/ui/e2e/smoke/book-run-report.ts
+          ./packages/daemon/node_modules/.bin/tsx packages/ui/e2e/smoke/command-palette.ts
+
+      - name: Daemon log
+        if: failure()
+        run: cat daemon.log || true
