@@ -23,10 +23,16 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it was the claim that was wrong, not the button.
 - **The published Homebrew tap served 0.11.0** while the current release was
   0.12.0, pinning a checksum that appeared in no current release — so
-  `brew install --cask clockwork` fetched a build two releases old. The cause
-  was never the automation's permissions, as 0.12.0's notes assumed: it was the
-  wrong GitHub account being active locally. The tap now serves 0.12.1 with an
-  `arm:`/`intel:` digest pair, and the nightly drift check agrees.
+  `brew install --cask clockwork` fetched a build two releases old. 0.12.0's
+  note on this was right about the mechanism and left the reason open: repair
+  is manual, because `.github/workflows/release.yml` has no step that writes to
+  `vimoxshah/homebrew-clockwork` and the default `GITHUB_TOKEN` could not reach
+  another repository if it did. What that note could not say is why the manual
+  copy had not happened: the push was failing with a bare **403** because the
+  wrong one of two authenticated GitHub accounts was active locally. The tap
+  now serves 0.12.1 with an `arm:`/`intel:` digest pair, verified against the
+  release's own checksums file. Repair is still manual, and the nightly drift
+  check still only reports.
 
 ## [0.12.0] — 2026-09-10
 
