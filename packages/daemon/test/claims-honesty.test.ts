@@ -23,6 +23,20 @@
  *  11. two shipped approval cards missing from the feature they belong to
  *  12. an autonomy gate docstring claiming a call site it does not have
  *  13. a present, reachable gap written up in an ADR as hypothetical
+ *  14. six sources naming a macOS floor of 13 while the release note said 14
+ *  15. a capability claimed at the far end of a transport nothing carries
+ *  16. a Known limit the code had already closed weeks earlier
+ *  17. an OS named as supported with no green matrix cell and no CI job
+ *
+ * WHY 14-17 EXIST, AND WHAT THEY ARE FOR
+ *   Every tripwire above 13 checks whether some code EXISTS. That is the shape
+ *   of check that let `README.md`'s "stream progress logs over SSE to the UI"
+ *   through: every symbol in that sentence was present and the feature was
+ *   still broken — `LiveTail` unmounted on each SSE frame and lost the line
+ *   that caused the unmount (fixed in b55bb05). So 14-17 check RELATIONS
+ *   between artifacts instead: one number stated in six places, a claim held
+ *   against its whole transport, a stated absence held against the code that
+ *   would falsify it, and a platform claim held against a matrix and a CI job.
  *
  * Same idiom as `feature-honesty.test.ts` / `landing-honesty.test.ts`: read
  * the artifact, assert against it, name the offender in the failure message.
@@ -32,8 +46,9 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AUTONOMY_RUNG_SETTINGS } from '@clockwork/shared';
+import { AUTONOMY_RUNG_SETTINGS, DeliveryConfig } from '@clockwork/shared';
 import { parseJobsFile } from '../src/repo-jobs.js';
+import { guardSchedule } from '../src/schedule-guard.js';
 import { securityPreview } from '../src/templates.js';
 import { assertLatency, latencyAssertionsEnabled, LATENCY_ASSERT_ENV } from './helpers/bench-gate.js';
 
@@ -50,6 +65,18 @@ const FEATURES = 'packages/daemon/src/features.ts';
 const SCHEDULER = 'packages/daemon/src/scheduler.ts';
 const SCALABILITY = 'docs/architecture/scalability.md';
 const BENCH_GATE = 'packages/daemon/test/helpers/bench-gate.ts';
+const README = 'README.md';
+const TAURI_CONF = 'src-tauri/tauri.conf.json';
+const INSTALL_DOC = 'docs/install.md';
+const CASK = 'packaging/homebrew/clockwork.rb';
+const RELEASE_WF = '.github/workflows/release.yml';
+const CI_WF = '.github/workflows/ci.yml';
+const API = 'packages/daemon/src/api.ts';
+const RUN_MANAGER = 'packages/daemon/src/run-manager.ts';
+const DAEMON_SRC = 'packages/daemon/src';
+// `tracks/` is gitignored (see .gitignore), so this file is absent in CI and
+// in a fresh clone. Tripwire 17 skips its matrix half rather than failing.
+const MATRIX = 'tracks/CAPABILITY-MATRIX.md';
 
 /** The twelve feature-module suites the STATUS table names on one row. */
 const FEATURE_SUITES = [
@@ -679,4 +706,523 @@ describe('ADR-041 records the enabled-flag hazard as the live route it is', () =
       'chainAfter: planRow.id',
     );
   });
+});
+
+// ---------------------------------------------------------------------------
+// 14. ONE macOS version floor.
+//
+//     `tauri.conf.json` is the only source that DOES anything: it is compiled
+//     into `LSMinimumSystemVersion`, and it is what actually refuses to launch.
+//     Every other statement of the floor is prose about that number, so every
+//     one of them has to be that number. Six sources said 13 and the release
+//     note said 14; each file was internally consistent, so nothing caught it.
+// ---------------------------------------------------------------------------
+
+/**
+ * macOS codename → major version.
+ *
+ * The cask states the floor as a codename, so the comparison needs a map. A
+ * `depends_on macos:` symbol this table does not know FAILS the tripwire
+ * rather than resolving to nothing — a silent `undefined` there would turn
+ * the check into a no-op the next time Apple ships a name it has not learnt.
+ * (Catalina is 10.15; only the major is compared, which is all the prose
+ * states.)
+ */
+const MACOS_CODENAMES: Readonly<Record<string, number>> = {
+  catalina: 10,
+  big_sur: 11,
+  monterey: 12,
+  ventura: 13,
+  sonoma: 14,
+  sequoia: 15,
+  tahoe: 26,
+};
+
+/**
+ * Every macOS floor a piece of prose states, as major versions.
+ *
+ * Three forms, because the five sources use three: `macOS 13`/`macOS 13+`/
+ * `macOS 13 or newer`, `macOS Ventura`, and the cask's `depends_on macos:
+ * :ventura`.
+ *
+ * Deliberately does NOT match a runner label (`runs-on: macos-14`): that names
+ * the machine the BUILD runs on, not the machine a user needs, and matching it
+ * would make the workflow files permanently and wrongly red. The separator has
+ * to be real whitespace, which a label's hyphen is not.
+ *
+ * A bare capitalised word after "macOS" is only read as a codename when it is
+ * in the table above — "macOS Gatekeeper" and "macOS quarantines it" are
+ * sentences, not version floors.
+ */
+function macosClaims(text: string): { versions: number[]; unknown: string[] } {
+  const versions: number[] = [];
+  const unknown: string[] = [];
+  for (const m of text.matchAll(/macOS[ \t]+(\d+)(?:\.\d+)?\b/gi)) versions.push(Number(m[1]));
+  for (const m of text.matchAll(/macOS[ \t]+([A-Za-z][A-Za-z ]*?[a-z])\b/g)) {
+    const known = MACOS_CODENAMES[m[1]!.toLowerCase().replace(/ /g, '_')];
+    if (known !== undefined) versions.push(known);
+  }
+  // A declared dependency is always a codename, so an unrecognised one is a
+  // gap in the table rather than an English word. Fail loudly.
+  for (const m of text.matchAll(/depends_on\s+macos:\s*:([a-z_0-9]+)/g)) {
+    const known = MACOS_CODENAMES[m[1]!];
+    if (known === undefined) unknown.push(m[1]!);
+    else versions.push(known);
+  }
+  return { versions, unknown };
+}
+
+/** The release NOTE heredoc — the body GitHub publishes, not the whole workflow. */
+function releaseNotesBody(): string {
+  const wf = read(RELEASE_WF);
+  const i = wf.indexOf('NOTE="');
+  expect(i, 'the release-notes heredoc moved; this tripwire no longer reads it').toBeGreaterThan(-1);
+  const j = wf.indexOf('PAYLOAD=', i);
+  expect(j, 'the release-notes heredoc has no PAYLOAD after it; the slice is wrong').toBeGreaterThan(i);
+  return wf.slice(i, j);
+}
+
+describe('one macOS version floor, stated the same everywhere', () => {
+  /** The number the built app actually enforces. */
+  const floor = (): number => {
+    const conf = JSON.parse(read(TAURI_CONF)) as {
+      bundle?: { macOS?: { minimumSystemVersion?: string } };
+    };
+    const raw = conf.bundle?.macOS?.minimumSystemVersion;
+    expect(raw, `${TAURI_CONF} states no bundle.macOS.minimumSystemVersion`).toBeTruthy();
+    const major = Number(String(raw).split('.')[0]);
+    expect(Number.isInteger(major) && major > 0, `unparseable minimumSystemVersion: ${String(raw)}`).toBe(true);
+    return major;
+  };
+
+  // The extractor is the whole tripwire; an extractor that quietly matches
+  // nothing is a tripwire that cannot fail. Pin its three forms and its two
+  // deliberate non-matches here, where a fixture proves them.
+  it('reads the three forms the real sources use, and no runner label', () => {
+    expect(macosClaims('macOS 13+ (Apple silicon)').versions).toEqual([13]);
+    expect(macosClaims('Requires macOS 13 or newer, Apple silicon').versions).toEqual([13]);
+    expect(macosClaims('"operatingSystem": "macOS 14 or later"').versions).toEqual([14]);
+    expect(macosClaims('minimum is macOS Ventura today').versions).toEqual([13]);
+    expect(macosClaims('  depends_on macos: :sonoma').versions).toEqual([14]);
+    expect(macosClaims('runs-on: macos-14').versions).toEqual([]);
+    expect(macosClaims('macOS Gatekeeper will ask you to confirm').versions).toEqual([]);
+    expect(macosClaims('depends_on macos: :hypothetical').unknown).toEqual(['hypothetical']);
+  });
+
+  const SOURCES: ReadonlyArray<readonly [string, () => string]> = [
+    [README, () => read(README)],
+    [INSTALL_DOC, () => read(INSTALL_DOC)],
+    [CASK, () => read(CASK)],
+    [`${RELEASE_WF} (release notes body)`, releaseNotesBody],
+  ];
+
+  for (const [label, source] of SOURCES) {
+    it(`${label} states the floor tauri.conf.json ships`, () => {
+      const want = floor();
+      const { versions, unknown } = macosClaims(source());
+      expect(unknown, `${label} names a macOS codename MACOS_CODENAMES does not know: ${unknown.join(', ')}`).toEqual(
+        [],
+      );
+      expect(versions.length, `no macOS floor found in ${label} — this guard is blind`).toBeGreaterThan(0);
+      const wrong = versions.filter((v) => v !== want);
+      expect(
+        wrong,
+        `${label} states macOS ${[...new Set(wrong)].join('/')} but ${TAURI_CONF} ships a ${want}.0 floor`,
+      ).toEqual([]);
+    });
+  }
+  // The landing page states the floor four times (ld+json, the requirements
+  // block, the download note, the footer). It is held to the same rule by
+  // landing-honesty.test.ts, which is the suite that owns that artifact.
+});
+
+// ---------------------------------------------------------------------------
+// 15. No claim of a capability with no transport.
+//
+//     README:154 says progress logs "stream over SSE to the UI". That sentence
+//     is a claim about a CHAIN — broadcast, forward, dispatch, listen — and it
+//     is false the moment any link is missing, however much of the code exists.
+//     So the union is DERIVED from the call sites rather than written down: a
+//     hand-kept enumeration is exactly the mistake `SseEvent` in
+//     packages/shared/src/api.ts already makes (4 types of the 27 broadcast).
+//
+//     SCOPE — what this does NOT catch. The defect that actually shipped was a
+//     RENDER-LIFECYCLE bug: every link below was intact and `LiveTail` still
+//     lost every line, because `ReportDetail` returned its spinner on each
+//     refetch and unmounted the tail. No static read of these files can see
+//     that. `packages/ui/test/live-run-view.test.tsx` is what pins it, by
+//     rendering the component and dispatching frames. This tripwire guards the
+//     transport; that suite guards the behaviour; neither substitutes for the
+//     other.
+// ---------------------------------------------------------------------------
+
+/** Every event type the daemon really broadcasts, read off its call sites. */
+function broadcastUnion(): string[] {
+  const types = new Set<string>();
+  for (const name of readdirSync(resolve(ROOT, DAEMON_SRC))) {
+    if (!name.endsWith('.ts')) continue;
+    const src = readFileSync(resolve(ROOT, DAEMON_SRC, name), 'utf8');
+    for (const m of src.matchAll(/broadcast\(\{ type: '([^']+)'/g)) types.add(m[1]!);
+  }
+  return [...types].sort();
+}
+
+describe('a capability is only claimed where a transport carries it', () => {
+  it('derives the whole broadcast union rather than trusting an enumeration', () => {
+    const union = broadcastUnion();
+    // 27 distinct types across api.ts and run-manager.ts when this landed.
+    // Fewer means the grep stopped reading the union, not that the daemon got
+    // quieter — and a tripwire reading a truncated union is how the sentence
+    // this file guards went unchecked in the first place.
+    expect(
+      union.length,
+      `only ${union.length} broadcast types found; the union derivation no longer reads the call sites`,
+    ).toBeGreaterThanOrEqual(27);
+  });
+
+  it('backs the README "logs stream over SSE to the UI" claim end to end', () => {
+    const readme = read(README);
+    const CLAIM = /stream progress logs over SSE to the UI/;
+    expect(
+      readme,
+      'the README no longer states the SSE-to-UI streaming claim this tripwire guards; re-point it at the new wording rather than leaving it green on nothing',
+    ).toMatch(CLAIM);
+
+    // 1. the daemon emits something log-bearing at all.
+    const union = broadcastUnion();
+    const logBearing = union.filter((t) => t.endsWith('.log'));
+    expect(
+      logBearing,
+      `the README says logs stream to the UI, but no broadcast event carries them. Union: ${union.join(', ')}`,
+    ).toContain('run.log');
+
+    // 2. the SSE endpoint forwards manager broadcasts, unfiltered. A forward
+    //    that learnt to filter by type could drop log frames inside the daemon
+    //    while every symbol in the chain still existed.
+    const api = read(API);
+    const fwdAt = api.indexOf("deps.runManager['deps'].broadcast = ");
+    expect(
+      fwdAt,
+      'api.ts no longer forwards run-manager broadcasts to SSE clients; nothing the manager emits reaches a browser',
+    ).toBeGreaterThan(-1);
+    const forward = api.slice(fwdAt, api.indexOf('};', fwdAt));
+    expect(forward, 'the SSE forward no longer hands the event to the SSE writer').toContain('broadcast(e)');
+    expect(
+      forward,
+      'the SSE forward now branches on the event; a log frame can be dropped before it leaves the daemon',
+    ).not.toMatch(/\bif\s*\(/);
+
+    const writerAt = api.indexOf('const broadcast = (event: Record<string, unknown>): void =>');
+    expect(writerAt, 'the SSE writer moved; this tripwire no longer reads it').toBeGreaterThan(-1);
+    const writer = api.slice(writerAt, api.indexOf('\n  };', writerAt));
+    expect(writer, 'the SSE writer no longer serialises the whole event').toContain('JSON.stringify(event)');
+    expect(writer, 'the SSE writer now inspects event.type; it used to write every frame').not.toContain('event.type');
+
+    // 3. the browser dispatches every frame it receives. THIS is the link that
+    //    would break silently: `SseEvent` in packages/shared/src/api.ts is a
+    //    discriminated union of four types and `run.log` is not one of them, so
+    //    a well-meant `SseEvent.parse(...)` here would drop every log frame at
+    //    the UI door while leaving the daemon half provably correct.
+    const uiApi = read('packages/ui/src/api.ts');
+    const emitAt = uiApi.indexOf('const emit = (raw: string): void =>');
+    expect(emitAt, 'the UI SSE dispatcher moved; this tripwire no longer reads it').toBeGreaterThan(-1);
+    const emit = uiApi.slice(emitAt, uiApi.indexOf('\n  };', emitAt));
+    expect(emit, 'the UI dispatcher no longer fans frames out on the clockwork:sse event').toContain(
+      "new CustomEvent('clockwork:sse'",
+    );
+    expect(
+      emit,
+      'the UI dispatcher now validates frames against SseEvent, which enumerates 4 of the broadcast types and omits run.log — every log frame would be dropped here',
+    ).not.toContain('SseEvent');
+
+    // 4. something in the UI actually listens for that exact type and renders it.
+    const inbox = read('packages/ui/src/components/InboxView.tsx');
+    expect(inbox, 'no UI listener for run.log; the claim ends at the daemon').toContain("ev?.type !== 'run.log'");
+    expect(inbox, 'the run.log listener is not subscribed to the SSE fan-out').toContain(
+      "addEventListener('clockwork:sse'",
+    );
+    expect(inbox, 'the live tail is no longer mounted; a listener that renders nothing is not "to the UI"').toContain(
+      '<LiveTail',
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 16. No Known limit the code already fixed.
+//
+//     The inverse of every other test here. A Known limit is a claim of
+//     ABSENCE, so the way it goes false is for the code to get better: the
+//     entry keeps warning about a hazard nothing can hit any more, and a reader
+//     who trusts it avoids a feature that works. That shipped — README:469
+//     said nothing refuses `FREQ=HOURLY;INTERVAL=2;BYHOUR=3` while
+//     `guardSchedule` had refused it from `api.ts` for weeks.
+//
+//     Each entry below is checked by RUNNING the code, not by grepping for the
+//     guard's name: the question is what the product does, and a symbol can be
+//     present and unreachable, or absent and replaced.
+//
+//     SCOPE: three of the five Known-limits entries. The "container execution
+//     is a probe" entry has no crisp predicate for "nothing dispatches a run to
+//     it" — proving a negative over every dispatch path is a different kind of
+//     test — and the calendar-latency entry is a measurement, already covered
+//     by tripwire 1b above.
+// ---------------------------------------------------------------------------
+describe('no Known limit that the code has already closed', () => {
+  /** The README's Known-limits bullets, one flattened string each. */
+  function limits(): string[] {
+    const s = section(read(README), /^#+\s.*Known limits/);
+    const bullets = s.split(/\n- /).slice(1);
+    expect(bullets.length, 'the Known-limits section parsed into no bullets — this guard is blind').toBeGreaterThan(3);
+    return bullets.map((b) => b.replace(/\s+/g, ' ').trim());
+  }
+
+  /** The one bullet that names `needle`; fails loudly when the entry moves. */
+  function limitNaming(needle: string): string {
+    const hits = limits().filter((b) => b.includes(needle));
+    expect(hits.length, `expected exactly one Known-limits entry naming "${needle}", found ${hits.length}`).toBe(1);
+    return hits[0]!;
+  }
+
+  it('states the unreachable-RRULE hazard on the side guardSchedule puts it', () => {
+    // Mirror the ceiling api.ts passes rather than importing the whole server
+    // module into a prose test. The unreachable verdict does not depend on it.
+    const maxCount = Number(read(API).match(/MAX_RRULE_COUNT = ([\d_]+)/)?.[1]?.replace(/_/g, '') ?? '0');
+    expect(maxCount, 'MAX_RRULE_COUNT no longer parses out of api.ts').toBeGreaterThan(0);
+
+    const verdict = guardSchedule('rrule', 'FREQ=HOURLY;INTERVAL=2;BYHOUR=3', maxCount);
+    const refusedAtSave = verdict.safe === false && verdict.reason === 'unreachable';
+    const bullet = limitNaming('FREQ=HOURLY;INTERVAL=2;BYHOUR=3');
+
+    if (refusedAtSave) {
+      expect(
+        bullet,
+        'guardSchedule refuses this shape when a task is saved; the Known limit does not say so, which is the entry claiming a gap the code closed',
+      ).toMatch(/guardSchedule.{0,40}refuses/i);
+      expect(
+        bullet,
+        'the Known limit says nothing refuses this shape, and guardSchedule does',
+      ).not.toMatch(/nothing (refuses|rejects|stops|catches)|no guard|is not refused|accepted at save/i);
+    } else {
+      expect(
+        bullet,
+        'the Known limit credits guardSchedule with a save-time refusal it no longer makes',
+      ).not.toMatch(/guardSchedule/);
+    }
+
+    // The half the entry says is still open. Wiring the tick path would be an
+    // improvement AND would make this sentence false, so it is checked too.
+    expect(
+      read(SCHEDULER),
+      'the tick path now calls guardSchedule; the Known limit says it is deliberately left unguarded',
+    ).not.toContain('guardSchedule');
+    // And the guard is genuinely reachable from a write, which is what makes
+    // the corrected half of the sentence true rather than merely written down.
+    // A FLOOR, not an exact count: two call sites (the /tasks save and the
+    // schedule preview) existed when this landed, and a third adopter — the
+    // calendar projection's read-path refusal — strengthens the property this
+    // asserts. An exact count would go red on the improvement.
+    expect(
+      [...read(API).matchAll(/guardSchedule\(/g)].length,
+      'fewer than the two api.ts routes that refused an unsafe recurrence still call guardSchedule; the save-time refusal the entry credits is going away',
+    ).toBeGreaterThanOrEqual(2);
+  });
+
+  it('states the quiet-hours setter gap on the side DeliveryConfig puts it', () => {
+    const bullet = limitNaming('quietHours');
+
+    // Behaviour, not a grep: zod strips an unknown key on a non-strict object,
+    // so the field vanishes on the way in and only a direct SQLite write can
+    // set it. Adding `quietHours` to the schema closes the gap; making the
+    // schema `.strict()` replaces a silent drop with a 400. Both change what a
+    // caller sees, and the entry has to move with them.
+    const parsed = DeliveryConfig.safeParse({ osNotify: true, quietHours: { startHour: 22, endHour: 7 } });
+    const survives = parsed.success && Object.keys(parsed.data).includes('quietHours');
+    if (survives) {
+      expect(
+        bullet,
+        'DeliveryConfig now carries quietHours, so the API can set it; the Known limit still says the field is dropped on the way in',
+      ).not.toMatch(/no reachable setter|strips|carries no/i);
+    } else {
+      expect(bullet, 'the quiet-hours entry no longer names the schema that drops the field').toContain(
+        'DeliveryConfig',
+      );
+      expect(bullet, 'the quiet-hours entry no longer says the field is dropped on the way in').toMatch(
+        /strips|dropped|no reachable setter/i,
+      );
+      expect(
+        parsed.success,
+        'DeliveryConfig now REFUSES an unknown quietHours key rather than dropping it; the entry describes a silent drop',
+      ).toBe(true);
+    }
+    // Either way the scheduler still honours the field, which is what makes
+    // the gap a gap rather than a dead option.
+    expect(
+      read(SCHEDULER),
+      'the scheduler no longer reads delivery_json.quietHours; the entry describes a field the scheduler honours',
+    ).toContain('quietHours');
+  });
+
+  it('states the keep-awake sleep detection on the side run-manager puts it', () => {
+    const bullet = limitNaming('sleptThroughKeepAwake');
+    // One-directional would be a trap: "assert the hardcode is still there"
+    // can only ever be satisfied by REVERTING the detection, so the tripwire
+    // would block the fix it exists to notice. The invariant is that the prose
+    // sits on the side the code does — in both directions.
+    const hardcoded = read(RUN_MANAGER).includes('sleptThroughKeepAwake: false');
+    if (hardcoded) {
+      expect(bullet, 'run-manager still writes a literal false, and the entry no longer says so').toMatch(/hardcoded/i);
+    } else {
+      expect(
+        bullet,
+        'run-manager now derives sleptThroughKeepAwake from a measurement, so the case IS detected; the Known limit still calls the field hardcoded and undetected',
+      ).not.toMatch(/hardcoded|does not yet detect/i);
+    }
+    // Whoever writes it, only these two may: a third writer would be a second,
+    // unreviewed answer to the same question.
+    const writers = sourceFiles(resolve(ROOT, 'packages'))
+      .filter((f) => /sleptThroughKeepAwake\s*:/.test(readFileSync(f, 'utf8')))
+      .map((f) => f.slice(ROOT.length + 1))
+      .sort();
+    expect(writers, 'a new writer of sleptThroughKeepAwake exists; the report has two answers to one question').toEqual([
+      'packages/daemon/src/run-manager.ts',
+      'packages/shared/src/report.ts',
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 17. An OS claim needs a green matrix cell and a CI job.
+//
+//     Inert on this tree by design: the README names no platform but macOS
+//     today, so there is nothing to hold to the matrix. That is precisely when
+//     a tripwire rots, so both parsers below are exercised against fixtures —
+//     the detector against the README's own worst false positive ("the windows
+//     in which you can answer an approval"), and the matrix reader against a
+//     miniature of the real grid. The moment Track 2 or 3 writes "Linux" into
+//     the README, this stops being inert.
+//
+//     `tracks/` is gitignored, so `tracks/CAPABILITY-MATRIX.md` does not exist
+//     in CI or in a fresh clone. The matrix half SKIPS when the file is absent
+//     rather than failing on a file the repo deliberately does not ship; the CI
+//     half reads `.github/workflows/ci.yml`, which is always there, so it
+//     always runs.
+// ---------------------------------------------------------------------------
+
+/** Matrix legend: "shipped and CI-proven". Escaped so this file stays ASCII. */
+const MATRIX_GREEN = '\u{1F7E2}';
+
+/**
+ * Non-macOS platforms the prose names as SUPPORTED.
+ *
+ * Case-sensitive: the README's "the windows in which you can answer an
+ * approval" is not a platform claim, and a case-insensitive match would make
+ * this permanently red on a sentence about office hours.
+ *
+ * A fragment that hedges — "not", "planned", "no Linux build yet" — is not a
+ * claim. Everything else is: a false red costs a human one sentence of
+ * reading, and a false green ships the lie.
+ */
+function osSupportClaims(prose: string): string[] {
+  const HEDGE = /\b(no|not|never|cannot|can't|won't|yet|planned|plan|future|unsupported|refus\w*|instead of|nothing)\b/i;
+  const claimed = new Set<string>();
+  for (const fragment of prose.split(/\n|\||(?<=[.!?])\s+/)) {
+    for (const os of ['Linux', 'Windows']) {
+      if (!new RegExp(`\\b${os}\\b`).test(fragment)) continue;
+      if (HEDGE.test(fragment)) continue;
+      claimed.add(os);
+    }
+  }
+  return [...claimed].sort();
+}
+
+/**
+ * Capability rows the matrix marks green for macOS, with every OS cell.
+ *
+ * "The row is green" needs a rule, because the OSes are COLUMNS: row 9
+ * (auto-update) is red for macOS too, so "every cell green" would fail the
+ * platform that ships. The rule is comparative — whatever macOS has proven, a
+ * platform we call supported has to have proven as well.
+ */
+function matrixRowsGreenOnMac(md: string): Array<{ capability: string; cells: Record<string, string> }> {
+  const rows = md.split('\n').filter((l) => l.trim().startsWith('|'));
+  const header = rows.find((l) => /\|\s*macOS\s*\|/.test(l));
+  if (!header) return [];
+  const cols = header.split('|').slice(1, -1).map((c) => c.trim());
+  const mac = cols.indexOf('macOS');
+  const out: Array<{ capability: string; cells: Record<string, string> }> = [];
+  for (const line of rows) {
+    if (line === header || /^\|[\s|:-]+\|$/.test(line.trim())) continue;
+    const cells = line.split('|').slice(1, -1).map((c) => c.trim());
+    if (cells.length !== cols.length) continue;
+    if (!cells[mac]!.includes(MATRIX_GREEN)) continue;
+    const byCol: Record<string, string> = {};
+    cols.forEach((c, i) => {
+      byCol[c] = cells[i] ?? '';
+    });
+    out.push({ capability: byCol['Capability'] ?? cells[1] ?? line, cells: byCol });
+  }
+  return out;
+}
+
+describe('an OS is only called supported where a matrix cell and a CI job say so', () => {
+  it('tells a platform claim from the word "windows"', () => {
+    expect(osSupportClaims('Clockwork runs on Linux and Windows.')).toEqual(['Linux', 'Windows']);
+    expect(osSupportClaims('Available on Windows 11 and later.')).toEqual(['Windows']);
+    // The README's real sentence, which a case-insensitive rule would flag.
+    expect(osSupportClaims('You declare the windows in which you can answer an approval.')).toEqual([]);
+    expect(osSupportClaims('Linux is not supported.')).toEqual([]);
+    expect(osSupportClaims('A Linux build is planned for Track 2.')).toEqual([]);
+    expect(osSupportClaims('macOS only. Windows has no process-group kill.')).toEqual([]);
+  });
+
+  it('reads a capability matrix the way the real one is written', () => {
+    const YELLOW = '\u{1F7E1}';
+    const RED = '\u{1F534}';
+    const BLANK = '\u{2B1C}';
+    const fixture = [
+      '| # | Capability | macOS | Linux | Windows |',
+      '|---|---|---|---|---|',
+      `| 1 | **Run containment** | ${MATRIX_GREEN} Seatbelt | ${YELLOW} bubblewrap | ${RED} bare Windows |`,
+      `| 2 | **CI proof** | ${MATRIX_GREEN} \`macos-14\` | ${MATRIX_GREEN} \`ubuntu-22.04\` | ${BLANK} \`windows-latest\` |`,
+      `| 3 | **Auto-update** | ${RED} none | ${RED} | ${RED} |`,
+    ].join('\n');
+    const green = matrixRowsGreenOnMac(fixture);
+    expect(green.map((r) => r.capability)).toEqual(['**Run containment**', '**CI proof**']);
+    expect(green.filter((r) => r.cells['Linux']!.includes(MATRIX_GREEN)).map((r) => r.capability)).toEqual([
+      '**CI proof**',
+    ]);
+    expect(matrixRowsGreenOnMac('no table here at all')).toEqual([]);
+  });
+
+  it('never names an OS as supported without a CI job that runs there', () => {
+    const RUNNER: Readonly<Record<string, RegExp>> = {
+      Linux: /runs-on:\s*ubuntu/i,
+      Windows: /runs-on:\s*windows/i,
+    };
+    const ci = read(CI_WF);
+    // Control: the platform that IS supported has a job, which proves this
+    // reads the right file and the right key even while `claimed` is empty.
+    expect(/runs-on:\s*macos/i.test(ci), `no macOS runner found in ${CI_WF}; this guard reads the wrong key`).toBe(true);
+    const missing = osSupportClaims(read(README)).filter((os) => !RUNNER[os]!.test(ci));
+    expect(missing, `README calls ${missing.join(' and ')} supported, but ${CI_WF} has no job on that OS`).toEqual([]);
+  });
+
+  it.skipIf(!existsSync(resolve(ROOT, MATRIX)))(
+    'never names an OS as supported that the capability matrix leaves un-green (skipped when tracks/ is absent — it is gitignored)',
+    () => {
+      const rows = matrixRowsGreenOnMac(read(MATRIX));
+      expect(rows.length, 'no macOS-green rows parsed out of the capability matrix — this guard is blind').toBeGreaterThan(
+        3,
+      );
+      const bad: string[] = [];
+      for (const os of osSupportClaims(read(README))) {
+        for (const row of rows) {
+          const cell = row.cells[os];
+          if (cell === undefined) bad.push(`${os}: the matrix has no ${os} column`);
+          else if (!cell.includes(MATRIX_GREEN)) bad.push(`${os}: "${row.capability}" is ${cell}, macOS is green`);
+        }
+      }
+      expect(bad, `README calls an OS supported that ${MATRIX} does not mark green:\n${bad.join('\n')}`).toEqual([]);
+    },
+  );
 });
