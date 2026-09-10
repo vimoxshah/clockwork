@@ -126,13 +126,17 @@ jobs:
           ./packages/daemon/node_modules/.bin/tsx packages/ui/e2e/smoke/command-palette.ts
           # T4-10: run after book-run-report.ts so Tasks/Inbox hold a real row
           # (the Tasks overflow-menu + "Finished" bucket checks need one),
-          # not an empty state. kbd-a11y-check.ts BEFORE a11y-audit.ts,
-          # deliberately: this step has no `&&`/`||` between commands, so it
-          # runs under the runner's default `bash -e` and stops at the first
-          # non-zero exit. a11y-audit.ts is currently red on two findings
-          # this task could not fix (TasksView.tsx / ComposerView.tsx contrast
-          # — see the PR description) — if it ran first, kbd-a11y-check.ts
-          # would never execute at all, not even show up in the log.
+          # not an empty state.
+          #
+          # The ordering below is kept but is no longer load-bearing. It was
+          # chosen when a11y-audit.ts was red on two contrast findings
+          # (TasksView.tsx / ComposerView.tsx): this step has no `&&`/`||`
+          # between commands, so it runs under the runner's default `bash -e`
+          # and stops at the first non-zero exit — a red a11y-audit.ts running
+          # first meant kbd-a11y-check.ts never appeared in the log at all.
+          # Both findings were fixed by the light-mode accent correction
+          # (6192615), and all four scripts now pass, so nothing here is
+          # sequenced around an expected failure any more.
           ./packages/daemon/node_modules/.bin/tsx packages/ui/e2e/smoke/kbd-a11y-check.ts
           ./packages/daemon/node_modules/.bin/tsx packages/ui/e2e/smoke/a11y-audit.ts
 
