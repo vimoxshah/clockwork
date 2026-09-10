@@ -16,6 +16,10 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# `tray-icon` and nothing else (T4-3). It gates `tauri::tray` alone
+# (tauri-2.11.5/src/lib.rs:112); `tauri::menu` is already unconditional on
+# desktop, and the tray's icon comes from `default_window_icon()`, which
+# tauri-codegen bakes as raw RGBA from `icons/32x32.png` — so no `image-png`.
+tauri = { version = "2", features = ["tray-icon"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
