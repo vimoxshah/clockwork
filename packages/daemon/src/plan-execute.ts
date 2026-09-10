@@ -16,6 +16,15 @@
  * `enabled` to 1. `enabled = 0` is the gate. The execute run is booked
  * directly through `deps.bookRun`; re-enabling the task would re-arm the
  * one-shot chain and let a later plan run fire execute with no approval.
+ *
+ * RECOVERY (T1-11): the verdict commits BEFORE the booking, so a refused
+ * booking used to strand the pair at 'approved' with no execute run and no way
+ * back — a second resolve answered 'already_resolved' and nothing re-booked it.
+ * `resolve` now reads a second 'approved' on exactly that shape as a RETRY of
+ * the booking rather than as a second verdict: same route, same
+ * `bookExecute`, same rendered plan, and `decided_at` untouched. It opens no
+ * new way in. Only a pair a human already approved can reach it, so the gate
+ * this module exists to hold is unchanged.
  */
 import { DateTime } from 'luxon';
 import {
@@ -288,6 +297,14 @@ export class PlanExecute {
    * resolvable: approving a plan that was never written would book an execute
    * run against an empty report. The contract's failure vocabulary has no third
    * value, so that case reports 'already_resolved' — a 409, never a booking.
+   *
+   * ONE exception, and it is a retry rather than a verdict (T1-11): a pair
+   * already sitting at 'approved' with NO execute run is a booking that was
+   * refused after the verdict committed. A second 'approved' re-runs
+   * `bookExecute` for it — the verdict is not re-taken, `decided_at` does not
+   * move, and the approvals row is already closed. Every other shape still
+   * answers 'already_resolved', including 'rejected' against a stranded pair:
+   * a recorded verdict never flips.
    */
   resolve(
     pairId: string,
@@ -301,6 +318,9 @@ export class PlanExecute {
       )
       .run(decision === 'approved' ? 'approved' : 'rejected', now, now, pairId);
     if (r.changes === 0) {
+      // Not a verdict — but it may be the retry of a refused booking.
+      const stranded = decision === 'approved' ? this.strandedPair(pairId) : undefined;
+      if (stranded) return this.bookExecute(stranded, now);
       return this.db.prepare('SELECT id FROM plan_execute_pairs WHERE id=?').get(pairId)
         ? 'already_resolved'
         : 'not_found';
@@ -323,6 +343,37 @@ export class PlanExecute {
 
     if (decision !== 'approved') return toPair(row);
 
+    return this.bookExecute(row, now);
+  }
+
+  /**
+   * A pair stranded by a refused booking, or undefined for every other shape.
+   *
+   * The three columns together are the whole gate on the retry path, and each
+   * one refuses something different: `status='approved'` keeps out a pair no
+   * human ever approved ('awaiting_plan', 'awaiting_approval') and one whose
+   * plan was refused ('rejected'); `execute_run_id IS NULL` keeps out
+   * 'executed', where re-booking would mean a second run off one approval; and
+   * `decided_at IS NOT NULL` is the second lock on the first — no row reaches
+   * 'approved' without a recorded verdict, and one that did is not a verdict.
+   */
+  private strandedPair(pairId: string): PairRow | undefined {
+    return this.db
+      .prepare(
+        `SELECT * FROM plan_execute_pairs
+          WHERE id=? AND status='approved' AND execute_run_id IS NULL AND decided_at IS NOT NULL`,
+      )
+      .get(pairId) as PairRow | undefined;
+  }
+
+  /**
+   * Book the execute run for an APPROVED pair, with the plan bound in. The one
+   * place F1 books, called by the verdict and by the retry alike — so the
+   * retry cannot drift into booking a prompt the first attempt would not have
+   * sent. Returns the pair as it now stands: 'executed' with a run id, or
+   * unchanged at 'approved' when the booking was refused again.
+   */
+  private bookExecute(row: PairRow, now: number): PlanExecutePair {
     const executeTask = this.tasks.get(row.execute_task_id);
     if (!executeTask) return toPair(row); // deleted mid-decision: approved, nothing to book
 
@@ -331,27 +382,37 @@ export class PlanExecute {
           | { report_json: string | null }
           | undefined)
       : undefined;
-    // F1 renders the binding itself; it does not rely on chain firing.
+    // F1 renders the binding itself; it does not rely on chain firing. The
+    // rendered prompt is passed to the booker and never written back to
+    // tasks.prompt, so a retry re-renders from the same template and the same
+    // plan run — this is what makes the retry carry the plan the first attempt
+    // would have carried.
     const prompt = renderChainPrompt(executeTask.prompt, planRun);
 
     // NOTE: the execute task stays enabled=0. It is booked directly.
     //
-    // S-review: the verdict CAS above has already committed, so a throw out of
-    // the booker would escape as a 500 on a decision that is recorded. F8 wraps
-    // its own booker for the same reason (self-healing.ts:170-176). A thrown
-    // refusal is treated as a returned one — same landing, no run.
+    // S-review: the verdict CAS has already committed before this runs, so a
+    // throw out of the booker would escape as a 500 on a decision that is
+    // recorded. F8 wraps its own booker for the same reason
+    // (self-healing.ts:170-176). A thrown refusal is treated as a returned
+    // one — same landing, no run, and the pair stays retryable.
     let executeRunId: string | null = null;
     try {
       executeRunId = this.deps.bookRun(row.execute_task_id, prompt);
     } catch {
       executeRunId = null;
     }
-    if (!executeRunId) return toPair(row); // refused (policy, paused, …): stays 'approved', no run
+    // Refused (policy, deleted half, …): stays 'approved' with no run, which is
+    // the shape strandedPair reads — the pair stays retryable rather than lost.
+    if (!executeRunId) return toPair(row);
 
     this.db
-      .prepare(`UPDATE plan_execute_pairs SET status='executed', execute_run_id=?, updated_at=? WHERE id=?`)
-      .run(executeRunId, now, pairId);
-    return this.get(pairId)!;
+      .prepare(
+        `UPDATE plan_execute_pairs SET status='executed', execute_run_id=?, updated_at=?
+         WHERE id=? AND execute_run_id IS NULL`,
+      )
+      .run(executeRunId, now, row.id);
+    return this.get(row.id)!;
   }
 
   private planReportJson(runId: string): string | null {

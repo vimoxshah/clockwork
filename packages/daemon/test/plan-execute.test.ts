@@ -5,6 +5,10 @@
  * do: never execute without a human verdict, never re-enable the execute half,
  * never open an approval for a plan that was never written, never act twice on
  * one decision.
+ *
+ * The one thing it does NOT refuse is retrying a booking that was refused
+ * AFTER the verdict committed — one verdict, one run, but more than one
+ * attempt at it. That recovery has its own suite: plan-execute-retry.test.ts.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
@@ -355,7 +359,16 @@ describe('resolve — the human verdict, and everything it refuses', () => {
     expect(planExecute.get('nope')).toBeUndefined();
   });
 
-  it('a refused booking leaves the pair approved-but-unexecuted, and does not retry behind a second verdict', () => {
+  // T1-11 CHANGED THE SECOND HALF OF THIS TEST, and the first half is why.
+  // It used to assert that the strand was permanent — 'already_resolved', and
+  // `booked` still at 1. That was the defect being recorded as the contract:
+  // the verdict commits before the booking, so a refusal left the pair at
+  // 'approved' with no run and nothing on any surface could re-book it. A
+  // second 'approved' on THAT shape is now read as a retry of the BOOKING
+  // rather than as a second verdict (plan-execute.ts strandedPair/bookExecute).
+  // Decide-once is untouched and still asserted by the two tests above; every
+  // shape the retry must refuse is asserted in plan-execute-retry.test.ts.
+  it('a refused booking leaves the pair approved-but-unexecuted, and a second approve retries the booking', () => {
     const { pairId } = pairAtTheGate();
     bookResult = null; // policy violation / paused daemon
 
@@ -367,8 +380,13 @@ describe('resolve — the human verdict, and everything it refuses', () => {
     expect(booked).toHaveLength(1);
 
     bookResult = 'RUN_LATE';
-    expect(planExecute.resolve(pairId, 'approved', NOW + 3000)).toBe('already_resolved');
-    expect(booked).toHaveLength(1);
+    const retried = planExecute.resolve(pairId, 'approved', NOW + 3000);
+    expect(typeof retried).not.toBe('string');
+    if (typeof retried === 'string') return;
+    expect(retried.status).toBe('executed');
+    expect(retried.executeRunId).toBe('RUN_LATE');
+    expect(retried.decidedAt).toBe(NOW + 2000); // the verdict is not re-taken
+    expect(booked).toHaveLength(2);
   });
 
   // S-review: `bookRun` is called AFTER the verdict CAS has committed, and it

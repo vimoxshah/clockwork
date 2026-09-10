@@ -8,11 +8,26 @@
  * status board for them.
  *
  * WHAT IS DELIBERATELY NOT DRAWN HERE
- *   `POST /workforce/plan-execute/:id/resolve` accepts a verdict ONLY while
+ *   `POST /workforce/plan-execute/:id/resolve` accepts a VERDICT only while
  *   the pair is `awaiting_approval`; every other status answers 409
- *   `already_resolved` (plan-execute.ts:292-307). So Approve/Reject render for
- *   that one status and nowhere else — including `awaiting_plan`, where
+ *   `already_resolved` (plan-execute.ts `resolve`). So Approve/Reject render
+ *   for that one status and nowhere else — including `awaiting_plan`, where
  *   approving would mean approving a plan nobody has written yet.
+ *
+ * THE ONE OTHER THING THAT ROUTE DOES (T1-11)
+ *   A pair at `approved` with NO execute run is a booking the daemon refused
+ *   after the verdict had already committed — a policy rule, or an execute
+ *   half deleted mid-decision. Sending `approved` again on that shape re-runs
+ *   the booker instead of answering 409, with the approved plan bound into the
+ *   prompt the same way the first attempt bound it (plan-execute.ts
+ *   `bookExecute`). That is what "Retry booking" below sends. It is the same
+ *   verdict, not a new one, so it never appears on a pair nobody approved.
+ *
+ *   It is NOT the same as *Run now* on the execute half. That button is
+ *   allowed once the pair reads `approved`, but it starts the task from its
+ *   STORED prompt, which still carries the unrendered `{{previous.report}}`
+ *   placeholder — the agent would run without the plan. Never offer the two as
+ *   equivalents.
  */
 import { useMemo, useState } from 'react';
 import { api, type PlanExecutePairT, type PlanExecuteStatusT, type TaskViewT } from '../api';
@@ -63,8 +78,8 @@ const STATUS_CHIP: Record<PlanExecuteStatusT, { cls: string; label: string }> = 
  * Two statuses mean two different things depending on another column, and
  * flattening either one would tell the user something false:
  *   approved + no execute run — the booker REFUSED (a policy rule, or the task
- *     was deleted mid-decision). plan-execute.ts:349 leaves the pair
- *     'approved' with no run, "visible, not silent".
+ *     was deleted mid-decision). plan-execute.ts `bookExecute` leaves the pair
+ *     'approved' with no run, which is also the shape its retry reads.
  *   rejected + no approval id — nobody rejected anything; the PLAN RUN itself
  *     failed, so no approval was ever opened (plan-execute.ts:245-254).
  */
@@ -77,7 +92,7 @@ export function explainPair(pair: PlanExecutePairT): string {
     case 'approved':
       return pair.executeRunId
         ? 'You approved the plan and the execute run was booked.'
-        : 'You approved the plan, but booking the execute run was refused — a policy rule, or the task was deleted while you were deciding. Nothing ran.';
+        : 'You approved the plan, but booking the execute run was refused — a policy rule, or the task was deleted while you were deciding. Nothing ran. “Retry booking” sends that same approval again and re-runs the booking with the plan bound into the prompt. “Run now” on the execute half is not the same recovery: it starts the task without the plan.';
     case 'executed':
       return 'You approved the plan and Clockwork booked the execute run from it.';
     case 'rejected':
@@ -220,25 +235,52 @@ function PairRow({
   const [err, setErr] = useState<string | null>(null);
   const chip = STATUS_CHIP[pair.status];
   const decidable = pair.status === 'awaiting_approval';
+  /**
+   * The pair is approved and the booking was refused — the state the daemon
+   * leaves behind when the policy engine rejects the execute half, when that
+   * half was deleted mid-decision, or when the booker throws. Without a
+   * control here the pair is stranded: the inbox item is closed, the audit
+   * line is behind a 402 route with no screen, and nothing re-books it.
+   */
+  const strandedByRefusal = pair.status === 'approved' && !pair.executeRunId;
 
-  const resolve = async (decision: 'approved' | 'rejected'): Promise<void> => {
+  /** One request, two readings of the answer — the verdict's, and the retry's. */
+  const post = async (
+    decision: 'approved' | 'rejected',
+    notice: (res: PlanExecutePairT) => string,
+  ): Promise<void> => {
     setBusy(true);
     setErr(null);
     try {
-      const res = await api.planExecuteResolve(pair.id, decision);
-      onResolved(
-        decision === 'rejected'
-          ? 'Plan rejected — the pair is closed and nothing was booked.'
-          : res.executeRunId
-            ? 'Plan approved — the execute run is booked. Watch it in the calendar or the inbox.'
-            : 'Plan approved, but booking the execute run was refused (a policy rule, or the task is gone). Nothing ran.',
-      );
+      onResolved(notice(await api.planExecuteResolve(pair.id, decision)));
     } catch (e) {
       setErr(String((e as Error).message ?? e));
     } finally {
       setBusy(false);
     }
   };
+
+  const resolve = (decision: 'approved' | 'rejected'): Promise<void> =>
+    post(decision, (res) =>
+      decision === 'rejected'
+        ? 'Plan rejected — the pair is closed and nothing was booked.'
+        : res.executeRunId
+          ? 'Plan approved — the execute run is booked. Watch it in the calendar or the inbox.'
+          : 'Plan approved, but booking the execute run was refused (a policy rule, or the task is gone). Nothing ran — use “Retry booking” once the cause is fixed.',
+    );
+
+  /**
+   * Recovery, not a second verdict: the same `{ decision: 'approved' }` the
+   * human already sent. The daemon re-runs the booker for a pair stranded at
+   * 'approved' with no run and binds the approved plan into the prompt itself,
+   * which is precisely what *Run now* on the execute half would NOT do.
+   */
+  const retryBooking = (): Promise<void> =>
+    post('approved', (res) =>
+      res.executeRunId
+        ? 'Booked — the execute run carries the plan you approved. Watch it in the calendar or the inbox.'
+        : 'Still refused, so nothing ran. Your approval stands: fix the policy rule (or restore the execute half) and retry.',
+    );
 
   // The halves are named "<source> — plan" / "<source> — execute"
   // (plan-execute.ts:152), so the source name finds both rows in the task
@@ -269,6 +311,17 @@ function PairRow({
       {err && <div className="error-banner" role="alert">{err}</div>}
 
       <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+        {strandedByRefusal && (
+          <button
+            className="btn primary small"
+            disabled={busy}
+            data-testid="pair-retry"
+            title="Sends the same approval again and re-runs the booking, with the approved plan bound into the prompt"
+            onClick={() => void retryBooking()}
+          >
+            Retry booking
+          </button>
+        )}
         {decidable && (
           <>
             <button
