@@ -3,7 +3,8 @@
  * Imported templates arrive DISABLED with a security preview (S-74); template
  * variables validated at apply time (S-75).
  */
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import path from 'node:path';
 import type { DB } from './db.js';
 
 export interface TemplateFile {
@@ -18,6 +19,53 @@ export interface TemplateFile {
   schedule?: unknown;
   missedPolicy?: string;
   overlapPolicy?: string;
+  /** Declarative only — `/templates/import` (api.ts) hardcodes `{ osNotify: true }` regardless, same posture as budget/schedule below. */
+  delivery?: { osNotify: boolean };
+}
+
+/**
+ * Five canonical, bookable job definitions (T-207 / T4-7) shipped as JSON
+ * under resources/templates/ — same bundled-resource shape `makeSkillResolver`
+ * (profiles.ts) uses for resources/skill-pack, resolved the same way
+ * (main.ts:242) relative to the daemon's own compiled location.
+ *
+ * A file that is not valid JSON or not `schema: 'clockwork.template.v1'` is
+ * skipped rather than crashing daemon startup on one bad bundled file —
+ * `packages/daemon/test/templates-library.test.ts` pins that every shipped
+ * file DOES parse, so this is a safety net, not a silently-accepted defect.
+ * Sorted by filename for a deterministic list (`readdirSync` order is not
+ * guaranteed across platforms).
+ *
+ * STAGED, NOT WIRED: as of T4-7 this function has NO production caller —
+ * `grep -rn loadBundledTemplates packages/*\/src` finds only this
+ * definition. Nothing in the running daemon reads resources/templates/ yet;
+ * `api.ts` (owned by a later wave this task may not touch) has no route that
+ * serves a bundled template to a client. T4-8 ("Export a template, share a
+ * job") is the named consumer — it already owns both `templates.ts` and
+ * `api.ts` and is the natural place to add a `GET /templates` (or similar)
+ * route backed by this function. Until that wave lands, the five JSON files
+ * are reachable only by this loader and by the composer's separate,
+ * hand-mirrored `COMPOSER_TEMPLATES` copy (ComposerView.tsx) — the two are
+ * kept honest against each other by
+ * `packages/daemon/test/templates-composer-sync.test.ts`, which is the thing
+ * actually standing between "shipped" and "staged and silently drifting" for
+ * as long as this loader has no caller.
+ */
+export function loadBundledTemplates(dir: string): TemplateFile[] {
+  if (!existsSync(dir)) return [];
+  const files = readdirSync(dir)
+    .filter((f) => f.endsWith('.json'))
+    .sort();
+  const out: TemplateFile[] = [];
+  for (const f of files) {
+    try {
+      const raw = JSON.parse(readFileSync(path.join(dir, f), 'utf8'));
+      if (raw && raw.schema === 'clockwork.template.v1') out.push(raw as TemplateFile);
+    } catch {
+      // malformed bundled file — skip, see doc comment above
+    }
+  }
+  return out;
 }
 
 /** S-74 security preview: what differs from safe defaults; bypassPermissions flagged red. */

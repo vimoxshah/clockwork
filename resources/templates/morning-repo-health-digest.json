@@ -1,0 +1,12 @@
+{
+  "schema": "clockwork.template.v1",
+  "name": "Morning repo-health digest",
+  "prompt": "Run the repo-health-monitor procedure on this repository: check for stale branches older than 14 days, the TODO/FIXME count trend, failing or long-running CI signals visible in-repo, dependency advisory files, and a README/setup accuracy spot-check. Change nothing. Report a scannable digest — one line per green item, problems with an owner-suggestion — under 300 words total.",
+  "profileSlug": "repo-health-monitor",
+  "permissionMode": "plan",
+  "budget": { "maxUsd": 1, "maxTurns": 30, "timeoutSec": 1800 },
+  "schedule": { "kind": "rrule", "rrule": "FREQ=DAILY;BYHOUR=8;BYMINUTE=0", "tz": "UTC" },
+  "missedPolicy": "run-late",
+  "overlapPolicy": "skip",
+  "delivery": { "osNotify": true }
+}

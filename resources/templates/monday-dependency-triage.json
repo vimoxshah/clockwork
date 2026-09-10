@@ -1,0 +1,12 @@
+{
+  "schema": "clockwork.template.v1",
+  "name": "Monday dependency triage",
+  "prompt": "Run the dependency-triage procedure on this repository: review outdated dependencies across every manifest and lockfile, apply patch/minor bumps only where the existing test suite proves them safe, and leave a triage note for any major bump instead of upgrading blind. Do not touch workflows, docs, or source to accommodate an upgrade — flag it instead. Finish with a table of package, current version, latest safe version, and what you did or recommend.",
+  "profileSlug": "dep-surgeon",
+  "permissionMode": "acceptEdits",
+  "budget": { "maxUsd": 2, "maxTurns": 50, "timeoutSec": 3600 },
+  "schedule": { "kind": "rrule", "rrule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0", "tz": "UTC" },
+  "missedPolicy": "run-late",
+  "overlapPolicy": "skip",
+  "delivery": { "osNotify": true }
+}
