@@ -180,7 +180,10 @@ describe('EntitlementService — central gate + numeric limits', () => {
     expect(g.allowed).toBe(false);
     expect(g.requiresPlan).toBe('pro');
     expect(svc.gate('policy_engine').requiresPlan).toBe('pro');
-    expect(svc.limitFor('retention')).toBe(30);
+    // T1-20: was 30, which sat BELOW retention-audit.ts's seeded 90 — so this
+    // assertion was pinning a state where a fresh install could not save its
+    // own default. Corrected with the cap, not deleted.
+    expect(svc.limitFor('retention')).toBe(90);
     expect(svc.limitFor('event_triggers')).toBe(2);
     // Free features pass through.
     expect(svc.gate('byok_providers').allowed).toBe(true);

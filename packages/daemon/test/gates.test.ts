@@ -26,11 +26,17 @@ describe('numeric limits drive real caps (free tier)', () => {
     svc = new EntitlementService(db);
   });
 
-  it('free retention is available but capped at 30 days', () => {
-    expect(svc.limitFor('retention')).toBe(30);
+  it('free retention is available but capped at 90 days', () => {
+    // T1-20: was 30, which sat BELOW retention-audit.ts's seeded 90 — so a
+    // fresh install held a window PUT /retention answered 402 for. The cap
+    // moved to match the seed; this assertion moved with it rather than being
+    // deleted. retention-cap-invariant.test.ts now holds the two together.
+    expect(svc.limitFor('retention')).toBe(90);
     // Retention is available-with-cap on free; exceeding the cap is what
     // the route blocks (with requiresPlan from the gate below).
     expect(svc.gate('retention').allowed).toBe(true);
+    // 365 still exceeds the raised cap, so the route still has something to
+    // block — the gate is not made vacuous by the new value.
     const runDays = 365;
     const cap = svc.limitFor('retention');
     expect(runDays > (cap ?? Infinity)).toBe(true);

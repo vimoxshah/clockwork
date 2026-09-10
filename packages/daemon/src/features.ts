@@ -30,7 +30,7 @@ export const FEATURES: FeatureDef[] = [
     label: 'History retention',
     category: 'governance',
     tiers: {
-      free: { available: true, limit: '30 days' },
+      free: { available: true, limit: '90 days' },
       pro: { available: true, limit: '1 year' },
       team: { available: true, limit: '2 years' },
       enterprise: { available: true, limit: 'custom' },
@@ -127,8 +127,27 @@ export function featureLimit(key: string): string | undefined {
  * unlimited on that tier.
  */
 export const NUMERIC_LIMITS: Record<string, Partial<Record<Tier, number>>> = {
-  /** history retention window in days */
-  retention: { free: 30, pro: 365, team: 730 },
+  /**
+   * History retention window in days.
+   *
+   * T1-20: free was 30 while `retention-audit.ts` seeds `run_days = 90`, and
+   * free is the only tier any install runs at. So a fresh install booted with
+   * a 90-day window that its own `PUT /retention` answered 402 for — the
+   * setter could shorten retention and never restore it, and the README's
+   * claim of "a working setter" was false. The cap was otherwise inert: the
+   * sweep reads the stored 90 and prunes on that, so this gate only ever
+   * blocked saving.
+   *
+   * Raised to match what ships and what the README documents, rather than
+   * lowering the seed, which would have deleted run history on every existing
+   * install at upgrade. `retention-cap-invariant.test.ts` now asserts
+   * free >= the seeded default so the two cannot drift apart again.
+   *
+   * This is reversible if retention length is ever meant to be a paid
+   * differentiator — but then the SEED has to come down with it, in the same
+   * change, or this defect comes straight back.
+   */
+  retention: { free: 90, pro: 365, team: 730 },
   /** maximum enabled+total event triggers */
   event_triggers: { free: 2, pro: 50 },
 };
