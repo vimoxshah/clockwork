@@ -143,10 +143,12 @@ feature's API at all.
   occurrence is recorded with disposition `deferred`, and the 18
   `scheduler.test.ts` fixtures and the ledger's primary key are untouched by
   this feature.
-- **It is not the quiet-hours mechanism, and the two differences are
-  deliberate.** Quiet hours pre-claims a fresh `pending` occurrence row at
-  the resume instant and bumps `next_fire` only for recurring schedules.
-  Office hours does neither:
+- **Two rules govern any deferral, and office hours had them first.** Until
+  2026-09-10 quiet hours broke both — it pre-claimed a `pending` occurrence row
+  at the resume instant and bumped `next_fire` only for recurring schedules, so
+  a deferred recurring schedule was pinned forever and a deferred one-shot was
+  dropped. Quiet hours now follows the same two rules; ADR-030 records that
+  repair. Office hours does neither of the broken things and never did:
   - **It deliberately does not pre-claim.** The tick that runs at the resume
     instant has to win its own claim. If this branch had already inserted
     that row, the resume tick's claim would be a no-op, `if (!claimed)
@@ -158,7 +160,8 @@ feature's API at all.
     dropped one-shot is lost work rather than a skipped repeat.
 
   Both are in the office-hours branch of `scheduler.ts` with the same
-  reasoning in a comment beside them, so a future edit that "aligns" the two
+  reasoning in a comment beside them — and now in the quiet-hours branch as
+  well, so a future edit that "aligns" the two
   branches would break office hours in one direction and lose one-shot runs
   in the other.
 

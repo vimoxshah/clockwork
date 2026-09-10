@@ -134,6 +134,37 @@ export interface RunRowT {
   jobspec_json: string;
 }
 
+/** One line of a run's event journal, as `GET /runs/:id/events` serves it. */
+export interface RunEventLineT {
+  /** epoch ms the daemon recorded the line; 0 when the record predates the field */
+  at: number;
+  /** 'log' (the agent's own output) or 'stderr' (the child's) */
+  kind: string;
+  text: string;
+}
+
+/**
+ * Live-tail catch-up (T4-1). `run.log` over SSE only carries what happens
+ * after you subscribe, so this is how a tab opened mid-run gets the earlier
+ * lines. Offsets are BYTES into the run's journal, and the response reports
+ * where its own lines start — `from > since` means the tail was seeked to and
+ * earlier output was not read.
+ */
+export interface RunEventsT {
+  runId: string;
+  /** the offset that was asked for */
+  since: number;
+  /** the offset the returned lines actually begin at */
+  from: number;
+  /** pass as `since` next time to get only what has arrived since */
+  nextSince: number;
+  lines: RunEventLineT[];
+  /** lines that were read and then trimmed by `limit`, oldest first */
+  skipped: number;
+  /** true when `nextSince` had reached the end of the journal */
+  complete: boolean;
+}
+
 /**
  * GET /calendar returns a WINDOWED PROJECTION of RunRowT, not the whole row
  * (NFR-3). A year view holds ~5,000 rows, so the route omits `jobspec_json`,
@@ -697,6 +728,12 @@ export const api = {
     req<{ available: boolean; totalLines?: number; lines: string[] }>(
       'GET',
       `/runs/${runId}/transcript`,
+    ),
+  /** Live-tail catch-up — see RunEventsT. `since` is a byte offset, not a line count. */
+  runEvents: (runId: string, since = 0, limit?: number) =>
+    req<RunEventsT>(
+      'GET',
+      `/runs/${runId}/events?since=${Math.max(0, Math.trunc(since))}${limit ? `&limit=${limit}` : ''}`,
     ),
   cancelRun: (id: string) => req<unknown>('POST', `/runs/${id}/cancel`),
   approvals: () => req<any[]>('GET', '/approvals'),

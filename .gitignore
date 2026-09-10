@@ -65,3 +65,8 @@ launch/
 # production node_modules, reproducible from the lockfile, never committed.
 src-tauri/resources/app/
 src-tauri/binaries/
+
+# Next-level planning — working docs with solutions and task tracking for the
+# cross-OS / UX / feedback tracks. Local until a track ships; the honesty tests
+# read plan/ and docs/, so these live outside both on purpose.
+tracks/

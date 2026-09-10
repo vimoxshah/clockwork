@@ -1,0 +1,12 @@
+{
+  "schema": "clockwork.template.v1",
+  "name": "Friday docs-drift check",
+  "prompt": "Run the docs-writer procedure on this repository: check documentation against actual code and configuration, fix drift, and keep the existing voice and structure. Never invent a feature that is not in the code. Report every fix you made and every drift you found but chose not to fix, with a one-line reason each.",
+  "profileSlug": "docs-scribe",
+  "permissionMode": "acceptEdits",
+  "budget": { "maxUsd": 1.5, "maxTurns": 40, "timeoutSec": 2700 },
+  "schedule": { "kind": "rrule", "rrule": "FREQ=WEEKLY;BYDAY=FR;BYHOUR=9;BYMINUTE=0", "tz": "UTC" },
+  "missedPolicy": "run-late",
+  "overlapPolicy": "skip",
+  "delivery": { "osNotify": true }
+}

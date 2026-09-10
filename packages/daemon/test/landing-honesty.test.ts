@@ -22,6 +22,15 @@
  *     currently advertises no price at all: nothing is purchasable while
  *     ENTITLEMENT_PUBLIC_KEY_HEX is empty, so a figure here would be a claim
  *     the product cannot honour.
+ *
+ * ONE EXCEPTION TO "PRICING ONLY": the macOS version floor (T1-5 tripwire 1).
+ * The page states it four times — the ld+json `operatingSystem`, the
+ * requirements block, the download note and the footer — and `tauri.conf.json`
+ * is the only source that enforces anything. Six sources once said 13 while
+ * the release note said 14; each file was internally consistent, so no
+ * single-file guard could see it. claims-honesty.test.ts holds the README,
+ * docs/install.md, the cask and the release-notes body to the same number.
+ * This suite owns `landing-page/index.html`, so the page's copy lives here.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -32,6 +41,33 @@ import { FEATURES, type Tier } from '../src/features.js';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PAGE = resolve(HERE, '../../../landing-page/index.html');
 const README = resolve(HERE, '../../../README.md');
+const TAURI_CONF = resolve(HERE, '../../../src-tauri/tauri.conf.json');
+
+/**
+ * macOS codename → major version, for a page that ever writes the floor as a
+ * name. Its twin lives in claims-honesty.test.ts: the two honesty suites are
+ * deliberately independent readers, one artifact each, and neither imports
+ * from the other.
+ */
+const MACOS_CODENAMES: Readonly<Record<string, number>> = {
+  catalina: 10, big_sur: 11, monterey: 12, ventura: 13, sonoma: 14, sequoia: 15, tahoe: 26,
+};
+
+/**
+ * Every macOS floor the page states, as major versions. A runner label
+ * (`macos-14`) is deliberately not a match — the separator must be real
+ * whitespace — and a word after "macOS" counts only when it is a known
+ * codename, so "macOS says the app is damaged" is prose, not a version.
+ */
+function macosClaims(text: string): number[] {
+  const out: number[] = [];
+  for (const m of text.matchAll(/macOS[ \t]+(\d+)(?:\.\d+)?\b/gi)) out.push(Number(m[1]));
+  for (const m of text.matchAll(/macOS[ \t]+([A-Za-z][A-Za-z ]*?[a-z])\b/g)) {
+    const known = MACOS_CODENAMES[m[1]!.toLowerCase().replace(/ /g, '_')];
+    if (known !== undefined) out.push(known);
+  }
+  return out;
+}
 
 /** Pricing cards in document order: [tier, cardHtml]. */
 function cards(): Array<{ tier: Tier; html: string }> {
@@ -142,6 +178,38 @@ describe('landing page honesty', () => {
     expect(defined.size, 'no custom properties parsed — this guard is blind').toBeGreaterThan(5);
     const undefinedVars = [...used].filter((v) => !defined.has(v));
     expect(undefinedVars, `landing page uses undefined CSS variables: ${undefinedVars.join(', ')}`).toEqual([]);
+  });
+
+  // T1-5 tripwire 1. The page is prose ABOUT a number the app enforces, so it
+  // has to be that number — in all four places, because the drift that shipped
+  // was one source out of six disagreeing, not a whole file being wrong.
+  it('states the macOS floor tauri.conf.json ships, everywhere it states one', () => {
+    const conf = JSON.parse(readFileSync(TAURI_CONF, 'utf8')) as {
+      bundle?: { macOS?: { minimumSystemVersion?: string } };
+    };
+    const raw = conf.bundle?.macOS?.minimumSystemVersion;
+    expect(raw, 'tauri.conf.json states no bundle.macOS.minimumSystemVersion').toBeTruthy();
+    const floor = Number(String(raw).split('.')[0]);
+    expect(Number.isInteger(floor) && floor > 0, `unparseable minimumSystemVersion: ${String(raw)}`).toBe(true);
+
+    // The extractor is the tripwire; one that matches nothing cannot fail.
+    expect(macosClaims('"operatingSystem": "macOS 14 or later, Apple silicon"')).toEqual([14]);
+    expect(macosClaims('macOS 13 or newer on Apple silicon')).toEqual([13]);
+    expect(macosClaims('built on macos-14 runners')).toEqual([]);
+    expect(macosClaims('why does macOS say the app is damaged?')).toEqual([]);
+    expect(macosClaims('needs macOS Ventura')).toEqual([13]);
+
+    const stated = macosClaims(readFileSync(PAGE, 'utf8'));
+    // Four today: ld+json, the requirements block, the download note, the
+    // footer. A floor becomes drift the moment one of them is missed, so a
+    // page that states it fewer times than that is worth a look — but the
+    // hard failure is the one below, on any mention that disagrees.
+    expect(stated.length, 'the landing page states no macOS floor at all — this guard is blind').toBeGreaterThan(0);
+    const wrong = stated.filter((v) => v !== floor);
+    expect(
+      wrong,
+      `the landing page says macOS ${[...new Set(wrong)].join('/')} but tauri.conf.json ships a ${floor}.0 floor`,
+    ).toEqual([]);
   });
 
   it('says so when a feature is only planned', () => {

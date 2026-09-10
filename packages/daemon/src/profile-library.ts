@@ -112,3 +112,101 @@ export const EXTRA_PROFILES: BundledProfile[] = [
       `${UNATTENDED} You are the Changelog Writer: documentation of what actually changed. METHOD: derive entries from commit history and diff evidence since the last marker — never invent features. Group by Added/Changed/Fixed/Removed. Voice: factual, user-facing, no marketing adjectives. CONSTRAINTS: do not edit source code; changelog file only (or report-only if none exists). OUTPUT: ready-to-commit changelog section plus a list of commits you could not confidently categorize.`,
   },
 ];
+
+// ---------------------------------------------------------------------------
+// T4-2 — the onboarding sample job.
+//
+// It lives beside the profile it runs as, because the two only make sense
+// together: the job is "Code Reviewer, pointed at something", and the profile
+// above is what supplies the review lenses, the severity scale and the output
+// contract. Splitting them would leave a prompt in one file silently depending
+// on a mission statement in another.
+//
+// WHAT IS NOT DECIDED HERE, ON PURPOSE. The three properties that make this
+// job safe to fire at a stranger's machine — permission mode `plan`, the $0.50
+// cap, ASAP scheduling — are stated by the caller that books it (App.tsx), not
+// by this module. A prompt cannot enforce read-only; `permission_mode` and the
+// sandbox can. Keeping the contract at the booking site is what stops it
+// looking like the prompt is the thing holding the line.
+//
+// NOT the bundled templates. T4-7 originally said the onboarding sample should
+// use the first of the five bundled templates; the first one is Dep Surgeon,
+// which edits manifests and lockfiles. Struck for exactly that reason.
+// ---------------------------------------------------------------------------
+
+/** The profile the sample runs as. Read-only by mission (see `code-reviewer` above). */
+export const ONBOARDING_SAMPLE_PROFILE_SLUG = 'code-reviewer';
+
+export interface OnboardingSampleJob {
+  /** Task name — also the worktree/branch slug, so it stays short and plain. */
+  name: string;
+  prompt: string;
+  /** true when this is the no-repo fallback rather than a review of the user's own code. */
+  bundled: boolean;
+}
+
+/**
+ * Reviewing a repository the user already has.
+ *
+ * Deliberately does NOT assume the branch has uncommitted work or a diff
+ * against a base: on a freshly cloned or long-idle repo "review the changes on
+ * this branch" finds nothing, and an empty first report is the worst possible
+ * first report. The fallback ladder gives the reviewer somewhere to go in every
+ * repo state.
+ */
+export function onboardingRepoReviewJob(repoName: string): OnboardingSampleJob {
+  return {
+    name: `Code review: ${repoName}`,
+    prompt:
+      `First-pass code review of the ${repoName} repository. This is a Clockwork sample run: ` +
+      `you are read-only, so report findings and change nothing.\n\n` +
+      `WHERE TO LOOK, in order — stop at the first that gives you real code:\n` +
+      `1. Uncommitted work: \`git status --short\` and \`git diff\`.\n` +
+      `2. The last few commits: \`git log --oneline -10\` then \`git show --stat\` on the newest.\n` +
+      `3. If the history is too thin for either, review the largest source files ` +
+      `you can find near the repository root.\n\n` +
+      `Keep it to the highest-value findings — this run has a small budget, so spend it on ` +
+      `correctness and security before style. Say plainly which files you actually read.`,
+    bundled: false,
+  };
+}
+
+/**
+ * The tiny bundled sample, used only when no repository could be found.
+ *
+ * It is a snippet in the prompt rather than a scaffolded directory, and that is
+ * a safety choice as much as a simplicity one: the fallback for "we found
+ * nothing of yours" must not be "so we wrote something into your home folder".
+ * The task is booked with no `repoPath` at all, which makes it a scratch run —
+ * there is no worktree cut from anything the user owns.
+ *
+ * The snippet carries findings at several severities on purpose, so the first
+ * report a person ever sees demonstrates the severity scale instead of a single
+ * nit: SQL built by concatenation, a missing ownership check, a refund failure
+ * swallowed and then recorded as success, a loose equality, and an unchecked
+ * lookup.
+ */
+export const ONBOARDING_BUNDLED_SAMPLE_JOB: OnboardingSampleJob = {
+  name: 'Code review: bundled sample',
+  bundled: true,
+  prompt:
+    `First-pass code review of the snippet below. This is a Clockwork sample run: it uses a ` +
+    `bundled snippet because no git repository was found on this machine, you are read-only, ` +
+    `and there is no repository to open — everything you need is in this prompt.\n\n` +
+    '```ts\n' +
+    `// billing.ts — refund endpoint\n` +
+    `export async function refund(req, res) {\n` +
+    `  const orderId = req.query.orderId;\n` +
+    `  const rows = await db.query('SELECT * FROM orders WHERE id = ' + orderId);\n` +
+    `  const order = rows[0];\n` +
+    `  if (order.status == 'refunded') return res.send({ ok: true });\n` +
+    `  try {\n` +
+    `    await gateway.refund(order.paymentId, order.totalCents);\n` +
+    `  } catch (e) {}\n` +
+    `  await db.query(\`UPDATE orders SET status = 'refunded' WHERE id = \${orderId}\`);\n` +
+    `  res.send({ ok: true, refunded: order.totalCents });\n` +
+    '}\n' +
+    '```\n\n' +
+    `Report every finding with a severity and a one-line fix. Then say, in one sentence, ` +
+    `whether you would let this ship.`,
+};

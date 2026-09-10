@@ -16,7 +16,7 @@ import { AgentPicker } from './AgentPicker';
 import { DateTimePicker } from './ui/datetime-picker';
 import { TimeField, timeStringToMinutes, minutesToTimeString, hourLabel } from './ui/time-field';
 import { Badge } from './ui/card';
-import { Zap, FolderGit2, Bot, Wallet, CalendarClock, AlertCircle, GitBranch, Bell, Send } from 'lucide-react';
+import { Zap, FolderGit2, Bot, Wallet, CalendarClock, AlertCircle, GitBranch, Bell, Send, LayoutTemplate } from 'lucide-react';
 import { cn } from '../lib/cn';
 import { FolderBrowserDialog } from './FolderBrowserDialog';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from './ui/dialog';
@@ -50,6 +50,25 @@ export const BUDGET_GUARDS_SURFACE = registerFeatureSurface({
   tab: 'new',
   where: 'New task › Budget & limits',
   anchorId: 'budget-guards',
+});
+
+/**
+ * T1-10: `DeliveryConfig.webhook.url` (packages/shared/src/schemas.ts) and
+ * `selectedChannels()` reading it (delivery-dispatch.ts) have been wired since
+ * T-211/ADR-018 — POST /tasks always accepted this field. Only the screen was
+ * missing (README's Known limits named it API-only), so this is the first
+ * build where the field has anywhere to be typed in. The field itself sits
+ * inside the Telegram approvals section (beside the Telegram chat id, per
+ * T1-10), but `where` names the field, not that section — the channel is
+ * unrelated to Telegram, and the anchor scrolls straight to its own `<div>`,
+ * so there is no need for the matrix's "Show me" to describe a detour through
+ * someone else's heading.
+ */
+export const WEBHOOKS_SURFACE = registerFeatureSurface({
+  key: 'webhooks',
+  tab: 'new',
+  where: 'New task › Webhook URL',
+  anchorId: 'webhook-delivery',
 });
 
 
@@ -153,6 +172,17 @@ export function notInThePast(d: Date, now = new Date()): Date {
  *   in Settings, so the task row only holds the opt-in.
  * - Email carries recipients only, for the same reason — the relay password is
  *   a credential and stays in Settings.
+ * - A webhook URL, when set, attaches `{ url }` (T1-10). Unlike Slack's
+ *   incoming-webhook URL, this one is NOT itself the credential — it names a
+ *   generic HTTP endpoint (`WebhookChannel`, `delivery.ts`) that only ever
+ *   RECEIVES Clockwork's own HMAC-signed payload; knowing the URL lets you
+ *   receive that payload, not post as Clockwork. The shared secret that signs
+ *   it (`webhookSecret`) stays in Settings, same reasoning as Slack's URL and
+ *   the SMTP password — but the destination itself belongs on the task row,
+ *   which is exactly what `DeliveryConfig.webhook.url`
+ *   (`packages/shared/src/schemas.ts`) and `selectedChannels()`
+ *   (`delivery-dispatch.ts`) already expected before this field had anywhere
+ *   to be typed in.
  *
  * `extra` is a fourth, optional parameter rather than three more positional
  * ones so the existing three-argument call sites and tests read unchanged.
@@ -161,13 +191,14 @@ export function buildTaskDelivery(
   chatIdRaw: string,
   isGroup: boolean,
   allowedUserIdsRaw: string,
-  extra: { slack?: boolean; emailToRaw?: string } = {},
+  extra: { slack?: boolean; emailToRaw?: string; webhookUrlRaw?: string } = {},
 ): Record<string, unknown> {
   const chatId = chatIdRaw.trim();
   const emailTo = (extra.emailToRaw ?? '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
+  const webhookUrl = (extra.webhookUrlRaw ?? '').trim();
   const delivery: Record<string, unknown> = { osNotify: true };
   if (chatId) {
     delivery.telegram = {
@@ -184,6 +215,7 @@ export function buildTaskDelivery(
   }
   if (extra.slack) delivery.slack = { enabled: true };
   if (emailTo.length > 0) delivery.email = { to: emailTo };
+  if (webhookUrl) delivery.webhook = { url: webhookUrl };
   return delivery;
 }
 
@@ -203,6 +235,121 @@ const DOW: Array<{ value: Weekday; label: string }> = [
   { value: 'FR', label: 'Fri' },
   { value: 'SA', label: 'Sat' },
   { value: 'SU', label: 'Sun' },
+];
+
+/**
+ * The five canonical templates (T-207 / T4-7), for the composer's "start from
+ * a template" quick-fill only.
+ *
+ * This is a SEPARATE representation of the same five jobs shipped as JSON
+ * under resources/templates/ — not an import of those files. `packages/ui`
+ * has no `resolveJsonModule` in its tsconfig (outside this task's touch
+ * scope) and `packages/ui/src/api.ts` is a pure `fetch` client against the
+ * daemon with no route to serve a bundled resource file to the browser, so
+ * there is no TYPE-CHECKED path from the JSON files to this constant.
+ * Content (name/prompt/profile/budget/cadence) is kept identical to
+ * resources/templates/*.json BY HAND — but it IS test-checked:
+ * `packages/daemon/test/templates-composer-sync.test.ts` reads this file as
+ * text (same reason: a daemon-context vitest run has no JSX transform for
+ * ComposerView.tsx) and fails the build the moment the two disagree on any
+ * field that matters, including cadence (compared through the real
+ * `composeWeeklyRule`/`composeDailyRule` emitter, not a hand-rebuilt rrule
+ * string). `packages/daemon/test/templates-library.test.ts` separately
+ * verifies the JSON files parse and validate on their own.
+ *
+ * Only what the composer actually prefills is carried: `missedPolicy`,
+ * `overlapPolicy` and `delivery` are the schema defaults `submit()` already
+ * sends (run-late / skip / {osNotify:true}), so a template never needs to
+ * restate them. `tz` is deliberately NOT carried — the shipped files use
+ * 'UTC' as a portable placeholder; the composer leaves the user's own
+ * `Intl` zone untouched.
+ */
+interface ComposerTemplate {
+  name: string;
+  prompt: string;
+  profileSlug: string;
+  permissionMode: 'plan' | 'acceptEdits';
+  maxUsd: string;
+  maxTurns: string;
+  timeoutSec: string;
+  /** Human-readable cadence shown on the card. */
+  scheduleLabel: string;
+  /**
+   * The composer has no 'queue' schedule kind of its own (see `kind` in
+   * `form`, above) — a 'queue'-kind template (resources/templates/
+   * pre-release-changelog-draft.json) maps to 'asap' here rather than to a
+   * cadence that does not exist in this form.
+   */
+  schedule: { kind: 'asap' } | { kind: 'rrule'; rruleFreq: 'DAILY' | 'WEEKLY'; rruleByDay?: Weekday[]; rruleTime: string };
+}
+
+const COMPOSER_TEMPLATES: ComposerTemplate[] = [
+  {
+    name: 'Monday dependency triage',
+    prompt:
+      'Run the dependency-triage procedure on this repository: review outdated dependencies across every manifest and lockfile, apply patch/minor bumps only where the existing test suite proves them safe, and leave a triage note for any major bump instead of upgrading blind. Do not touch workflows, docs, or source to accommodate an upgrade — flag it instead. Finish with a table of package, current version, latest safe version, and what you did or recommend.',
+    profileSlug: 'dep-surgeon',
+    permissionMode: 'acceptEdits',
+    maxUsd: '2',
+    maxTurns: '50',
+    timeoutSec: '3600',
+    scheduleLabel: 'Weekly · Mon 09:00',
+    schedule: { kind: 'rrule', rruleFreq: 'WEEKLY', rruleByDay: ['MO'], rruleTime: '09:00' },
+  },
+  {
+    name: 'Flaky test sweep',
+    prompt:
+      'Run the test-doctor procedure on this repository: find failing or intermittently failing tests, classify each as genuinely broken, flaky, or obsolete, and propose minimal fixes for flaky cases without weakening any assertion. Run the affected suites to verify before reporting. Report as a table of test, classification, evidence, and proposed fix.',
+    profileSlug: 'test-doctor',
+    permissionMode: 'acceptEdits',
+    maxUsd: '2',
+    maxTurns: '50',
+    timeoutSec: '3600',
+    scheduleLabel: 'Weekly · Wed 09:00',
+    schedule: { kind: 'rrule', rruleFreq: 'WEEKLY', rruleByDay: ['WE'], rruleTime: '09:00' },
+  },
+  {
+    name: 'Friday docs-drift check',
+    prompt:
+      'Run the docs-writer procedure on this repository: check documentation against actual code and configuration, fix drift, and keep the existing voice and structure. Never invent a feature that is not in the code. Report every fix you made and every drift you found but chose not to fix, with a one-line reason each.',
+    profileSlug: 'docs-scribe',
+    permissionMode: 'acceptEdits',
+    maxUsd: '1.5',
+    maxTurns: '40',
+    timeoutSec: '2700',
+    scheduleLabel: 'Weekly · Fri 09:00',
+    schedule: { kind: 'rrule', rruleFreq: 'WEEKLY', rruleByDay: ['FR'], rruleTime: '09:00' },
+  },
+  {
+    name: 'Morning repo-health digest',
+    prompt:
+      'Run the repo-health-monitor procedure on this repository: check for stale branches older than 14 days, the TODO/FIXME count trend, failing or long-running CI signals visible in-repo, dependency advisory files, and a README/setup accuracy spot-check. Change nothing. Report a scannable digest — one line per green item, problems with an owner-suggestion — under 300 words total.',
+    profileSlug: 'repo-health-monitor',
+    permissionMode: 'plan',
+    maxUsd: '1',
+    maxTurns: '30',
+    timeoutSec: '1800',
+    scheduleLabel: 'Daily · 08:00',
+    schedule: { kind: 'rrule', rruleFreq: 'DAILY', rruleTime: '08:00' },
+  },
+  {
+    name: 'Pre-release changelog draft',
+    prompt:
+      'Run the changelog-writer procedure on this repository: derive changelog entries from commit history and diff evidence since the last version marker, grouped as Added/Changed/Fixed/Removed, factual and user-facing with no marketing language. Do not edit source code. Produce a ready-to-commit changelog section plus a list of any commits you could not confidently categorize.',
+    profileSlug: 'changelog-writer',
+    permissionMode: 'plan',
+    maxUsd: '1.5',
+    maxTurns: '30',
+    timeoutSec: '1800',
+    // Round-2 review: "Run on demand" over-promised — booking it fires
+    // within ASAP_LEAD_MS (~15s), then waits only for a free slot; it is not
+    // a pure on-demand/manual trigger. "ASAP" matches what the Schedule
+    // control itself is labeled once this card selects it (see the 'asap'
+    // tab a few lines below), so the card and the control it sets never
+    // describe the booking two different ways.
+    scheduleLabel: 'ASAP',
+    schedule: { kind: 'asap' },
+  },
 ];
 
 function Section({
@@ -277,6 +424,7 @@ export default function ComposerView({
     telegramChatId: '',
     telegramIsGroup: false,
     telegramAllowedUserIds: '',
+    webhookUrl: '',
     slackEnabled: false,
     emailTo: '',
   }));
@@ -286,6 +434,7 @@ export default function ComposerView({
   const [cloneOpen, setCloneOpen] = useState(false);
   const [cloneUrl, setCloneUrl] = useState('');
   const [cloneBusy, setCloneBusy] = useState(false);
+  const [appliedTemplate, setAppliedTemplate] = useState<string | null>(null);
 
   useEffect(() => {
     void api.profiles().then(setProfiles).catch(() => {});
@@ -328,6 +477,18 @@ export default function ComposerView({
     if (!Number.isFinite(maxUsdN) || maxUsdN <= 0) return setError('Budget must be a positive number.');
     if (!Number.isInteger(maxTurnsN) || maxTurnsN < 1) return setError('Max turns must be a positive integer.');
     if (!Number.isInteger(timeoutSecN) || timeoutSecN < 30) return setError('Timeout must be at least 30 seconds.');
+    const webhookUrlTrimmed = form.webhookUrl.trim();
+    if (webhookUrlTrimmed) {
+      // Validating, not constructing: `new URL` throws on anything that is not
+      // an absolute URL, which is exactly what `DeliveryConfig.webhook.url`
+      // (z.string().url()) will refuse server-side — catching it here saves the
+      // round trip.
+      try {
+        void new URL(webhookUrlTrimmed);
+      } catch {
+        return setError('Webhook URL must be an absolute URL, e.g. https://example.com/hook.');
+      }
+    }
 
     let schedule: Record<string, unknown>;
     if (form.kind === 'once') {
@@ -352,6 +513,7 @@ export default function ComposerView({
     const delivery = buildTaskDelivery(form.telegramChatId, form.telegramIsGroup, form.telegramAllowedUserIds, {
       slack: form.slackEnabled,
       emailToRaw: form.emailTo,
+      webhookUrlRaw: form.webhookUrl,
     });
 
     setBusy(true);
@@ -381,6 +543,40 @@ export default function ComposerView({
     } finally {
       setBusy(false);
     }
+  };
+
+  /**
+   * Fills the form from a canonical template (T4-7) — the composer's own
+   * `kind`/`rruleFreq`/`rruleByDay`/`rruleTime` fields, not a raw rrule
+   * string, because `submit()` builds the schedule from those via
+   * `buildRrule` rather than sending a string through directly. `profileSlug`
+   * resolves against the already-fetched `profiles` list; a slug that is not
+   * yet seeded (fresh daemon before `seedBuiltinProfiles` runs) degrades to
+   * '' — the composer's own "Generalist / default profile" state — rather
+   * than failing. Nothing is booked: this only fills the form, same as the
+   * Calendar's "Book a run this day" prefill.
+   */
+  const applyTemplate = (tpl: ComposerTemplate): void => {
+    const profile = profiles.find((p) => p.slug === tpl.profileSlug);
+    setForm((f) => ({
+      ...f,
+      name: tpl.name,
+      prompt: tpl.prompt,
+      profileId: profile?.id ?? '',
+      permissionMode: tpl.permissionMode,
+      maxUsd: tpl.maxUsd,
+      maxTurns: tpl.maxTurns,
+      timeoutSec: tpl.timeoutSec,
+      ...(tpl.schedule.kind === 'asap'
+        ? { kind: 'asap' as const }
+        : {
+            kind: 'rrule' as const,
+            rruleFreq: tpl.schedule.rruleFreq,
+            rruleByDay: tpl.schedule.rruleByDay ?? f.rruleByDay,
+            rruleTime: tpl.schedule.rruleTime,
+          }),
+    }));
+    setAppliedTemplate(tpl.name);
   };
 
   const doClone = async (): Promise<void> => {
@@ -445,6 +641,45 @@ export default function ComposerView({
         </div>
 
         <CardContent className="grid items-start gap-6 p-5 lg:grid-cols-5">
+          {/* ---------- quick-start templates, full width ----------
+              T4-7: five ready-to-book jobs that fill in prompt, profile,
+              schedule and budget in one click — "book one without typing a
+              prompt". A full-width row of its own, same shape as Schedule
+              and the two delivery sections below, so it does not squeeze the
+              narrow side column. */}
+          <div className="lg:col-span-5">
+            <Section icon={<LayoutTemplate />} title="Start from a template">
+              <p className="mb-2 text-xs text-dim">
+                Five jobs that pay for themselves in a week — pick one to fill in the prompt, profile, schedule
+                and budget below. Nothing is booked until you press Book it.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {COMPOSER_TEMPLATES.map((tpl) => (
+                  <button
+                    key={tpl.name}
+                    type="button"
+                    onClick={() => applyTemplate(tpl)}
+                    aria-pressed={appliedTemplate === tpl.name}
+                    className={cn(
+                      'min-w-[11rem] rounded-lg border px-3 py-2 text-left text-xs transition-colors',
+                      appliedTemplate === tpl.name
+                        ? 'border-accent bg-surface-hover ring-1 ring-inset ring-accent'
+                        : 'border-border bg-bg hover:border-strong hover:bg-surface-hover',
+                    )}
+                  >
+                    <span className="block font-medium text-fg">{tpl.name}</span>
+                    <span className="block text-dim">
+                      @{tpl.profileSlug} · {tpl.scheduleLabel}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              {appliedTemplate && (
+                <p className="mt-2 text-xs text-info">Filled in from "{appliedTemplate}" — review and edit anything below.</p>
+              )}
+            </Section>
+          </div>
+
           {/* ---------- main column ---------- */}
           <div className="space-y-6 lg:col-span-3">
             <Section icon={<Bot />} title="The job">
@@ -928,6 +1163,27 @@ export default function ComposerView({
                   )}
                 </div>
               )}
+
+              {/* A separate channel from Telegram above, sharing its section only
+                  because T1-10 places it beside the chat id field. It carries
+                  the same two payloads Slack and email do (the run report, and
+                  a notice when a run is waiting) and, like them, cannot answer
+                  back — no Approve/Deny button, because the daemon binds
+                  loopback only (S-2) and could not receive one. */}
+              <div id={WEBHOOKS_SURFACE.anchorId} className="mt-3">
+                <Label htmlFor="c-webhook-url">Webhook URL (optional)</Label>
+                <Input
+                  id="c-webhook-url"
+                  placeholder="https://example.com/hooks/clockwork"
+                  value={form.webhookUrl}
+                  onChange={(e) => setForm({ ...form, webhookUrl: e.target.value })}
+                />
+                <p className="mt-1 text-xxs text-dim">
+                  A generic endpoint for the run report and a notice when a run is waiting — HMAC-signed
+                  if a webhook secret is set in Settings → Notifications &amp; delivery.
+                  Approving or denying still happens in this app or in Telegram, never here.
+                </p>
+              </div>
             </section>
 
             {/*

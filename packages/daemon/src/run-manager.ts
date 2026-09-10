@@ -69,7 +69,18 @@ export interface RunManagerDeps {
   notify(kind: string, title: string, body: string): void;
   broadcast(event: Record<string, unknown>): void;
   safetyJournal: SafetyJournal;
-  keepAwake?: { arm(key: string, durationSec: number): boolean; release(key: string): void };
+  /**
+   * `observe`/`sleepDuring` (T1-9) are optional on top of an already-optional
+   * dep so the `{ arm, release }` stubs in existing tests still typecheck.
+   * The real `KeepAwake` main.ts constructs implements all four, so the wiring
+   * needs no edit there.
+   */
+  keepAwake?: {
+    arm(key: string, durationSec: number): boolean;
+    release(key: string): void;
+    observe?(key: string, wallNow: number): void;
+    sleepDuring?(key: string): number | null;
+  };
   /** bundled skill pack resolver (T-112) */
   resolveSkill?: (ref: { name: string; version: string }) => string | null;
   /** F4 sentinel-worker (plan/AGENT-WORKFORCE-SPEC.md): called after every run
@@ -118,9 +129,30 @@ interface RunRow {
 
 const HEARTBEAT_GAP_MS = 60_000; // S-32
 
+/**
+ * T4-1 live tail: the coalescing window for `run.log`, per run.
+ *
+ * A `{kind:'log'}` message used to broadcast one SSE frame each, so a chatty
+ * agent wrote a frame per line to every connected client — and, because
+ * App.tsx bumps its data version on EVERY frame, a refetch of the whole inbox
+ * per line with it. 100ms caps that at ~10 frames/sec per run while the
+ * frames still carry every line (they batch, they do not sample), so nothing
+ * a run said is lost to the throttle.
+ */
+const LOG_COALESCE_MS = 100;
+
 export class RunManager {
   private readonly repoMutex = new Map<string, string>(); // repoPath -> runId
   private readonly liveChildren = new Map<string, ChildProcess>();
+  /**
+   * Log lines waiting for their coalescing window to close, per run.
+   *
+   * Trailing edge only: the first line of a window arms the timer and the
+   * frame goes out when it fires, so the window is closed by the arrival of
+   * work rather than by a clock read — which also keeps the throttle honest
+   * under FakeClock, where `clock.now()` never moves.
+   */
+  private readonly logTails = new Map<string, { lines: string[]; timer: ReturnType<typeof setTimeout> }>();
   private readonly pendingApprovals = new Map<string, Map<string, (d: any) => void>>();
   /** Reachable approvals (outbound): dedupe key runId -> set of reqId (or approvalId when reqId is absent), so a duplicate child message never double-notifies. */
   private readonly notifiedApprovalKeys = new Map<string, Set<string>>();
@@ -247,6 +279,11 @@ export class RunManager {
     if (spec.repoPath) this.repoMutex.set(spec.repoPath, row.id);
     // FR-25/S-15: arm keep-awake across the run's wall-clock budget
     this.deps.keepAwake?.arm(row.id, spec.budget.timeoutSec + 300);
+    // T1-9's sleep window is NOT opened here, next to arm(). Everything below
+    // — prompt rendering, preflight, `git worktree add` — sits between this
+    // line and the first watchdog tick, so a slow repo's setup would land in
+    // the first sampled gap and read as a sleep. It is opened in spawnChild,
+    // beside the watchdog that samples it.
 
     try {
       // Event placeholders (goal #27): materialize {{event.*}} from a trigger
@@ -400,6 +437,10 @@ export class RunManager {
     });
 
     child.on('close', () => {
+      // Before anything else: stdout is at EOF, so every log line this run
+      // will ever produce is already buffered. Whatever is still inside the
+      // coalescing window goes out now, not never (T4-1).
+      this.flushLogTail(runId);
       this.liveChildren.delete(runId);
       const cur = this.getRun(runId);
       // `finalizing` is deliberately absent: finalize() runs from that
@@ -420,6 +461,16 @@ export class RunManager {
       }
     });
 
+    // T1-9: open the sleep window HERE, on the last line before the watchdog
+    // that samples it, and with a FRESH clock read — `now` is the timestamp
+    // startRun took before preflight and `git worktree add`, and seeding with
+    // it would charge that setup to the first sampled gap. Nothing may await
+    // between this line and the setInterval below, or the same gap reopens.
+    //
+    // Not gated on arm()'s return, deliberately: arm() declines on battery,
+    // and a laptop on battery is the machine most likely to sleep.
+    this.deps.keepAwake?.observe?.(runId, this.deps.clock.now());
+
     // watchdogs
     const watchdog = setInterval(() => {
       const r = this.getRun(runId);
@@ -428,6 +479,11 @@ export class RunManager {
         return;
       }
       const now2 = this.deps.clock.now();
+      // T1-9: sample BEFORE the heartbeat check. A sleep longer than
+      // HEARTBEAT_GAP_MS makes this very tick kill the run as `runner_crashed`
+      // on wake, and that report is the one that most needs to be able to say
+      // why. Sampling afterwards would lose the gap that caused the kill.
+      this.deps.keepAwake?.observe?.(runId, now2);
       if (r.heartbeat_at && now2 - r.heartbeat_at > HEARTBEAT_GAP_MS) {
         clearInterval(watchdog);
         this.killGroupIdentityVerified(r); // S-32
@@ -444,6 +500,48 @@ export class RunManager {
       }
     }, 15_000);
     watchdog.unref?.();
+  }
+
+  // ---------- live log tail (T4-1) ----------
+
+  /**
+   * Hold a log line for this run's coalescing window.
+   *
+   * The line is already on disk by the time this is called, so the buffer is
+   * a delivery detail and never the record. Nothing is sampled or dropped:
+   * every line put in here leaves in the next frame.
+   */
+  private queueLogLine(runId: string, line: string): void {
+    const open = this.logTails.get(runId);
+    if (open) {
+      open.lines.push(line);
+      return;
+    }
+    const timer = setTimeout(() => this.flushLogTail(runId), LOG_COALESCE_MS);
+    // A pending tail must not hold the process open at shutdown; finalize()
+    // and the child's 'close' both flush synchronously, so the last window
+    // never depends on this timer firing.
+    timer.unref?.();
+    this.logTails.set(runId, { lines: [line], timer });
+  }
+
+  /**
+   * Send whatever this run has buffered, now.
+   *
+   * Called on the window timer AND — this is the part the throttle would
+   * otherwise break — synchronously from `finalize()` and from the child's
+   * 'close' handler, before either writes a terminal state. A run that ends
+   * 3ms into its window therefore still delivers those last lines, and
+   * delivers them BEFORE the terminal event that tells the UI to stop
+   * listening. Idempotent: flushing an empty or absent tail does nothing.
+   */
+  private flushLogTail(runId: string): void {
+    const tail = this.logTails.get(runId);
+    if (!tail) return;
+    clearTimeout(tail.timer);
+    this.logTails.delete(runId);
+    if (tail.lines.length === 0) return;
+    this.deps.broadcast({ type: 'run.log', runId, lines: tail.lines, at: this.deps.clock.now() });
   }
 
   private async handleChildMessage(
@@ -469,8 +567,12 @@ export class RunManager {
         this.deps.db.prepare('UPDATE runs SET heartbeat_at=? WHERE id=?').run(now, runId);
         break;
       case 'log':
+        // Two caps on purpose, and they differ: the journal on disk keeps 2000
+        // chars because it is the record, the wire keeps 500 because it is a
+        // tail a human reads. `GET /runs/:id/events` serves the journal, so
+        // the longer form is never lost — only deferred.
         appendEventFile(path.join(this.deps.dataDir, 'runs', runId), { t: now, kind: 'log', text: msg.line.slice(0, 2000) });
-        this.deps.broadcast({ type: 'run.log', runId, line: msg.line.slice(0, 500), at: now });
+        this.queueLogLine(runId, msg.line.slice(0, 500));
         break;
       case 'artifact':
         break;
@@ -604,6 +706,11 @@ export class RunManager {
 
   // ---------- finalization ----------
   async finalize(runId: string, outcome: Partial<import('@clockwork/shared').RunOutcome> & { state: string }): Promise<void> {
+    // Above the early return on purpose (T4-1). A second finalize() call is a
+    // no-op for the run, but lines can have arrived since the first one — and
+    // this is the last chance to send them, because the UI stops tailing a
+    // run the moment it sees the terminal state.
+    this.flushLogTail(runId);
     const r = this.getRun(runId);
     if (!r || ['completed','failed','cancelled','budget_exceeded','timed_out'].includes(r.state)) return;
     const now = this.deps.clock.now();
@@ -676,6 +783,14 @@ export class RunManager {
     // each title/notes itself.
     const proposals = extractProposedEvents(typeof outcome.summary === 'string' ? outcome.summary : '', now);
 
+    // T1-9: how long this Mac was asleep inside the run's window. `null` means
+    // nobody could know — off macOS, or a run this process never observed —
+    // and it must stay `undefined` in the report rather than collapse to
+    // `false`. This line used to be a literal `false` on every run, which is
+    // how the report came to deny the one failure the README warns about
+    // hardest. Read BEFORE the release() below, which drops the window.
+    const sleptMs = this.deps.keepAwake?.sleepDuring?.(runId) ?? null;
+
     const report: RunReport = {
       runId,
       taskId: spec.taskId,
@@ -703,7 +818,8 @@ export class RunManager {
       endedAt: now,
       ranLateMs: r.occurrence_at && r.started_at ? Math.max(0, r.started_at - r.occurrence_at - GRACE_NOTE_TOLERANCE_MS) : 0,
       coveredOccurrences: this.coveredOccurrences(r.schedule_id),
-      sleptThroughKeepAwake: false,
+      sleptDuringRunMs: sleptMs ?? undefined,
+      sleptThroughKeepAwake: sleptMs === null ? undefined : sleptMs > 0,
       approvals: this.approvalsFor(runId).map((a) => ({
         id: a.id,
         kind: a.kind as 'permission' | 'question',

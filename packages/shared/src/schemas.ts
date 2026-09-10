@@ -196,6 +196,22 @@ export const OverlapPolicy = z.enum(overlapPolicies);
 export const missedPolicies = ['skip', 'run-late', 'ask'] as const;
 export const MissedPolicy = z.enum(missedPolicies);
 
+/**
+ * Quiet hours (ADR-030): never fire inside the local-time window
+ * [startHour, endHour) — may wrap midnight. `critical` tasks bypass.
+ * Deferred occurrences are pushed to the window's end, never silently dropped.
+ *
+ * No `tz` field here on purpose: the scheduler evaluates the window in the
+ * owning SCHEDULE's own `tz` column (`scheduler.ts` passes `sched.tz` into
+ * `inQuietWindow`/`quietWindowEnd`), not a zone carried in `delivery_json`.
+ * Declared ahead of `DeliveryConfig` so the latter can reference it directly —
+ * a `const` used before its own declaration throws at module load (TDZ).
+ */
+export const QuietHours = z.object({
+  startHour: z.number().int().min(0).max(23),
+  endHour: z.number().int().min(0).max(23),
+}).optional();
+
 // ---- Delivery (FR-18) — M1: inbox always + OS notification default-on.
 export const DeliveryConfig = z.object({
   osNotify: z.boolean().default(true),
@@ -242,17 +258,15 @@ export const DeliveryConfig = z.object({
       to: z.array(z.string().email()).min(1).max(20),
     })
     .optional(),
+  /**
+   * Quiet hours (ADR-030, T1-8): reachable at last. `scheduler.ts:readQuietHours`
+   * reads this exact shape off `delivery_json.quietHours` and defers a run whose
+   * fire time lands inside the window. Was defined above as `QuietHours` and
+   * never wired into this object — the schema stripped the key on every write,
+   * so only a direct SQLite write could ever set it.
+   */
+  quietHours: QuietHours,
 });
-
-/**
- * Quiet hours (ADR-030): never fire inside the local-time window
- * [startHour, endHour) — may wrap midnight. `critical` tasks bypass.
- * Deferred occurrences are pushed to the window's end, never silently dropped.
- */
-export const QuietHours = z.object({
-  startHour: z.number().int().min(0).max(23),
-  endHour: z.number().int().min(0).max(23),
-}).optional();
 export type DeliveryConfig = z.infer<typeof DeliveryConfig>;
 
 // ---- Context attachments (M1: FR-2a files only; URL/MCP is T-306)

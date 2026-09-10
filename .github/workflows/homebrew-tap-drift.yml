@@ -1,0 +1,131 @@
+name: homebrew tap drift check
+
+# T1-3 (second-best variant). packaging/homebrew/clockwork.rb is this repo's
+# source of truth for the cask, but publishing it to the separate
+# vimoxshah/homebrew-clockwork tap is a MANUAL copy step (see
+# packaging/README.md "Homebrew tap"), so the live tap can silently drift:
+# an old version, a stale sha256, or both. A user running
+# `brew install --cask clockwork` then downloads a build we did not ship.
+#
+# The first-choice fix — push the rendered cask to the tap automatically as
+# part of release.yml — needs a PAT scoped to the tap repo, which nobody
+# working from this environment can create (same blocker as T1-1's Apple
+# Developer enrolment). This is the second-best variant from the track doc:
+# fail loudly, nightly, rather than drift silently. A GitHub Actions
+# scheduled-workflow failure already notifies the repository's watchers by
+# default, so a red run here is the "fail loudly" signal — no extra paging
+# is wired up.
+#
+# DSL-shape-agnostic by design: it extracts every 64-hex sha256 and the
+# version out of the live tap file with two greps, rather than parsing the
+# Homebrew cask DSL. That means it keeps working unmodified whether the tap
+# is today's single-architecture cask or a future on_arm/on_intel one.
+
+on:
+  schedule:
+    # 06:37 UTC — an off-the-hour minute so this run doesn't land in the
+    # scheduler's top-of-hour thundering herd. `schedule` only fires on
+    # whichever branch is the repo default (main), so nothing runs until
+    # this file merges there.
+    - cron: '37 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compare the live tap against the latest release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          APP_REPO: ${{ github.repository }}
+          TAP_OWNER: vimoxshah
+          TAP_REPO: homebrew-clockwork
+          CASK_PATH: Casks/clockwork.rb
+        run: |
+          set -euo pipefail
+
+          # `HEAD` rather than a hardcoded branch name, so this does not need
+          # updating if the tap's default branch is ever renamed.
+          TAP_URL="https://raw.githubusercontent.com/${TAP_OWNER}/${TAP_REPO}/HEAD/${CASK_PATH}"
+          echo "Fetching live tap cask: $TAP_URL"
+          TAP_CONTENT="$(curl -sfL "$TAP_URL")"
+
+          TAP_VERSION="$(printf '%s\n' "$TAP_CONTENT" | grep -oE 'version "[^"]+"' | head -1 | sed -E 's/version "(.+)"/\1/')"
+          if [ -z "$TAP_VERSION" ]; then
+            echo "::error::could not parse a version out of the live tap cask ($TAP_URL)"
+            exit 1
+          fi
+
+          # Every 64-hex-char sha256 in the file, however many url/sha256
+          # pairs it has — one today, two once T1-2 ships an Intel build.
+          TAP_SHAS_FILE="$(mktemp)"
+          printf '%s\n' "$TAP_CONTENT" | grep -oE '[0-9a-f]{64}' | sort -u > "$TAP_SHAS_FILE"
+          TAP_SHA_COUNT="$(wc -l < "$TAP_SHAS_FILE" | tr -d ' ')"
+          if [ "$TAP_SHA_COUNT" -eq 0 ]; then
+            echo "::error::no sha256 hashes found in the live tap cask ($TAP_URL)"
+            exit 1
+          fi
+          echo "tap version: $TAP_VERSION"
+          echo "tap sha256(es):"
+          cat "$TAP_SHAS_FILE"
+
+          echo "Fetching latest release: https://api.github.com/repos/${APP_REPO}/releases/latest"
+          RELEASE_JSON="$(curl -sfL -H "Authorization: Bearer ${GITHUB_TOKEN}" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${APP_REPO}/releases/latest")"
+
+          RELEASE_TAG="$(printf '%s' "$RELEASE_JSON" | jq -r '.tag_name')"
+          RELEASE_VERSION="${RELEASE_TAG#v}"
+          if [ -z "$RELEASE_VERSION" ] || [ "$RELEASE_TAG" = "null" ]; then
+            echo "::error::could not read tag_name from the latest release of ${APP_REPO}"
+            exit 1
+          fi
+          echo "latest release tag: $RELEASE_TAG (version $RELEASE_VERSION)"
+
+          # The checksums file, not a GitHub API asset-digest field: it is the
+          # hash release.yml itself computed and published, so it is the most
+          # authoritative statement of "what we shipped" available here.
+          SUMS_URL="$(printf '%s' "$RELEASE_JSON" | jq -r '.assets[] | select(.name == "checksums-sha256.txt") | .browser_download_url')"
+          if [ -z "$SUMS_URL" ] || [ "$SUMS_URL" = "null" ]; then
+            echo "::error::latest release ${RELEASE_TAG} has no checksums-sha256.txt asset"
+            exit 1
+          fi
+          RELEASE_SUMS="$(curl -sfL "$SUMS_URL")"
+          echo "--- ${RELEASE_TAG} checksums-sha256.txt ---"
+          printf '%s\n' "$RELEASE_SUMS"
+          echo "-------------------------------------------"
+
+          DRIFT=0
+
+          if [ "$TAP_VERSION" != "$RELEASE_VERSION" ]; then
+            echo "::error::tap version ($TAP_VERSION) does not match the latest release version ($RELEASE_VERSION)"
+            DRIFT=1
+          fi
+
+          while IFS= read -r sha; do
+            [ -z "$sha" ] && continue
+            if ! grep -qi "$sha" <<<"$RELEASE_SUMS"; then
+              echo "::error::tap cask pins sha256 $sha, which is not in ${RELEASE_TAG}'s checksums-sha256.txt — the tap may be serving a build we did not ship"
+              DRIFT=1
+            fi
+          done < "$TAP_SHAS_FILE"
+          rm -f "$TAP_SHAS_FILE"
+
+          if [ "$DRIFT" -ne 0 ]; then
+            {
+              echo "## Homebrew tap drift detected :rotating_light:"
+              echo ""
+              echo "\`${TAP_OWNER}/${TAP_REPO}\` (tap version \`${TAP_VERSION}\`) has drifted from \`${APP_REPO}\`'s latest release \`${RELEASE_TAG}\`. \`brew install --cask clockwork\` may install a build that was not shipped from this repo. Re-run \`packaging/stage-release.sh\` against the latest release and copy \`packaging/homebrew/clockwork.rb\` to the tap's \`Casks/clockwork.rb\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Homebrew tap (${TAP_OWNER}/${TAP_REPO}) has drifted from the latest GitHub release (${RELEASE_TAG})."
+            exit 1
+          fi
+
+          {
+            echo "## Homebrew tap OK :white_check_mark:"
+            echo ""
+            echo "Tap version \`${TAP_VERSION}\` matches \`${RELEASE_TAG}\`, and all ${TAP_SHA_COUNT} pinned sha256(es) are published in its checksums-sha256.txt."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "OK: tap version ${TAP_VERSION} matches ${RELEASE_TAG}, and all ${TAP_SHA_COUNT} pinned sha256(es) are published in its checksums-sha256.txt"

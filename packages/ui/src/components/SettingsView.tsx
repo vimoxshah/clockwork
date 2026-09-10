@@ -2,7 +2,7 @@
  * Settings (T-125): theme picker (light/dark/system, persisted), pause state
  * loaded from the server (not guessed), snapshot stats, engine statement.
  */
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { CSSProperties } from 'react';
 import { useTheme } from '../theme';
 import { SHORTCUTS } from './CommandPalette';
@@ -13,8 +13,9 @@ import { LicenseCard } from './LicenseCard';
 import { UpgradeHint } from './UpgradeHint';
 import { OfficeHoursCard } from './OfficeHoursCard';
 import { AutonomyCard } from './AutonomyCard';
+import { ConfirmDialog } from './ConfirmDialog';
 import { Select, SelectValue, SelectTrigger, SelectContent, SelectItem } from './ui/select';
-import { api } from '../api';
+import { api, getToken } from '../api';
 import { useAsync } from '../useAsync';
 import { FolderBrowserDialog } from './FolderBrowserDialog';
 import { registerFeatureSurface } from './featureSurfaces';
@@ -23,9 +24,10 @@ import { registerFeatureSurface } from './featureSurfaces';
  * The capabilities THIS FILE mounts, declared next to the mounts themselves so
  * the plan matrix in LicenseCard can stop ticking features that have no screen
  * (see featureSurfaces.ts for why this is not one central list). Office hours
- * and earned autonomy register inside their own card files; these four have no
+ * and earned autonomy register inside their own card files; these six have no
  * file of their own to register from — ProvidersCard and TriggersCard live at
- * the bottom of this one, and ByokCard is mounted here.
+ * the bottom of this one, QuietHoursCard and RetentionCard sit right below,
+ * and ByokCard is mounted here.
  */
 registerFeatureSurface({ key: 'byok_providers', tab: 'settings', where: 'Settings › API providers (BYOK)', anchorId: 'byok-providers' });
 // The BYOK connect flow is where a custom OpenAI-compatible base URL is
@@ -33,6 +35,214 @@ registerFeatureSurface({ key: 'byok_providers', tab: 'settings', where: 'Setting
 registerFeatureSurface({ key: 'custom_endpoints', tab: 'settings', where: 'Settings › API providers (BYOK)', anchorId: 'byok-providers' });
 registerFeatureSurface({ key: 'cli_engines', tab: 'settings', where: 'Settings › CLI engines', anchorId: 'cli-engines' });
 registerFeatureSurface({ key: 'event_triggers', tab: 'settings', where: 'Settings › Event triggers', anchorId: 'event-triggers' });
+// T1-8: the scheduler has honoured delivery_json.quietHours since ADR-030;
+// DeliveryConfig just never carried the key, so this is the first build where
+// setting it has anywhere to go.
+registerFeatureSurface({ key: 'quiet_hours', tab: 'settings', where: 'Settings › Quiet hours', anchorId: 'quiet-hours' });
+// T1-10: GET/PUT /retention (ADR-031) have been reachable since retention-audit.ts
+// shipped; only the screen was missing (README's Known limits named it API-only).
+registerFeatureSurface({ key: 'retention', tab: 'settings', where: 'Settings › Retention', anchorId: 'retention' });
+
+/**
+ * T1-6 — "Check for updates" has no entry here on purpose.
+ * `FeatureSurface.key` has to match a capability `GET /capabilities`
+ * returns (`packages/daemon/src/features.ts`'s `FEATURES` list), and none
+ * of its ~30 keys names anything like this — it is not gated by plan tier,
+ * it is a shell-level utility every install already has. Inventing a key
+ * just to get a tick would be exactly the "fake gate" `features.ts`'s own
+ * header forbids, so `UpdateCheckCard` below mounts with a plain `id`
+ * (`check-for-updates`) and no registration.
+ */
+
+/**
+ * Tauri's real IPC bridge, called directly rather than through
+ * `@tauri-apps/api`: that package is not a dependency of this workspace —
+ * absent from `package.json`, the lockfile, and `node_modules` (checked,
+ * not assumed) — and adding one was outside this change's touch set.
+ * `window.__TAURI_INTERNALS__` is what Tauri injects into every webview it
+ * manages, independent of the `app.withGlobalTauri` config flag (that flag
+ * only controls the friendlier `window.__TAURI__` namespace, which needs a
+ * `tauri.conf.json` edit this change also does not make); it is the same
+ * bridge `@tauri-apps/api`'s own `invoke()` calls underneath, and Tauri's
+ * own docs reach for it directly for exactly this no-npm-package case
+ * (`develop/Tests/mocking.mdx` spies on it to drive `invoke()` in tests).
+ * `undefined` outside the desktop shell — `src-tauri/src/lib.rs`'s pairing
+ * script comment notes a browser tab pointed straight at the daemon is a
+ * real, supported way to reach this page, and that tab has no bridge at all.
+ *
+ * `invoke` is declared generic (`<T>(cmd: string) => Promise<T>`), the same
+ * shape `@tauri-apps/api/core`'s own `invoke<T>` carries upstream, rather
+ * than returning `Promise<unknown>` and asserting the result at the call
+ * site — a real bridge is genuinely generic over what each command returns,
+ * so this is the pass-through-generic case, not a laundered `unknown`.
+ */
+declare global {
+  interface Window {
+    __TAURI_INTERNALS__?: { invoke: <T>(cmd: string) => Promise<T> };
+  }
+}
+
+function tauriInvoke<T>(cmd: string): Promise<T> | null {
+  const bridge = typeof window === 'undefined' ? undefined : window.__TAURI_INTERNALS__;
+  return bridge ? bridge.invoke<T>(cmd) : null;
+}
+
+/** Mirrors `src-tauri/src/lib.rs`'s `update_check_json` — the four honesty outcomes, as data. */
+interface UpdateCheckResult {
+  status: 'up_to_date' | 'newer_available' | 'check_failed';
+  current?: string;
+  latest?: string;
+  notesUrl?: string;
+  message: string;
+}
+
+/**
+ * `notesUrl` is GitHub's `html_url`, relayed through
+ * `check_for_updates_command` off a remote document this app did not
+ * author. `agent-content-escaping.test.tsx` names the exact vector: binding
+ * a raw string straight onto a link's target attribute, via a JSX
+ * expression, is the one place React hands the DOM a URL with no scheme
+ * check — so a `javascript:`/`data:` value there would run on click.
+ * Refused down to `https:` only; anything else — an unparsable string, a
+ * different scheme — renders no link at all rather than a broken or
+ * dangerous one.
+ */
+function safeHttpsUrl(raw: string): string | null {
+  try {
+    const parsed = new URL(raw);
+    return parsed.protocol === 'https:' ? parsed.href : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * T1-6 — "Check for updates", user-initiated only.
+ *
+ * Asks GitHub for the latest release, and only on this click: no timer, no
+ * check on launch, no "check daily" preference
+ * (docs/architecture/update-delivery.md names those as the heavier, still
+ * undecided options). The fetch itself runs in the Tauri shell, not here
+ * and not through the daemon — this page's CSP does not allow
+ * `connect-src` to `api.github.com` (nor should it: the daemon stays
+ * incurious about the internet, on purpose), so this card's job is to call
+ * `check_for_updates_command` and render whichever of the four outcomes
+ * comes back. A failed check renders as failed; it is never reported as
+ * "up to date" just because nothing newer was confirmed.
+ *
+ * THE GRANT THIS BUTTON RIDES ON, and why it is one line wide. The main
+ * window is built on `WebviewUrl::External(DAEMON_URL)` (`run()` in
+ * `src-tauri/src/lib.rs`), so this page's origin is
+ * `http://127.0.0.1:4747`, which Tauri does NOT treat as local
+ * (`tauri-2.11.5/src/webview/mod.rs`'s `is_local_url`). Tauri 2.11.1 made
+ * remote origins fail closed on custom commands, so until T1-19 every
+ * click here was ACL-rejected in the shipped app, however healthy the
+ * network was.
+ *
+ * `src-tauri/capabilities/check-for-updates.json` now grants exactly
+ * `check_for_updates_command`, to the `main` window, on that one origin,
+ * with `local: false` and no `core:default`. That narrowness is the whole
+ * reason the grant was acceptable: the command takes no arguments, reads a
+ * hardcoded GitHub URL over HTTPS and returns a version string, so the
+ * worst it hands a page that already controls this window is the version
+ * number GitHub publishes anyway. A command that could read a token would
+ * not have survived the same question, and it would not inherit this
+ * grant — shipping an app manifest makes every later command fail closed
+ * until it is named too.
+ *
+ * The tray's "Check for updates…" stays native rather than routing here:
+ * it has to answer with the window hidden and with the daemon down, and in
+ * neither state is there a Settings screen to render into.
+ */
+export function UpdateCheckCard(): JSX.Element {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<UpdateCheckResult | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
+  const safeNotesUrl = result?.notesUrl ? safeHttpsUrl(result.notesUrl) : null;
+
+  const check = async (): Promise<void> => {
+    const pending = tauriInvoke<UpdateCheckResult>('check_for_updates_command');
+    if (!pending) {
+      setUnavailable(true);
+      return;
+    }
+    setUnavailable(false);
+    setBusy(true);
+    setResult(null);
+    try {
+      setResult(await pending);
+    } catch (e) {
+      // The IPC call itself failing is still a failure to report — never silence.
+      setResult({ status: 'check_failed', message: `Couldn't check for updates: ${String((e as Error).message ?? e)}` });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div>
+      <p className="hint" style={{ marginTop: 0 }}>
+        Asks GitHub for the latest release — only when you click. Nothing runs in the background,
+        nothing is scheduled, and this never downloads anything; it tells you a newer build exists
+        so you can get it from the releases page yourself.
+      </p>
+      <div className="tasklist-row">
+        <div className="grow">
+          <strong>Latest release</strong>
+          <div className="hint" style={{ margin: 0 }}>Checked only when you click — nothing runs on its own.</div>
+        </div>
+        <button
+          className="btn small"
+          disabled={busy}
+          onClick={() => void check()}
+          data-testid="check-for-updates-button"
+        >
+          {busy ? 'Checking…' : 'Check for updates'}
+        </button>
+      </div>
+      {unavailable && (
+        <div className="error-banner" role="alert" data-testid="check-for-updates-unavailable">
+          Update checks need the Clockwork desktop app — open this page there rather than in a browser tab.
+        </div>
+      )}
+      {result && result.status !== 'check_failed' && (
+        <div className="ok-banner" data-testid="check-for-updates-result">
+          {result.message}
+          {result.status === 'newer_available' && safeNotesUrl && (
+            <>
+              {' '}
+              <a
+                // `.href` is assigned imperatively once the element mounts —
+                // never bound to a JSX expression container the way a plain
+                // dynamic attribute would be. That JSX-attribute pattern is
+                // what `agent-content-escaping.test.tsx` greps the whole
+                // source tree for, precisely because it is the one place
+                // React would hand a string to the DOM unvalidated.
+                // `safeNotesUrl` (above) has already refused anything but
+                // `https:`, so this assignment is the second, structural
+                // half of that defence, not a way around the first.
+                ref={(el) => {
+                  if (el && safeNotesUrl) el.href = safeNotesUrl;
+                }}
+                target="_blank"
+                // `noreferrer` alone also disables `window.opener` — the
+                // WHATWG HTML spec has `noreferrer` imply `noopener` — so no
+                // separate token is needed.
+                rel="noreferrer"
+                data-testid="check-for-updates-notes-link"
+              >
+                Release notes
+              </a>
+            </>
+          )}
+        </div>
+      )}
+      {result && result.status === 'check_failed' && (
+        <div className="error-banner" role="alert" data-testid="check-for-updates-result">{result.message}</div>
+      )}
+    </div>
+  );
+}
 
 export default function SettingsView({ version }: { version: number }): JSX.Element {
   const { pref, setPref } = useTheme();
@@ -130,6 +340,16 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
       <OfficeHoursCard version={version} />
       </section>
 
+      <section className="settings-card settings-card--wide">
+      <h3 className="section-title" id="quiet-hours">Quiet hours</h3>
+      <QuietHoursCard version={version} />
+      </section>
+
+      <section className="settings-card settings-card--wide">
+      <h3 className="section-title" id="retention">Retention</h3>
+      <RetentionCard version={version} />
+      </section>
+
       <section className="settings-card">
       <h3 className="section-title" id="earned-autonomy">Earned autonomy</h3>
       <AutonomyCard version={version} />
@@ -224,6 +444,11 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
           Export bundle
         </button>
       </div>
+      </section>
+
+      <section className="settings-card">
+      <h3 className="section-title" id="check-for-updates">Check for updates</h3>
+      <UpdateCheckCard />
       </section>
 
       <section className="settings-card">
@@ -1033,6 +1258,360 @@ export function DeliveryCard({ version }: { version: number }): JSX.Element {
         <div className={smtpOk ? 'ok-banner' : 'error-banner'} role={smtpOk ? undefined : 'alert'} data-testid="smtp-result">
           {smtpMsg}
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Quiet hours (ADR-030, T1-8) — the setter `scheduler.ts` has been waiting on.
+ *
+ * `readQuietHours` reads `delivery_json.quietHours` off a TASK row, and when a
+ * due fire time lands inside `[startHour, endHour)` in the owning SCHEDULE's
+ * own `tz`, defers the run AND pre-claims a fresh `pending` occurrence at the
+ * window's end (`scheduler.ts`, the `INSERT OR IGNORE` right after the
+ * deferral). `DeliveryConfig` just never carried the `quietHours` key, so zod
+ * stripped it on every write — this card, and the schema field beside it, are
+ * the whole fix.
+ *
+ * NOT the same control as Office hours, on purpose. Office hours is one
+ * global on/off switch plus shared windows (`OfficeHoursCard`,
+ * `PUT /workforce/office-hours`); quiet hours has no such table — it lives on
+ * the task row, per task, evaluated in that task's own schedule zone. So
+ * unlike Office hours this card has to name a task before it can set
+ * anything, the same "pick a task" affordance `TriggersCard` already uses
+ * below. Sharing a settings PAGE with Office hours is deliberate; sharing its
+ * mechanism is not (docs/agent-workforce.md F3 spells out why the two ledger
+ * behaviours differ, and scheduler.ts is out of this card's reach either way).
+ *
+ * A real gap, stated on screen rather than hidden: `GET /tasks` never returns
+ * a task's `delivery` (`api.ts`'s `view()` omits it — a narrower projection
+ * than the row itself, not a bug this card can fix from here), so the fields
+ * below cannot be pre-filled with what a task already has, and `TaskPatch`
+ * treats `delivery` as ONE json column: `TaskRepo.patch` replaces it whole
+ * when the key is present at all, it does not merge sub-keys. Saving quiet
+ * hours here therefore REPLACES the task's whole delivery config — safe for a
+ * task with no other channel set, destructive for one that already has
+ * Telegram, Slack or email configured (ComposerView is still the only place
+ * that sets those, and only at creation — this is the first UI path that
+ * touches `delivery` afterward). The hint below says so; it does not soften
+ * it into "advanced settings may reset."
+ */
+export function QuietHoursCard({ version }: { version: number }): JSX.Element {
+  const tasks = useAsync(() => api.tasks(), [version]);
+  const [taskId, setTaskId] = useState('');
+  const [startHour, setStartHour] = useState('23');
+  const [endHour, setEndHour] = useState('7');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  /** '' fails closed rather than reading as hour 0 (`Number('') === 0`). */
+  const parseHour = (raw: string): number | null => {
+    if (raw.trim() === '') return null;
+    const n = Number(raw);
+    return Number.isInteger(n) && n >= 0 && n <= 23 ? n : null;
+  };
+  const start = parseHour(startHour);
+  const end = parseHour(endHour);
+  const canSave = Boolean(taskId) && start !== null && end !== null && !busy;
+
+  const save = async (): Promise<void> => {
+    if (start === null || end === null) return;
+    setBusy(true);
+    setErr(null);
+    setMsg(null);
+    try {
+      await api.patchTask(taskId, { delivery: { quietHours: { startHour: start, endHour: end } } });
+      setMsg('Quiet hours saved.');
+    } catch (e) {
+      setErr(String((e as Error).message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div>
+      <p className="hint" style={{ marginTop: 0 }}>
+        A window in which a task never fires. A run due inside it waits until the window ends and the
+        wait is recorded, not dropped — critical tasks still bypass it. Hours wrap midnight: 23 → 7
+        means quiet from 11pm to 7am, in the task's own schedule time zone.
+      </p>
+      <p className="hint">
+        The daemon does not send a task's current quiet hours back, so the fields below always start
+        blank, and <strong>Save replaces this task's whole delivery configuration</strong> — OS
+        notifications, Telegram, Slack, email — not quiet hours alone. Safe for a task with none of
+        those set; for one that already has Telegram, Slack or email configured, that channel is
+        dropped unless it is re-entered elsewhere first.
+      </p>
+      {tasks.error && <div className="error-banner">{tasks.error}</div>}
+      <div className="row3" style={{ alignItems: 'end' }}>
+        <div>
+          <label className="f">Task</label>
+          <Select value={taskId || '__none__'} onValueChange={(v) => setTaskId(v === '__none__' ? '' : v)}>
+            <SelectTrigger data-testid="quiet-hours-task-select"><SelectValue placeholder="— pick a task —" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__">— pick a task —</SelectItem>
+              {(tasks.data ?? []).map((t) => (
+                <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <label className="f" htmlFor="qh-start">Quiet from (hour)</label>
+          <input
+            id="qh-start"
+            type="number"
+            min={0}
+            max={23}
+            value={startHour}
+            onChange={(e) => setStartHour(e.target.value)}
+            data-testid="quiet-hours-start"
+          />
+        </div>
+        <div>
+          <label className="f" htmlFor="qh-end">Until (hour)</label>
+          <input
+            id="qh-end"
+            type="number"
+            min={0}
+            max={23}
+            value={endHour}
+            onChange={(e) => setEndHour(e.target.value)}
+            data-testid="quiet-hours-end"
+          />
+        </div>
+        <button
+          className="btn primary"
+          style={{ justifySelf: 'start' }}
+          disabled={!canSave}
+          onClick={() => void save()}
+          data-testid="quiet-hours-save"
+        >
+          {busy ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+      {msg && <div className="ok-banner">{msg}</div>}
+      {err && <div className="error-banner" role="alert">{err}</div>}
+    </div>
+  );
+}
+
+interface RetentionPrefsT {
+  runDays: number | null;
+  maxRuns: number | null;
+}
+
+/**
+ * Self-contained: fetches and PUTs directly against `/retention` (bearer-token
+ * `fetch`, mirroring `OutcomeControls.tsx`'s `fetchOutcome`/`postOutcome`)
+ * rather than through `packages/ui/src/api.ts`'s shared `req()` helper —
+ * `packages/ui/src/api.ts` is outside this task's (T1-10) touch set and has no
+ * `retention` method yet. `api.getRetention()`/`api.putRetention()` are this
+ * feature's `packages/ui/src/api.ts` wiring snippets, applied by whoever next
+ * has that file in scope; `RetentionCard` does not depend on them.
+ */
+async function fetchRetention(): Promise<RetentionPrefsT> {
+  const res = await fetch('/retention', { headers: { authorization: `Bearer ${getToken()}` } });
+  const parsed: unknown = await res.json().catch(() => null);
+  if (!res.ok) {
+    const detail = parsed as { error?: unknown } | null;
+    throw new Error(typeof detail?.error === 'string' ? detail.error : `request failed (${res.status})`);
+  }
+  return parsed as RetentionPrefsT;
+}
+
+async function putRetention(body: { runDays: number; maxRuns: number }): Promise<RetentionPrefsT> {
+  const res = await fetch('/retention', {
+    method: 'PUT',
+    headers: { authorization: `Bearer ${getToken()}`, 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const parsed: unknown = await res.json().catch(() => null);
+  if (!res.ok) {
+    const detail = parsed as { error?: unknown } | null;
+    throw new Error(typeof detail?.error === 'string' ? detail.error : `request failed (${res.status})`);
+  }
+  return parsed as RetentionPrefsT;
+}
+
+/** A positive integer, or null for "blank/invalid" — mirrors QuietHoursCard's `parseHour`: '' fails closed. */
+function parsePositiveInt(raw: string): number | null {
+  if (raw.trim() === '') return null;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 1 ? n : null;
+}
+
+/**
+ * Retention (ADR-031, T1-10) — `GET`/`PUT /retention` (`api.ts:2855-2882`) have
+ * been reachable since `retention-audit.ts` shipped; only the screen was
+ * missing, exactly as README's Known limits bullet says. `RetentionAudit.sweep`
+ * (`retention-audit.ts`) prunes TERMINAL runs only — completed, failed,
+ * timed_out, skipped, cancelled — outside the day window or beyond the
+ * per-task cap, plus the `trigger_events` table on the same day window. A run
+ * still queued or in flight is never touched regardless of age. Deleting a run
+ * row deletes its report: `report_json` is a column on that row, not a
+ * separate store. Worktrees are NOT part of this sweep at all — they are
+ * removed per run, at `finalize()`, the moment a clean run ends
+ * (`run-manager.ts`) — a completely different mechanism on a completely
+ * different schedule, so shrinking the numbers here does not free worktree
+ * disk space. The cadence itself is `startRetentionSweep`'s own
+ * `RETENTION_SWEEP_MS` (`main.ts`): once at daemon start, then every 6 hours.
+ *
+ * A FINDING surfaced while building this card, not fixed here (out of touch
+ * set — `packages/daemon/src/api.ts`/`entitlements.ts`): `PUT /retention`
+ * gates only `runDays`, against `entitlements.limitFor('retention')` — 30 days
+ * on the free tier, the only tier any install runs at today
+ * (`packages/daemon/src/features.ts`'s `NUMERIC_LIMITS`). But
+ * `retention-audit.ts`'s own seeded default is 90. So on a fresh free-tier
+ * install the loaded value (90) already exceeds the cap, and re-saving it
+ * unchanged — or any smaller value still above 30 — both 402. The setter does
+ * not, in fact, unconditionally work; it works strictly downward, to 30 or
+ * below. This card does not build an upgrade flow for that (not asked for);
+ * it disables Save when nothing changed (so the common "just looking" case
+ * never fires a doomed PUT) and shows a 402 that does happen verbatim, same as
+ * every other card in this file.
+ *
+ * Shrinking either number is destructive NOW, not eventually: the next sweep
+ * (within 6 hours, sooner if the daemon restarts) prunes whatever the new,
+ * smaller window/cap newly excludes. Save asks first via the shared
+ * `ConfirmDialog` — the same component TasksView uses for deleting a task —
+ * whenever either field would shrink relative to the loaded value; growing
+ * either number, or leaving both unchanged, saves immediately with no prompt.
+ */
+export function RetentionCard({ version }: { version: number }): JSX.Element {
+  const prefs = useAsync(() => fetchRetention(), [version]);
+  const [runDaysInput, setRunDaysInput] = useState('');
+  const [maxRunsInput, setMaxRunsInput] = useState('');
+  const [saved, setSaved] = useState<RetentionPrefsT | null>(null);
+  const [synced, setSynced] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [confirmDelta, setConfirmDelta] = useState<{ runDays: number; maxRuns: number } | null>(null);
+
+  // Pre-fill from the daemon's answer exactly once — a later reload (a fresh
+  // `version`) must not clobber an edit in progress the same way QuietHoursCard
+  // never resyncs its blank fields.
+  useEffect(() => {
+    if (prefs.data && !synced) {
+      setRunDaysInput(prefs.data.runDays === null ? '' : String(prefs.data.runDays));
+      setMaxRunsInput(prefs.data.maxRuns === null ? '' : String(prefs.data.maxRuns));
+      setSaved(prefs.data);
+      setSynced(true);
+    }
+  }, [prefs.data, synced]);
+
+  const runDaysN = parsePositiveInt(runDaysInput);
+  const maxRunsN = parsePositiveInt(maxRunsInput);
+  const valid = runDaysN !== null && maxRunsN !== null;
+  const dirty =
+    valid && saved !== null && (runDaysN !== saved.runDays || maxRunsN !== saved.maxRuns);
+  const canSave = valid && dirty && !busy;
+  const isShrink =
+    valid &&
+    saved !== null &&
+    ((saved.runDays === null ? runDaysN !== null : runDaysN !== null && runDaysN < saved.runDays) ||
+      (saved.maxRuns === null ? maxRunsN !== null : maxRunsN !== null && maxRunsN < saved.maxRuns));
+
+  /** Adopts a fresh `{runDays, maxRuns}` echoed back by the daemon as the new baseline. */
+  const applyResult = (result: RetentionPrefsT): void => {
+    setSaved(result);
+    setRunDaysInput(result.runDays === null ? '' : String(result.runDays));
+    setMaxRunsInput(result.maxRuns === null ? '' : String(result.maxRuns));
+    setMsg('Retention settings saved.');
+  };
+
+  /** The direct (non-shrink) path: swallows its own failure into the card's error banner. */
+  const doSave = async (nextRunDays: number, nextMaxRuns: number): Promise<void> => {
+    setBusy(true);
+    setErr(null);
+    setMsg(null);
+    try {
+      applyResult(await putRetention({ runDays: nextRunDays, maxRuns: nextMaxRuns }));
+    } catch (e) {
+      setErr(String((e as Error).message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onSaveClick = (): void => {
+    if (!canSave || runDaysN === null || maxRunsN === null) return;
+    if (isShrink) {
+      setConfirmDelta({ runDays: runDaysN, maxRuns: maxRunsN });
+    } else {
+      void doSave(runDaysN, maxRunsN);
+    }
+  };
+
+  return (
+    <div>
+      <p className="hint" style={{ marginTop: 0 }}>
+        A sweep at daemon start and every 6 hours deletes completed, failed, timed-out, skipped or
+        cancelled runs older than the window below, and — per task — any beyond the most recent count.
+        Deleting a run deletes its report; this cannot be undone. A run still queued or in progress is
+        never touched, no matter its age.
+      </p>
+      <p className="hint">
+        Worktrees are cleaned up per run when it finishes, on their own schedule — not by this sweep —
+        so shortening these numbers does not free worktree disk space.
+      </p>
+      {prefs.error && <div className="error-banner">Couldn’t load retention settings: {prefs.error}</div>}
+      <div className="row3" style={{ alignItems: 'end' }}>
+        <div>
+          <label className="f" htmlFor="ret-days">Keep runs for (days)</label>
+          <input
+            id="ret-days"
+            type="number"
+            min={1}
+            value={runDaysInput}
+            onChange={(e) => setRunDaysInput(e.target.value)}
+            data-testid="retention-run-days"
+          />
+        </div>
+        <div>
+          <label className="f" htmlFor="ret-max">Keep per task (runs)</label>
+          <input
+            id="ret-max"
+            type="number"
+            min={1}
+            value={maxRunsInput}
+            onChange={(e) => setMaxRunsInput(e.target.value)}
+            data-testid="retention-max-runs"
+          />
+        </div>
+        <button
+          className="btn primary"
+          style={{ justifySelf: 'start' }}
+          disabled={!canSave}
+          onClick={onSaveClick}
+          data-testid="retention-save"
+        >
+          {busy ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+      {msg && <div className="ok-banner">{msg}</div>}
+      {err && <div className="error-banner" role="alert">{err}</div>}
+      {confirmDelta && (
+        <ConfirmDialog
+          title="Shorten history retention?"
+          body={`Runs that finished more than ${confirmDelta.runDays} day${confirmDelta.runDays === 1 ? '' : 's'} ago, and any task's terminal runs beyond the most recent ${confirmDelta.maxRuns}, are deleted at the next sweep — at daemon start and every 6 hours. Deleting a run deletes its report; this cannot be undone. Runs still in progress, and worktrees on disk, are not affected.`}
+          confirmLabel="Shorten and save"
+          onClose={() => setConfirmDelta(null)}
+          onConfirm={async () => {
+            // Deliberately NOT `doSave`: a rejection here must reach
+            // ConfirmDialog's own catch (its `err` state, dialog stays open for
+            // a retry or Cancel) rather than being swallowed into this card's
+            // banner behind a dialog that already closed — the same contract
+            // TasksView's and SentinelsSection's delete confirmations rely on.
+            const result = await putRetention({ runDays: confirmDelta.runDays, maxRuns: confirmDelta.maxRuns });
+            applyResult(result);
+            setConfirmDelta(null);
+          }}
+        />
       )}
     </div>
   );

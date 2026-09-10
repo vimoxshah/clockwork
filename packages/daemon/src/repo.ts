@@ -319,7 +319,24 @@ export class RunRepo {
     const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
     vals.push(Math.min(filter.limit ?? 200, 1000));
     return this.db
-      .prepare(`SELECT * FROM runs ${where} ORDER BY COALESCE(scheduled_for, state_changed_at) DESC LIMIT ?`)
+      // T1-18: `/runs` means MOST-RECENTLY-HAPPENED. It used to order by
+      // COALESCE(scheduled_for, state_changed_at) DESC, and a queued run
+      // carries scheduled_for in the FUTURE — so a booking for next week
+      // sorted above everything that had already run. Under three lines of
+      // history in the menu-bar tray it read "your last run was next
+      // Tuesday", which is where this was found.
+      //
+      // state_changed_at is NOT NULL, written on insert and on every FSM
+      // transition, and never points forward. A just-booked run still sorts
+      // near the top, because being queued IS the most recent thing that
+      // happened to it — which is what the tray wanted anyway.
+      //
+      // Safe to change: no consumer depended on the old order. InboxView and
+      // TasksView both re-sort what they receive, TimesheetsPanel aggregates,
+      // and the tray carried an explicit workaround for this defect. The
+      // COALESCE also defeated every index; migration 0011 adds two this
+      // ORDER BY can actually use.
+      .prepare(`SELECT * FROM runs ${where} ORDER BY state_changed_at DESC LIMIT ?`)
       .all(...vals);
   }
 

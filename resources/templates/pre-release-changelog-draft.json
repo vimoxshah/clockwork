@@ -1,0 +1,12 @@
+{
+  "schema": "clockwork.template.v1",
+  "name": "Pre-release changelog draft",
+  "prompt": "Run the changelog-writer procedure on this repository: derive changelog entries from commit history and diff evidence since the last version marker, grouped as Added/Changed/Fixed/Removed, factual and user-facing with no marketing language. Do not edit source code. Produce a ready-to-commit changelog section plus a list of any commits you could not confidently categorize.",
+  "profileSlug": "changelog-writer",
+  "permissionMode": "plan",
+  "budget": { "maxUsd": 1.5, "maxTurns": 30, "timeoutSec": 1800 },
+  "schedule": { "kind": "queue", "tz": "UTC" },
+  "missedPolicy": "run-late",
+  "overlapPolicy": "skip",
+  "delivery": { "osNotify": true }
+}

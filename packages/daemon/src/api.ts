@@ -268,6 +268,86 @@ export interface CalendarCollectionLimit {
 }
 
 /**
+ * T4-4 — the FORWARD PROJECTION's own bound, which is a different bound from
+ * `CALENDAR_ROW_LIMIT` and has to be, because the two are bounding different
+ * things.
+ *
+ * `CALENDAR_ROW_LIMIT` bounds ROWS ALREADY IN THE DATABASE. There are only so
+ * many runs, so the worst case is knowable. A projection has no such backstop:
+ * it is generated on demand from a rule, and `FREQ=MINUTELY` over a year view
+ * is 525,600 occurrences per schedule. Capping the ARRAY would not help —
+ * measured on an Apple M4, that expansion cost 820-1,024ms whether the caller
+ * asked for 62 rows or 5,000, because the cost is in the walk, not the answer.
+ * So the bound has to be handed DOWN to `occurrencesBetweenBounded`, where it
+ * stops the walk.
+ *
+ * WHY PER DAY OF WINDOW. A calendar cell is one day wide. A month cell draws
+ * `MAX_PER_CELL` names and then "+N more"; a year cell draws a count. Twenty-
+ * four per day is one an hour — the densest schedule that still reads as a
+ * schedule rather than as a number — so the bound is stated in the unit the
+ * view is built from and widens with the view instead of being one constant
+ * that is wrong for two of the three:
+ *
+ *   week  (7 days)   ->   168 per schedule
+ *   month (42-day grid) -> 1,008 per schedule
+ *   year  (365 days) -> 8,760, clamped to the 5,000 row ceiling
+ *
+ * WHY A FAIR SHARE ON TOP. Per-schedule alone is unbounded in the NUMBER of
+ * schedules: 500 enabled hourly tasks over a month view is 504,000
+ * occurrences. Dividing the row ceiling by the number of recurring schedules
+ * bounds the total, and — this is the half that serves the feature rather than
+ * the budget — it stops one dense job from spending the whole budget and
+ * leaving the weekly one with no ghosts at all. Every schedule keeps at least
+ * one, so no enabled job disappears from the calendar entirely.
+ *
+ * WHAT IT COSTS, SAID OUT LOUD: a schedule denser than the bound fills the
+ * FRONT of the window and then stops, so its ghosts thin out at the far end
+ * rather than spreading evenly. That is the honest price of bounding the walk,
+ * and it is why `limits.projection.truncated` exists.
+ */
+export const CALENDAR_PROJECTION_PER_DAY = 24;
+
+/** The projection bound a response applied, and whether it bit. */
+export interface CalendarProjectionLimit {
+  /** The most occurrences ONE schedule could contribute to this window. */
+  perSchedule: number;
+  /** True when at least one schedule's expansion stopped at `perSchedule`. */
+  truncated: boolean;
+  /**
+   * Schedules `guardSchedule` refused to expand. Not a cap — a refusal, and
+   * not all for the same reason: `unreachable` shapes never terminate inside
+   * rrule 2.8.1, while `count_too_large` and `slow_anchor` do terminate but
+   * block the request for seconds first (a stated COUNT of 40,000,000 costs 79
+   * of them). Either way the answer is missing that job, so it is counted here
+   * rather than left to look like a schedule with nothing coming up.
+   */
+  refused: number;
+}
+
+/**
+ * How many occurrences one schedule may contribute to a calendar window.
+ *
+ * @param spanMs width of the window actually being PROJECTED (from "now", or
+ *   from the window start when the whole window is in the future) to its end.
+ * @param recurringSchedules how many rrule/cron schedules share the budget.
+ *   `once` schedules are excluded: they yield at most one occurrence each, so
+ *   counting them would shrink everybody else's share for nothing.
+ * @param rowLimit the response's row ceiling; `?limit=` may only lower it, and
+ *   it lowers this with it.
+ * @returns the per-schedule occurrence cap, never below 1.
+ */
+export function calendarProjectionLimit(
+  spanMs: number,
+  recurringSchedules: number,
+  rowLimit: number = CALENDAR_ROW_LIMIT,
+): number {
+  const days = Math.max(1, Math.ceil(spanMs / 86_400_000));
+  const perView = Math.min(rowLimit, days * CALENDAR_PROJECTION_PER_DAY);
+  const fairShare = Math.floor(rowLimit / Math.max(1, recurringSchedules));
+  return Math.max(1, Math.min(perView, fairShare));
+}
+
+/**
  * The local calendar day of an instant as `YYYY-MM-DD`.
  *
  * LOCAL, not UTC, and that is the whole point: the grid snaps every event to
@@ -368,6 +448,15 @@ function guardHomeScopedPath(inputPath: string): HomeGuardResult {
 // so every other endpoint keeps the stock 1 MiB ceiling.
 const IMPORT_BODY_LIMIT = 12 * 1024 * 1024;
 
+// GET /runs/:id/events (T4-1 live-tail catch-up). The byte ceiling bounds one
+// response against a run that logged for hours; the line ceilings bound it
+// against a run that logged a million short lines inside that window. Both
+// are advertised back to the caller (`from`, `skipped`, `complete`) rather
+// than applied silently.
+const RUN_EVENTS_MAX_BYTES = 256 * 1024;
+const RUN_EVENTS_DEFAULT_LINES = 200;
+const RUN_EVENTS_MAX_LINES = 1000;
+
 /** label precedence: explicit body.label > X-WR-CALNAME > filename w/o extension > fallback. */
 function deriveImportLabel(explicit: unknown, calName: string | null, filename: string): string {
   const trimmedExplicit = typeof explicit === 'string' ? explicit.trim() : '';
@@ -453,7 +542,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
         return null; // the pair stays 'approved' with no execute run — visible, not silent
       }
       // §3: shallow copy — never write the rendered prompt back to tasks.prompt
-      const runId = enqueueRunNow(deps.db, { ...row, prompt: promptOverride });
+      const runId = enqueueRunNow(deps.db, { ...row, prompt: promptOverride }, deps.dataDir);
       deps.runManager.pump();
       return runId;
     },
@@ -592,7 +681,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       if (!taskRow) return null;
       const pv = evaluatePolicy((taskRow as any).engine ?? null, (taskRow as any).byok_id ?? null, Number(taskRow.budget_usd ?? 2));
       if (pv) return null;
-      const runId = enqueueRunNow(deps.db, taskRow);
+      const runId = enqueueRunNow(deps.db, taskRow, deps.dataDir);
       audit('run.enqueue', 'run', runId, { taskId: taskRow.id, taskName: taskRow.name, via: 'sentinel' });
       deps.runManager.pump();
       return runId;
@@ -634,7 +723,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       // permission_mode 'plan' makes "propose, don't apply" a runner guarantee
       // rather than prompt wording. The shallow copy is deliberate: the
       // diagnostic prompt is never written back to tasks.prompt (spec §3).
-      const runId = enqueueRunNow(deps.db, { ...taskRow, prompt: promptOverride, permission_mode: 'plan' });
+      const runId = enqueueRunNow(deps.db, { ...taskRow, prompt: promptOverride, permission_mode: 'plan' }, deps.dataDir);
       deps.runManager.pump();
       return runId;
     },
@@ -974,7 +1063,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       audit('run.enqueue_rejected', 'task', row.id, { code: peGate.code, pairId: peGate.pairId, pairStatus: peGate.pairStatus });
       return reply.code(409).send(peGate);
     }
-    const runId = enqueueRunNow(deps.db, row);
+    const runId = enqueueRunNow(deps.db, row, deps.dataDir);
     audit('run.enqueue', 'run', runId, { taskId: row.id, taskName: row.name, via: 'run-now' });
     deps.runManager.pump();
     return reply.code(202).send({ runId });
@@ -1127,7 +1216,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       const peGate = planExecuteGate(taskRow.id, 'run');
       if (peGate) return respond(409, peGate, false, peGate.code);
 
-      const runId = enqueueRunNow(deps.db, taskRow);
+      const runId = enqueueRunNow(deps.db, taskRow, deps.dataDir);
       // Stash the event payload into the run's spec so prompts can use {{event.*}}.
       try {
         const specRow = deps.db.prepare('SELECT jobspec_json FROM runs WHERE id=?').get(runId) as any;
@@ -1184,7 +1273,22 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
   });
 
   // ---- templates (T-203) ----
-  const { securityPreview, validateTemplateApply } = await import('./templates.js');
+  const {
+    securityPreview,
+    validateTemplateApply,
+    loadBundledTemplates,
+    exportTaskTemplate,
+    templateExportFilenameFor,
+    collapseImportPermissionMode,
+    IMPORT_GRANT,
+  } = await import('./templates.js');
+  // T4-8: resolved the same package/skill-pack-relative-to-compiled-source
+  // convention `makeSkillResolver(...)` gets from main.ts:467 — api.ts sits
+  // beside main.ts at the same depth in both src/ and the compiled dist/, so
+  // this repo-root-relative path is correct in either location. main.ts
+  // itself is out of this task's touch scope, so the resolution is done here
+  // rather than threaded through `deps`.
+  const bundledTemplatesDir = path.resolve(import.meta.dirname, '../../../resources/templates');
 
   /** S-74: preview WITHOUT importing — full prompt/permissions/budget diff vs defaults. */
   /**
@@ -1253,15 +1357,15 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
         prompt: String(tpl.prompt ?? ''),
         profileId: undefined,
         repoPath: undefined, // S-75: user re-picks at apply
-        permissionMode: tpl.permissionMode === 'plan' ? 'plan' : 'acceptEdits',
-        budget: { maxUsd: 2, maxTurns: 50, timeoutSec: 3600 },
-        schedule: { kind: 'queue', tz: 'UTC' }, // imported = not scheduled until reviewed
-        missedPolicy: 'run-late',
+        permissionMode: collapseImportPermissionMode(tpl.permissionMode),
+        budget: { ...IMPORT_GRANT.budget },
+        schedule: { ...IMPORT_GRANT.schedule }, // imported = not scheduled until reviewed
+        missedPolicy: IMPORT_GRANT.missedPolicy,
         missedWindowSec: 21_600,
-        overlapPolicy: 'skip',
+        overlapPolicy: IMPORT_GRANT.overlapPolicy,
         retryOnTransient: false,
         context: { files: [] },
-        delivery: { osNotify: true },
+        delivery: { ...IMPORT_GRANT.delivery },
       },
       null,
       null,
@@ -1270,6 +1374,35 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     deps.db.prepare('UPDATE tasks SET enabled=0 WHERE id=?').run(created.id);
     broadcast({ type: 'task.changed', taskId: created.id, at: Date.now() });
     return reply.code(201).send({ task: view(created), flags: preview.flags });
+  });
+
+  /**
+   * T4-8: export a task as a shareable template. `exportTaskTemplate`
+   * (templates.ts) masks the prompt and declares only what `/templates/import`
+   * above will actually grant — round-tripping the downloaded file through
+   * `POST /templates/preview` then `POST /templates/import` applies the exact
+   * same security preview and disabled-on-arrival rule to it as to a
+   * stranger's file, because it IS the same schema through the same routes.
+   */
+  app.get('/tasks/:id/export-template', async (req, reply) => {
+    const row = tasks.get((req.params as any).id);
+    if (!row) return reply.code(404).send({ error: 'not_found' });
+    const tpl = exportTaskTemplate(row);
+    audit('task.export_template', 'task', row.id, {});
+    return reply
+      .header('Content-Type', 'application/json; charset=utf-8')
+      .header('Content-Disposition', `attachment; filename="${templateExportFilenameFor(row.id)}"`)
+      .send(JSON.stringify(tpl, null, 2));
+  });
+
+  /**
+   * T4-8: the five canonical templates under resources/templates/, reachable
+   * over HTTP now instead of only by the loader and a test — see the doc
+   * comment on `loadBundledTemplates` (templates.ts) for what this does and
+   * does not change about ComposerView.tsx's separate hand-mirrored copy.
+   */
+  app.get('/templates/bundled', async () => {
+    return { templates: loadBundledTemplates(bundledTemplatesDir) };
   });
 
   /** S-75: apply with variable fill + validation. */
@@ -1385,6 +1518,113 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       return { available: true, totalLines: allLines.length, lines: tail };
     } catch (e) {
       return reply.code(500).send({ error: `unreadable: ${String(e).slice(0, 80)}` });
+    }
+  });
+
+  /**
+   * Live-tail catch-up (T4-1). The run's event journal, from a byte offset.
+   *
+   * `run.log` over SSE only carries what happens after you subscribe, so a
+   * tab opened mid-run started blank and could never recover the earlier
+   * output. This serves the same journal `run-manager.ts` appends to
+   * (`<dataDir>/runs/<id>/stream.jsonl`), so the UI can seed its tail and
+   * then let the stream take over.
+   *
+   * `since` is a BYTE offset, not a line index: the file only ever grows, so
+   * a byte offset stays valid across calls and needs no re-read to interpret.
+   * The response says where its lines actually START (`from`) rather than
+   * assuming they begin at `since` — on the first call against a long run
+   * this route seeks to the TAIL of a large file instead of returning its
+   * first 200 lines, and `from > since` is how the caller is told so.
+   *
+   * Masked the way the sibling `/runs/:id/transcript` masks (S-68). The live
+   * `run.log` frames are NOT masked — they never have been — so a credential
+   * in the output is redacted here and not there; unifying that is a change
+   * to shipped broadcast behaviour and belongs to its own task.
+   */
+  app.get('/runs/:id/events', async (req, reply) => {
+    const runId = String((req.params as any).id);
+    // Existence first, filesystem second: `:id` reaches path.join below, and
+    // an id that matches a run row is one the daemon minted itself.
+    const row = deps.db.prepare('SELECT id FROM runs WHERE id=?').get(runId);
+    if (!row) return reply.code(404).send({ error: 'not_found' });
+
+    const q = req.query as Record<string, unknown>;
+    const sinceRaw = Number.parseInt(String(q.since ?? '0'), 10);
+    const since = Number.isFinite(sinceRaw) && sinceRaw > 0 ? sinceRaw : 0;
+    const limitRaw = Number.parseInt(String(q.limit ?? ''), 10);
+    const limit =
+      Number.isFinite(limitRaw) && limitRaw > 0
+        ? Math.min(limitRaw, RUN_EVENTS_MAX_LINES)
+        : RUN_EVENTS_DEFAULT_LINES;
+
+    const file = path.join(deps.dataDir, 'runs', runId, 'stream.jsonl');
+    const empty = { runId, since, from: since, nextSince: since, lines: [], skipped: 0, complete: true };
+    // A queued run, or one whose child has said nothing yet, has no journal.
+    // That is emptiness, not an error — 404 here would read as "no such run".
+    if (!existsSync(file)) return empty;
+
+    const fs = await import('node:fs');
+    let fd: number;
+    try {
+      fd = fs.openSync(file, 'r');
+    } catch {
+      return empty;
+    }
+    try {
+      const size = fs.fstatSync(fd).size;
+      if (since >= size) return { ...empty, from: size, nextSince: size };
+
+      // Seek to the tail on a cold read of a big journal: the point of this
+      // route is the last screenful, and returning the first 200 lines of a
+      // 40MB run would be a plausible-looking wrong answer.
+      const start = since === 0 && size > RUN_EVENTS_MAX_BYTES ? size - RUN_EVENTS_MAX_BYTES : since;
+      const want = Math.min(size - start, RUN_EVENTS_MAX_BYTES);
+      const buf = Buffer.alloc(want);
+      const read = fs.readSync(fd, buf, 0, want, start);
+      const slice = buf.subarray(0, read);
+
+      // Whole lines only, in bytes — a partial line at either end is left for
+      // the next call, and cutting on the buffer (not the decoded string)
+      // keeps `nextSince` a byte offset even with multi-byte characters.
+      const lastNl = slice.lastIndexOf(0x0a);
+      if (lastNl < 0) return { ...empty, from: start, nextSince: since, complete: false };
+      const headSkip = start > since ? slice.indexOf(0x0a) + 1 : 0;
+      const from = start + headSkip;
+      const nextSince = start + lastNl + 1;
+      const text = headSkip > lastNl ? '' : slice.subarray(headSkip, lastNl + 1).toString('utf8');
+
+      const { maskSecrets } = await import('@clockwork/runner');
+      const parsed: Array<{ at: number; kind: string; text: string }> = [];
+      for (const raw of text.split('\n')) {
+        if (raw.trim().length === 0) continue;
+        try {
+          const o = JSON.parse(raw) as { t?: unknown; kind?: unknown; text?: unknown };
+          parsed.push({
+            at: typeof o.t === 'number' ? o.t : 0,
+            kind: typeof o.kind === 'string' ? o.kind : 'log',
+            text: maskSecrets(String(o.text ?? '')),
+          });
+        } catch {
+          // A torn write is one unreadable line, not an unreadable run.
+        }
+      }
+      const skipped = Math.max(0, parsed.length - limit);
+      return {
+        runId,
+        since,
+        from,
+        nextSince,
+        lines: parsed.slice(-limit),
+        skipped,
+        complete: nextSince >= size,
+      };
+    } catch (e) {
+      return reply.code(500).send({ error: `unreadable: ${String(e).slice(0, 80)}` });
+    } finally {
+      try {
+        fs.closeSync(fd);
+      } catch {}
     }
   });
 
@@ -1627,7 +1867,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       rowLimit = Math.min(asked, CALENDAR_ROW_LIMIT);
     }
 
-    const { occurrencesBetween } = await import('./recurrence.js');
+    const { occurrencesBetweenBounded } = await import('./recurrence.js');
 
     // A run belongs to the window if ANY of its three timestamps lands inside
     // it; it is FILED under the first one it has. Both modes use the same
@@ -1761,8 +2001,28 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
         : runsReturned;
     }
 
-    // Bookings: expand every enabled schedule into the visible window.
-    const bookings: Array<{ taskId: string; name: string; at: number; kind: 'booking' }> = [];
+    // Bookings: project every enabled schedule across the visible window (T4-4).
+    //
+    // WHAT CHANGED, AND WHY IT WAS WRONG. This loop already walked forward from
+    // "now" to `to`, so the rhythm was half there — but it asked for a flat 62
+    // occurrences per schedule and then reported nothing about that number. Two
+    // consequences, and the second is the worse one. An hourly job over a
+    // 42-day month grid has 1,008 occurrences and got 62: it appeared for two
+    // and a half days and then vanished for the rest of the month, which is a
+    // couple of ghosts where the task's whole point is a rhythm. And
+    // `bookingsTotal` only ever counted what came back, so `bookings.truncated`
+    // was computed as `total > returned` — false — and the response said the
+    // answer was complete. A bound that does not report itself is the one thing
+    // the S-64 note above says is worse than no bound.
+    //
+    // FORWARD ONLY, still. The projection starts at `now`, never at `from`, and
+    // that is deliberate rather than a leftover: a ghost on a past date is a
+    // claim that something was scheduled then, and for any date before the task
+    // existed that claim is false. A past occurrence that WAS real already has a
+    // row in `runs`.
+    const bookings: Array<{
+      taskId: string; name: string; at: number; kind: 'booking'; projected: boolean;
+    }> = [];
     let bookingsTotal = 0;
     const scheds = deps.db
       .prepare(
@@ -1775,6 +2035,11 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       id: string; task_id: string; kind: string; rrule: string | null; cron: string | null;
       run_at: number | null; tz: string; next_fire: number | null; task_name: string;
     }>;
+    const projectFrom = Math.max(from, Date.now() - 1000);
+    const recurring = scheds.filter((s) => s.kind === 'rrule' || s.kind === 'cron').length;
+    const projectionLimit = calendarProjectionLimit(Math.max(0, to - projectFrom), recurring, rowLimit);
+    let projectionTruncated = false;
+    let projectionRefused = 0;
     for (const s of scheds) {
       try {
         if (s.kind === 'queue') continue;
@@ -1782,12 +2047,27 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
         if (s.kind === 'once') {
           ats = s.run_at != null && s.run_at >= from && s.run_at <= to && s.next_fire != null ? [s.run_at] : [];
         } else {
-          ats = occurrencesBetween(
+          // The projection must not be the path that hangs the daemon. A rule
+          // whose BY parts are unreachable from its own INTERVAL grid spins
+          // forever inside rrule 2.8.1, and the save-time guard (see the
+          // `/tasks` handler) only stops NEW ones — a row written before that
+          // check existed, or by an import, is still in the table. Refusing it
+          // here is the read path's version of the same decision: a read skips
+          // what it cannot safely compute and says how many it skipped, where a
+          // write refuses the request outright.
+          const hazard = guardSchedule(s.kind as 'rrule' | 'cron', s.rrule, MAX_RRULE_COUNT);
+          if (!hazard.safe) {
+            projectionRefused++;
+            continue;
+          }
+          const expanded = occurrencesBetweenBounded(
             { kind: s.kind as 'rrule' | 'cron', rrule: s.rrule, cron: s.cron, runAt: s.run_at, tz: s.tz },
-            Math.max(from, Date.now() - 1000),
+            projectFrom,
             to,
-            62,
+            projectionLimit,
           );
+          ats = expanded.occurrences;
+          if (expanded.truncated) projectionTruncated = true;
         }
         for (const at of ats) {
           bookingsTotal++;
@@ -1796,7 +2076,16 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
           // the count, the detail view needs the rows, and neither may grow
           // without limit.
           if (group === null && bookings.length < rowLimit) {
-            bookings.push({ taskId: s.task_id, name: s.task_name, at, kind: 'booking' });
+            // BOOKED vs PROJECTED. `next_fire` is the one occurrence the
+            // scheduler has materialized and will actually claim; everything
+            // after it is this route's arithmetic on the rule, and editing the
+            // task moves it. A one-shot is always booked — the row IS the
+            // commitment. Drawing the two the same way would let a prediction
+            // borrow the authority of a commitment.
+            const booked = s.kind === 'once' || (s.next_fire != null && at === s.next_fire);
+            bookings.push({
+              taskId: s.task_id, name: s.task_name, at, kind: 'booking', projected: !booked,
+            });
           }
         }
       } catch {
@@ -1852,20 +2141,37 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       truncated: total > returned,
     });
 
+    // The projection's bound, reported the way `rowLimit` is: the number that
+    // was applied, and whether it bit. `bookings.total` is what the expansion
+    // actually counted, so when `projection.truncated` is true that total is a
+    // FLOOR — the window holds more occurrences than anything here could know
+    // without doing the work the bound exists to avoid. That is why the flag is
+    // separate from the count instead of folded into it.
+    const projection: CalendarProjectionLimit = {
+      perSchedule: projectionLimit,
+      truncated: projectionTruncated,
+      refused: projectionRefused,
+    };
+
     if (group === 'day') {
       const all = [...dayRows.values()].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
       const days = all.length > rowLimit ? all.slice(0, rowLimit) : all;
       const sum = (rows: DayRow[], pick: (r: DayRow) => number): number =>
         rows.reduce((acc, r) => acc + pick(r), 0);
+      const shippedBookings = sum(days, (r) => r.bookings);
       const limits = {
         rowLimit,
-        truncated: all.length > rowLimit,
+        truncated: all.length > rowLimit || projectionTruncated,
+        projection,
         days: collection(days.length, all.length),
         // Shipped-vs-existing per collection: when the day rows are capped,
         // the runs on the days that were cut are counted here and NOT in the
         // response body, which is exactly what a caller needs to know.
         runs: collection(sum(days, (r) => r.runs), sum(all, (r) => r.runs)),
-        bookings: collection(sum(days, (r) => r.bookings), bookingsTotal),
+        bookings: {
+          ...collection(shippedBookings, bookingsTotal),
+          truncated: bookingsTotal > shippedBookings || projectionTruncated,
+        },
         humans: collection(sum(days, (r) => r.humans), humansTotal),
       };
       return { from, to, group: 'day' as const, days, limits };
@@ -1880,9 +2186,16 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       limits: {
         rowLimit,
         truncated:
-          runsTruncated || bookings.length < bookingsTotal || humans.length < humansTotal,
+          runsTruncated
+          || bookings.length < bookingsTotal
+          || humans.length < humansTotal
+          || projectionTruncated,
+        projection,
         runs: { returned: runsReturned, total: runsTotal, truncated: runsTruncated },
-        bookings: collection(bookings.length, bookingsTotal),
+        bookings: {
+          ...collection(bookings.length, bookingsTotal),
+          truncated: bookingsTotal > bookings.length || projectionTruncated,
+        },
         humans: collection(humans.length, humansTotal),
       },
     };
@@ -2249,6 +2562,124 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       readyToBook: claudeOk && authOk && gitOk,
       hasProvider: byokCount > 0 || (claudeOk && authOk),
       byokCount,
+    };
+  });
+
+  // ---- onboarding (T4-2): what a one-click sample run should point at ----
+  //
+  // Answers a question; books nothing. The caller creates the task through
+  // POST /tasks like any other booking, so the sample passes the same schema,
+  // the same policy gate and the same autonomy ceiling as work a human typed.
+  // A route that both chose the target AND created the task would be a second,
+  // unaudited way into the tasks table.
+  //
+  // WHAT IT WILL NOT DO: search. There is no walk, no depth, no ignore-list —
+  // three places the daemon already knows about, in order, and the answer is
+  // "nothing found" the moment they are exhausted. A first-run feature that
+  // crawls a stranger's disk to find something to point an agent at is a worse
+  // product than one that admits it found nothing and offers a snippet.
+  app.get('/onboarding/sample', async () => {
+    const { readdirSync } = await import('node:fs');
+    const { preflightRepo, runGit } = await import('@clockwork/runner');
+    const { ONBOARDING_SAMPLE_PROFILE_SLUG, ONBOARDING_BUNDLED_SAMPLE_JOB, onboardingRepoReviewJob } = await import(
+      './profile-library.js'
+    );
+    const home = process.env.HOME ?? '';
+
+    /** First candidate that a run could actually use wins; `null` means say so. */
+    const findRepo = (): { path: string; name: string; source: 'booked' | 'cloned' | 'home' } | null => {
+      const accept = (
+        p: string,
+        source: 'booked' | 'cloned' | 'home',
+      ): { path: string; name: string; source: 'booked' | 'cloned' | 'home' } | null => {
+        // `git rev-parse` walks UP the tree, so `isGitRepo` alone answers yes
+        // for any directory that merely LIVES under a repository — and for
+        // every directory in $HOME on a machine where $HOME itself is one
+        // (dotfiles-as-home-repo is a real setup). The candidate has to BE the
+        // repository root, so compare the toplevel git reports against it.
+        const top = runGit(['rev-parse', '--show-toplevel'], p);
+        if (top.code !== 0) return null;
+        try {
+          if (realpathSync(top.out.trim()) !== realpathSync(p)) return null;
+        } catch {
+          return null;
+        }
+        // The same preflight run-manager applies before it cuts a worktree.
+        // A `git init`-ed directory with no commits passes every check above
+        // and then fails the run with "Repository has no commits yet" —
+        // pointing a first run at one is worse than finding nothing at all.
+        if (!preflightRepo(p, null).ok) return null;
+        return { path: p, name: path.basename(p) || p, source };
+      };
+
+      // 1. A repo this daemon has already been pointed at. Soft-deleted tasks
+      //    count: the row is gone from the UI, but the user's choice of repo is
+      //    still the best evidence there is of which repo they care about.
+      try {
+        const rows = deps.db
+          .prepare(
+            `SELECT repo_path FROM tasks WHERE repo_path IS NOT NULL AND repo_path <> '' ORDER BY created_at DESC LIMIT 20`,
+          )
+          .all() as unknown as Array<{ repo_path: string }>;
+        for (const r of rows) {
+          const hit = accept(r.repo_path, 'booked');
+          if (hit) return hit;
+        }
+      } catch {
+        /* no tasks table yet — fall through */
+      }
+
+      // 2. Anything POST /repos/clone fetched on the user's behalf. Same
+      //    directory that route writes to, deliberately (it hardcodes $HOME
+      //    rather than dataDir), so the two cannot drift apart.
+      try {
+        for (const name of readdirSync(`${home}/.clockwork/repos`).sort((a, b) => a.localeCompare(b))) {
+          const hit = accept(`${home}/.clockwork/repos/${name}`, 'cloned');
+          if (hit) return hit;
+        }
+      } catch {
+        /* nothing cloned */
+      }
+
+      // 3. "The first git repo the folder browser finds" — literally the same
+      //    listing /fs/browse returns for its default location: $HOME, top
+      //    level only, dotted entries hidden, the same 500 cap, the same
+      //    localeCompare order, the same `.git`-is-a-directory test. If the
+      //    picker would show it with a git badge, this finds it; if it would
+      //    not, neither does this.
+      try {
+        const dirs = readdirSync(home, { withFileTypes: true })
+          .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+          .map((e) => e.name)
+          .sort((a, b) => a.localeCompare(b))
+          .slice(0, 500);
+        for (const name of dirs) {
+          const dir = `${home}/${name}`;
+          let badged = false;
+          try {
+            badged = statSync(`${dir}/.git`).isDirectory();
+          } catch {
+            /* not a repo */
+          }
+          if (!badged) continue;
+          const hit = accept(dir, 'home');
+          if (hit) return hit;
+        }
+      } catch {
+        /* unreadable $HOME */
+      }
+      return null;
+    };
+
+    const repo = findRepo();
+    const profile = profiles.bySlug(ONBOARDING_SAMPLE_PROFILE_SLUG);
+    return {
+      repo,
+      /** Said back to the user verbatim when `repo` is null — "we looked here". */
+      lookedIn: ['repos you have booked work against before', '~/.clockwork/repos', '~ (top level only)'],
+      profileSlug: ONBOARDING_SAMPLE_PROFILE_SLUG,
+      profileId: profile?.id ?? null,
+      job: repo ? onboardingRepoReviewJob(repo.name) : ONBOARDING_BUNDLED_SAMPLE_JOB,
     };
   });
 
@@ -3155,10 +3586,26 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
   return { app, token, sseClients };
 }
 
-/** FR-5: manual run-now — ad-hoc runs recorded like scheduled ones. */
-export function enqueueRunNow(db: DB, taskRow: any): string {
+/**
+ * FR-5: manual run-now — ad-hoc runs recorded like scheduled ones.
+ *
+ * @param dataDir T1-15: the resolved data dir (`ApiDeps.dataDir`) that the
+ *   run's worktree and scratch paths are built under. Every in-file call
+ *   passes `deps.dataDir` explicitly. Optional, and defaulting to the exact
+ *   formula main.ts uses to resolve it, only because pause.test.ts,
+ *   analytics.test.ts, workforce-api.test.ts and report-verdict-update.test.ts
+ *   still call this on the pre-T1-15 2-arg signature and are outside this
+ *   change's touch set. A bare `process.env.HOME` fallback would silently
+ *   reintroduce the bug for THIS caller; mirroring main.ts's resolution
+ *   instead keeps it correct even for the callers this fix could not reach.
+ */
+export function enqueueRunNow(
+  db: DB,
+  taskRow: any,
+  dataDir: string = process.env.CLOCKWORK_HOME ?? `${process.env.HOME}/.clockwork`,
+): string {
   const now = Date.now();
-  const spec = jobSpecForTask(db, taskRow, now);
+  const spec = jobSpecForTask(db, taskRow, now, dataDir);
   db.prepare(
     `INSERT INTO runs (id, task_id, jobspec_json, state, state_changed_at, scheduled_for) VALUES (?, ?, ?, 'queued', ?, ?)`,
   ).run(spec.runId, taskRow.id, JSON.stringify(spec), now, now);
@@ -3166,7 +3613,7 @@ export function enqueueRunNow(db: DB, taskRow: any): string {
   return spec.runId;
 }
 
-function jobSpecForTask(db: DB, taskRow: any, now: number) {
+function jobSpecForTask(db: DB, taskRow: any, now: number, dataDir: string) {
   const profile = taskRow.profile_id ? (db.prepare('SELECT * FROM profiles WHERE id=?').get(taskRow.profile_id) as any) : null;
   const slug = slugify(taskRow.name);
   const runId = newId();
@@ -3183,9 +3630,9 @@ function jobSpecForTask(db: DB, taskRow: any, now: number) {
     budget: { maxUsd: taskRow.budget_usd, maxTurns: taskRow.max_turns, timeoutSec: taskRow.timeout_sec },
     repoPath: taskRow.repo_path ?? null,
     baseBranch: taskRow.base_branch ?? null,
-    worktreePath: `${process.env.HOME ?? '~'}/.clockwork/worktrees/${slug}/${runId}`,
+    worktreePath: `${dataDir}/worktrees/${slug}/${runId}`,
     branch: branchFor(slug, runId),
-    scratchPath: taskRow.repo_path ? null : `${process.env.HOME ?? '~'}/.clockwork/scratch/${runId}`,
+    scratchPath: taskRow.repo_path ? null : `${dataDir}/scratch/${runId}`,
     profile: profile
       ? {
           id: profile.id,

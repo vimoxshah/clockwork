@@ -1,0 +1,12 @@
+{
+  "schema": "clockwork.template.v1",
+  "name": "Flaky test sweep",
+  "prompt": "Run the test-doctor procedure on this repository: find failing or intermittently failing tests, classify each as genuinely broken, flaky, or obsolete, and propose minimal fixes for flaky cases without weakening any assertion. Run the affected suites to verify before reporting. Report as a table of test, classification, evidence, and proposed fix.",
+  "profileSlug": "test-doctor",
+  "permissionMode": "acceptEdits",
+  "budget": { "maxUsd": 2, "maxTurns": 50, "timeoutSec": 3600 },
+  "schedule": { "kind": "rrule", "rrule": "FREQ=WEEKLY;BYDAY=WE;BYHOUR=9;BYMINUTE=0", "tz": "UTC" },
+  "missedPolicy": "run-late",
+  "overlapPolicy": "skip",
+  "delivery": { "osNotify": true }
+}

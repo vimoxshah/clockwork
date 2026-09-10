@@ -18,6 +18,12 @@ BUNDLE="$ROOT/src-tauri/target/release/bundle/dmg"
 # Preferred input: the DMG downloaded from the GitHub release, e.g.
 #   gh release download v0.5.0 -p 'Clockwork_*_aarch64.dmg' -D /tmp/rel
 #   DMG=/tmp/rel/Clockwork_0.5.0_aarch64.dmg ./packaging/stage-release.sh
+# T1-2: the cask carries a digest PER ARCHITECTURE now, so this script needs
+# both DMGs. DMG= is the arm64 one (kept as the name, so existing invocations
+# still mean what they meant); DMG_X64= is the Intel one. Without the second,
+# the Intel digest keeps whatever it had — which is a 64-zero placeholder on a
+# fresh cask — so the script REFUSES rather than staging half a release and
+# leaving `brew install` broken for Intel users.
 if [ -n "${DMG:-}" ]; then
   [ -f "$DMG" ] || { echo "DMG not found: $DMG" >&2; exit 1; }
 else
@@ -35,7 +41,26 @@ else
   fi
 fi
 
-VERSION="$(basename "$DMG" | sed -E 's/Clockwork_(.+)_aarch64\.dmg/\1/')"
+VERSION="$(basename "$DMG" | sed -E 's/Clockwork_(.+)_(aarch64|x64)\.dmg/\1/')"
+
+if [ -z "${DMG_X64:-}" ]; then
+  # `|| true` is load-bearing: this script runs under `set -euo pipefail`, and
+  # a failing `ls` inside a command substitution kills it before the message
+  # below can explain why. It exited 1 with an empty log until this was added.
+  DMG_X64="$(ls -1 "$BUNDLE"/Clockwork_*_x64.dmg 2>/dev/null | tail -1 || true)"
+fi
+if [ -z "${DMG_X64:-}" ]; then
+  echo "no Intel DMG. The cask pins a digest per architecture, so staging only" >&2
+  echo "arm64 would leave the Intel sha256 stale (or the 64-zero placeholder)," >&2
+  echo "and \`brew install --cask clockwork\` would fail its checksum on every" >&2
+  echo "Intel Mac. Pass DMG_X64=<release asset>, or SKIP_X64=1 to stage arm64" >&2
+  echo "alone and accept that the Intel half of the cask is wrong." >&2
+  [ "${SKIP_X64:-0}" = "1" ] || exit 1
+else
+  [ -f "$DMG_X64" ] || { echo "Intel DMG not found: $DMG_X64" >&2; exit 1; }
+  V64="$(basename "$DMG_X64" | sed -E 's/Clockwork_(.+)_x64\.dmg/\1/')"
+  [ "$V64" = "$VERSION" ] || { echo "version mismatch: arm64 is $VERSION, Intel is $V64" >&2; exit 1; }
+fi
 # The DMG is NOT copied into the repo. It used to be, because a private repo
 # cannot serve a release asset to an anonymous request, so the site had to host
 # its own copy. The repo is public now and the download links point at
@@ -46,7 +71,20 @@ SHA="$(shasum -a 256 "$DMG" | cut -d' ' -f1)"
 # Homebrew cask
 CASK="$ROOT/packaging/homebrew/clockwork.rb"
 /usr/bin/sed -i '' -E "s/^  version \".*\"/  version \"${VERSION}\"/" "$CASK"
-/usr/bin/sed -i '' -E "s/^  sha256 \".*\"/  sha256 \"${SHA}\"/" "$CASK"
+# Two-arch cask (T1-2): `sha256 arm: "...", intel: "..."`. The old single-digest
+# pattern `^  sha256 "` matches nothing in that shape, so it rewrote NOTHING and
+# said nothing — the failure mode this replaces.
+/usr/bin/sed -i '' -E "s/(arm:[[:space:]]*)\"[0-9a-f]{64}\"/\1\"${SHA}\"/" "$CASK"
+if [ -n "${DMG_X64:-}" ]; then
+  SHA64="$(shasum -a 256 "$DMG_X64" | cut -d' ' -f1)"
+  /usr/bin/sed -i '' -E "s/(intel:[[:space:]]*)\"[0-9a-f]{64}\"/\1\"${SHA64}\"/" "$CASK"
+fi
+# Prove the rewrite landed. A sed that matches nothing exits 0, which is how
+# this went unnoticed: verify the digests are actually in the file now.
+grep -q "\"${SHA}\"" "$CASK" || { echo "arm64 digest was not written into $CASK — the cask's shape changed" >&2; exit 1; }
+if [ -n "${DMG_X64:-}" ]; then
+  grep -q "\"${SHA64}\"" "$CASK" || { echo "Intel digest was not written into $CASK" >&2; exit 1; }
+fi
 
 # landing page: every download link points at the stable-named asset of the
 # LATEST GitHub release (release.yml publishes Clockwork_aarch64.dmg alongside
