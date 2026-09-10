@@ -485,10 +485,17 @@ Open, reproducible, and written down here rather than discovered by you:
   it afterwards. It declines on battery unless you set
   `CLOCKWORK_KEEP_AWAKE_ON_BATTERY=1`, and the OS still wins if you shut the lid.
   Nothing schedules a *wake*, so a machine already asleep at the fire time stays
-  asleep and the run is handled by the missed-window policy. The report's
-  `sleptThroughKeepAwake` field is still hardcoded `false` and does not yet
-  detect that case. For genuinely unattended overnight work, use a machine that
-  stays on.
+  asleep, the run is handled by the missed-window policy, and there is no window
+  to watch. When a run is open, the daemon samples its own window every 15s and
+  the report says in words when the Mac slept for 60s or more during it — "This
+  Mac slept for about 42 minutes during this run." `sleptDuringRunMs` carries
+  the figure, and it is a floor: up to one 15s sample low. Two limits remain.
+  Off macOS, and for a run recovered after a daemon restart, nobody watched, so
+  that field and `sleptThroughKeepAwake` are both absent rather than `false` —
+  the report declines to answer instead of answering "no". And a sleep past 60s
+  starves the heartbeat too, so the run can still finalize as `runner_crashed`;
+  the sleep sentence explains that report rather than preventing it. For
+  genuinely unattended overnight work, use a machine that stays on.
 
 ## 📚 Guides
 
