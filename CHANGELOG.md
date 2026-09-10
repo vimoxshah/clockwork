@@ -21,6 +21,12 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   location, so a source checkout finds them and only the shipped app does not.
   The composer carries its own copy of the five, so they were always bookable —
   it was the claim that was wrong, not the button.
+- **The published Homebrew tap served 0.11.0** while the current release was
+  0.12.0, pinning a checksum that appeared in no current release — so
+  `brew install --cask clockwork` fetched a build two releases old. The cause
+  was never the automation's permissions, as 0.12.0's notes assumed: it was the
+  wrong GitHub account being active locally. The tap now serves 0.12.1 with an
+  `arm:`/`intel:` digest pair, and the nightly drift check agrees.
 
 ## [0.12.0] — 2026-09-10
 
@@ -137,15 +143,8 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Known issues
 
-- **The published Homebrew tap serves 0.11.0** while the current release is
-  0.11.2, pinning a checksum that appears in no current release. Fixing it needs
-  push access to `vimoxshah/homebrew-clockwork`, which the release automation
-  does not have. The new nightly check reports it; it cannot repair it.
 - **Builds are still unsigned and un-notarized.** No Apple Developer certificate
   exists for this project.
-- **Intel Macs are still unserved.** `macos-13` no longer exists as a GitHub
-  hosted runner, and every remaining x64 image is a Larger Runner restricted to
-  Team and Enterprise Cloud organisations.
 - **The Settings *Check for updates* button needs an IPC grant to work at all.**
   The window loads the daemon's own origin, which Tauri treats as remote, so
   custom commands are ACL-rejected. A capability now grants exactly that one
