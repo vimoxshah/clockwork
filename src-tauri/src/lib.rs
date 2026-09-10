@@ -392,7 +392,19 @@ fn api_token() -> Option<String> {
 /// own storage, so it gets no injection and still meets the pairing screen —
 /// which is the behaviour we want kept, not a limitation. Doing this through a
 /// Tauri IPC command instead would mean granting IPC to a remote origin, and
-/// that grant would belong to every page the daemon serves.
+/// that grant would belong to every page the daemon serves. So the token
+/// still travels this way, and should.
+///
+/// T1-19 grants that origin IPC anyway — for one command — and the sentence
+/// above is exactly why it is one. `capabilities/check-for-updates.json`
+/// names `check_for_updates_command` and nothing else: no arguments, one
+/// hardcoded HTTPS GET to api.github.com, a version string back. What every
+/// page the daemon serves gets is therefore the ability to learn which
+/// Clockwork version is current — a fact GitHub's releases page already
+/// publishes to anyone. A command that read this token would not have
+/// survived that question, and the next command added must answer it again —
+/// it inherits nothing, and needs its own permission and its own line in the
+/// capability.
 fn pairing_script(token: &str) -> String {
     // Guarded on the origin, for two reasons that both matter.
     //
@@ -558,16 +570,20 @@ const ID_QUIT: &str = "tray.quit";
 /// Prefix for the per-run rows; they all jump to the Inbox.
 const ID_RUN_PREFIX: &str = "tray.run.";
 /// T1-6 — runs the update check itself, natively, rather than opening
-/// Settings and asking the page to do it. That was the first shape this
-/// took, and it does not work: this window is built with
+/// Settings and asking the page to do it. The first reason was that the
+/// page could not be asked: this window is built with
 /// `WebviewUrl::External(DAEMON_URL)` (below), which Tauri's own
 /// `is_local_url` (tauri-2.11.5/src/webview/mod.rs:1698) does not consider
 /// local — it matches neither the `tauri://` protocol nor a configured
-/// `devUrl`/`frontendDist` URL nor a registered custom scheme — and this
-/// crate ships no `src-tauri/capabilities/` granting `remote.urls` to it.
-/// So `invoke()` from that page is rejected by the ACL gate
-/// (`webview/mod.rs:1823`) every time, in every build, not only sometimes.
-/// See `run_update_check`.
+/// `devUrl`/`frontendDist` URL nor a registered custom scheme — so the ACL
+/// gate (`webview/mod.rs:1823`) rejected every `invoke()` from it.
+///
+/// T1-19 lifted that for this one command
+/// (`capabilities/check-for-updates.json`), so Settings can now run its own
+/// check. This one stays native, because the tray has to answer in two
+/// states Settings cannot: with the window hidden, and with the daemon down
+/// and the window showing `daemon-down.html`, which has no Settings screen
+/// on it at all. See `run_update_check`.
 const ID_CHECK_UPDATES: &str = "tray.check_updates";
 
 /// The numbers the menu bar exists to show.
@@ -1169,9 +1185,9 @@ fn update_alert_script(text: &str) -> String {
     format!("alert({escaped});")
 }
 
-/// The shape `SettingsView.tsx`'s `UpdateCheckCard` reads — see
-/// `check_for_updates_command`'s doc comment for why that card cannot
-/// reach this today. A `status` string rather than an HTTP-style error,
+/// The shape `SettingsView.tsx`'s `UpdateCheckCard` reads, over the IPC
+/// grant described on `check_for_updates_command`. A `status` string
+/// rather than an HTTP-style error,
 /// because a network failure and a malformed response are both legitimate
 /// ANSWERS to "did you check" — not IPC failures — so `invoke()` on the JS
 /// side always resolves (when it resolves at all), and `status` carries
@@ -1198,10 +1214,10 @@ fn update_check_json(u: &UpdateCheck) -> serde_json::Value {
     }
 }
 
-/// Registered in `run()` below, and reachable from `cargo test` (Rust can
-/// call any function directly) — but **not, today, from
-/// `SettingsView.tsx`'s "Check for updates" button**, and that is not a
-/// missing capabilities file so much as a fact about this window.
+/// Registered in `run()` below, reachable from `cargo test` (Rust can call
+/// any function directly), and — since T1-19 — reachable from
+/// `SettingsView.tsx`'s "Check for updates" button. That last one needed a
+/// capability file, and needed it to stay as small as the paragraphs below.
 ///
 /// `run()`'s `setup` builds the main window on `WebviewUrl::External(
 /// DAEMON_URL)` — the daemon-served UI at `http://127.0.0.1:4747`, not
@@ -1216,30 +1232,44 @@ fn update_check_json(u: &UpdateCheck) -> serde_json::Value {
 /// `!is_local` in the IPC ACL gate (`webview/mod.rs:1823`) regardless of
 /// `invoke.acl` — the "bare app command needs no capability" rule this
 /// comment used to (wrongly) rely on only holds when `is_local` is true.
-/// `src-tauri/capabilities/` does not exist in this repo, so nothing grants
-/// `remote.urls` for this origin either. The result: every call from that
-/// page is rejected, deterministically, not intermittently.
+/// Tauri closed that door deliberately in 2.11.1, whose release notes file
+/// it under security fixes: remote origins used to reach custom commands
+/// with no manifest at all. The only way through it now is an explicit
+/// grant, which is what T1-19 adds.
 ///
-/// Verified against the vendored crate rather than taken on trust — the
-/// line numbers above are real, read from `~/.cargo/registry/src/…/
-/// tauri-2.11.5/`, not inferred from the public docs. There are at least
-/// two ways to actually close this (grant `remote.urls` in a new
-/// `src-tauri/capabilities/*.json`, which reverses a posture
-/// `pairing_script`'s doc comment argues for on purpose; or have the page
-/// signal Rust some ACL-free way, e.g. `on_navigation` interception of a
-/// sentinel URL). Both are outside this change's touch set and are an
-/// orchestrator call, not this lane's to invent. What DOES work without
-/// either: `run_update_check` below, which runs this same function
-/// natively from the tray, no IPC involved.
+/// The grant is `capabilities/check-for-updates.json`, plus the permission
+/// it names in `permissions/check-for-updates.json` (an app command has to
+/// come from a permission file — `tauri-build`'s `validate_capabilities`
+/// rejects any identifier that no manifest defines, and the app manifest is
+/// built from `src-tauri/permissions/**/*`). It is the smallest grant that
+/// works: one window (`main`), one origin (`remote.urls` is
+/// `["http://127.0.0.1:4747"]`, `local` is `false`), one command, no
+/// `core:default`. `the_ipc_grant_is_one_command_from_one_origin` below
+/// asserts that through Tauri's own resolver rather than by reading the
+/// files, so widening it fails a test rather than a review.
+///
+/// What makes the exception safe is this function's shape, not the
+/// capability: no arguments, one hardcoded HTTPS URL, a version string
+/// back. No filesystem, no shell, no token, no writes. The worst case is an
+/// attacker who already controls the daemon-served page learning which
+/// Clockwork version is current. `pairing_script`'s doc comment argues
+/// against giving that page IPC in general and still holds — the token
+/// still goes by injection, and the next command added here has to earn its
+/// own line in the capability.
+///
+/// The line numbers above are real, read from `~/.cargo/registry/src/…/
+/// tauri-2.11.5/`, not inferred from the public docs. Unaffected by any of
+/// it: `run_update_check` below, which runs this same function natively
+/// from the tray, no IPC involved.
 ///
 /// The frontend calls this via `window.__TAURI_INTERNALS__.invoke(...)`
 /// rather than `@tauri-apps/api` (absent from `packages/ui`'s
 /// `package.json`, lockfile and `node_modules` — checked, not assumed —
 /// and adding it was out of touch set); see `SettingsView.tsx`'s
 /// `tauriInvoke` for that half. That choice is orthogonal to the ACL
-/// finding above: `@tauri-apps/api`'s `invoke()` would hit the identical
-/// rejection, because the check is on the PAGE'S ORIGIN, not on how the
-/// call reaches the bridge.
+/// question: the gate reads the PAGE'S ORIGIN, not how the call reaches
+/// the bridge, so `@tauri-apps/api`'s `invoke()` was rejected before this
+/// grant and is allowed after it, exactly like the internals call.
 #[tauri::command]
 fn check_for_updates_command() -> serde_json::Value {
     update_check_json(&check_for_updates())
@@ -1271,9 +1301,11 @@ mod tray {
     }
 
     /// T1-6, tray half — see `ID_CHECK_UPDATES`'s doc comment for why this
-    /// runs the check itself rather than asking Settings to (an earlier
-    /// version of this function did exactly that, and does not work: the
-    /// page cannot reach `check_for_updates_command` over IPC at all).
+    /// runs the check itself rather than opening Settings and asking the
+    /// page to. Since T1-19 the page CAN reach
+    /// `check_for_updates_command`, but the tray must answer with the
+    /// window hidden and with the daemon down, and neither state has a
+    /// Settings screen to ask.
     ///
     /// Off the main thread, the same shape `install()` already uses for
     /// `poll_loop`: `fetch_latest_release` is a blocking network call with
@@ -2223,5 +2255,117 @@ mod tests {
         assert!(script.contains(r#""a\"b\\c""#), "message must be JSON-escaped: {script}");
         assert!(script.starts_with("alert("));
         assert!(script.trim_end().ends_with(");"));
+    }
+
+    // ---- T1-19: the IPC grant, resolved rather than read -----------------
+    //
+    // `Resolved::resolve` is the same function `tauri-codegen` runs to bake
+    // the `RuntimeAuthority` into the binary, and `allowed_commands` is the
+    // very map `resolve_access` consults on every `invoke()`
+    // (tauri-2.11.5/src/ipc/authority.rs:454). Resolving the checked-in
+    // files here therefore answers "what does the window actually get",
+    // which reading the JSON does not.
+    //
+    // Deliberately resolved against the APP manifest ALONE — no core plugin
+    // manifests in the map. The day someone adds `core:default`, or any
+    // plugin permission, to that capability, resolution fails and these
+    // tests go red instead of the grant quietly widening.
+    fn resolve_the_grant() -> tauri::utils::acl::resolved::Resolved {
+        use tauri::utils::acl::{
+            capability::Capability,
+            manifest::{Manifest, PermissionFile},
+        };
+        use std::collections::BTreeMap;
+
+        let permission: PermissionFile =
+            serde_json::from_str(include_str!("../permissions/check-for-updates.json"))
+                .expect("permissions/check-for-updates.json must be a Tauri PermissionFile");
+        let capability: Capability =
+            serde_json::from_str(include_str!("../capabilities/check-for-updates.json"))
+                .expect("capabilities/check-for-updates.json must be a Tauri Capability");
+
+        let mut acl = BTreeMap::new();
+        acl.insert(
+            tauri::utils::acl::APP_ACL_KEY.to_string(),
+            Manifest::new(vec![permission], None),
+        );
+        let mut capabilities = BTreeMap::new();
+        capabilities.insert(capability.identifier.clone(), capability);
+
+        tauri::utils::acl::resolved::Resolved::resolve(
+            &acl,
+            capabilities,
+            tauri::utils::platform::Target::current(),
+        )
+        .expect("the capability must resolve against the app manifest alone")
+    }
+
+    #[test]
+    fn the_ipc_grant_is_one_command_from_one_origin() {
+        let resolved = resolve_the_grant();
+
+        assert_eq!(
+            resolved.allowed_commands.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["check_for_updates_command"],
+            "the app window must be able to call exactly one command",
+        );
+        assert!(resolved.denied_commands.is_empty(), "nothing to deny — nothing else is allowed");
+        assert!(resolved.command_scope.is_empty(), "the command takes no arguments, so it takes no scope");
+        assert!(resolved.global_scope.is_empty(), "no global scope is granted to anything");
+
+        let contexts = &resolved.allowed_commands["check_for_updates_command"];
+        assert_eq!(
+            contexts.len(),
+            1,
+            "one execution context: `local` is false, so no local grant rides along — {contexts:?}",
+        );
+        let granted = &contexts[0];
+        assert_eq!(
+            granted.windows.iter().map(|w| w.as_str()).collect::<Vec<_>>(),
+            vec!["main"],
+            "only the window `run()` builds",
+        );
+        assert!(granted.webviews.is_empty(), "no webview-label grant");
+        match &granted.context {
+            tauri::utils::acl::ExecutionContext::Remote { url } => assert_eq!(
+                url.as_str(),
+                DAEMON_URL,
+                "the grant must name the origin this shell actually loads",
+            ),
+            other => panic!("the grant must be remote-only, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_grant_covers_the_pages_the_daemon_serves_and_no_other_origin() {
+        // `RemoteUrlPattern::test` is what `Origin::matches` calls
+        // (authority.rs:62), so this is the runtime comparison, not a
+        // paraphrase of it. The UI is one page that routes on
+        // `location.hash` (packages/ui/src/App.tsx), and Settings is a hash
+        // route — the pattern has to survive that and still refuse a
+        // neighbour port.
+        let resolved = resolve_the_grant();
+        let tauri::utils::acl::ExecutionContext::Remote { url } =
+            &resolved.allowed_commands["check_for_updates_command"][0].context
+        else {
+            panic!("asserted remote in the test above");
+        };
+        let matches = |u: &str| url.test(&u.parse::<tauri::Url>().expect("valid url"));
+
+        assert!(matches("http://127.0.0.1:4747/"), "the UI's own root");
+        assert!(matches("http://127.0.0.1:4747/#/settings"), "the tab the button lives on");
+        assert!(!matches("http://127.0.0.1:4748/"), "a neighbour port is a different program");
+        assert!(!matches("http://localhost:4747/"), "not the origin this shell loads");
+        assert!(!matches("https://clockwork.sh/"), "no page off this machine");
+    }
+
+    #[test]
+    fn shipping_an_app_manifest_makes_every_future_command_fail_closed() {
+        // Side effect worth pinning: with an app ACL manifest present,
+        // `has_app_acl_manifest` is true at runtime, so EVERY app command
+        // needs a permission and a capability — local origins included
+        // (webview/mod.rs:1823). A command added later is denied until it
+        // is granted, rather than exposed until someone notices.
+        assert!(resolve_the_grant().has_app_acl);
     }
 }

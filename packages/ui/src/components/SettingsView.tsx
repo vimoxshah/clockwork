@@ -126,22 +126,29 @@ function safeHttpsUrl(raw: string): string | null {
  * comes back. A failed check renders as failed; it is never reported as
  * "up to date" just because nothing newer was confirmed.
  *
- * KNOWN GAP, not yet closed. This app's main window is built on
- * `WebviewUrl::External(DAEMON_URL)` (`src-tauri/src/lib.rs`'s `run()`) —
- * this page's own origin, `http://127.0.0.1:4747` — which Tauri's IPC ACL
- * does not treat as local (verified against the vendored
- * `tauri-2.11.5/src/webview/mod.rs`; see `check_for_updates_command`'s doc
- * comment for the exact chain). With no `src-tauri/capabilities/` granting
- * this origin `remote.urls`, `invoke('check_for_updates_command')` from
- * THIS button is rejected by Tauri, every time, in the shipped app — not
- * only when the network is down. The click still resolves honestly (the
- * `catch` below turns the rejection into a `check_failed` result, same as
- * any other failure — never a false "up to date"), but "clicking it on
- * 0.11.2 reports 0.11.2" does not hold for this button today. The tray's
- * "Check for updates…" item runs the identical check natively and does
- * work — see `run_update_check` in `lib.rs`. Closing this gap needs a
- * capability grant or a different signalling path from this page to Rust,
- * neither of which this change makes.
+ * THE GRANT THIS BUTTON RIDES ON, and why it is one line wide. The main
+ * window is built on `WebviewUrl::External(DAEMON_URL)` (`run()` in
+ * `src-tauri/src/lib.rs`), so this page's origin is
+ * `http://127.0.0.1:4747`, which Tauri does NOT treat as local
+ * (`tauri-2.11.5/src/webview/mod.rs`'s `is_local_url`). Tauri 2.11.1 made
+ * remote origins fail closed on custom commands, so until T1-19 every
+ * click here was ACL-rejected in the shipped app, however healthy the
+ * network was.
+ *
+ * `src-tauri/capabilities/check-for-updates.json` now grants exactly
+ * `check_for_updates_command`, to the `main` window, on that one origin,
+ * with `local: false` and no `core:default`. That narrowness is the whole
+ * reason the grant was acceptable: the command takes no arguments, reads a
+ * hardcoded GitHub URL over HTTPS and returns a version string, so the
+ * worst it hands a page that already controls this window is the version
+ * number GitHub publishes anyway. A command that could read a token would
+ * not have survived the same question, and it would not inherit this
+ * grant — shipping an app manifest makes every later command fail closed
+ * until it is named too.
+ *
+ * The tray's "Check for updates…" stays native rather than routing here:
+ * it has to answer with the window hidden and with the daemon down, and in
+ * neither state is there a Settings screen to render into.
  */
 export function UpdateCheckCard(): JSX.Element {
   const [busy, setBusy] = useState(false);
