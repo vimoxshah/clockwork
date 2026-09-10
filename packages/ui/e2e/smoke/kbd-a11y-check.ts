@@ -61,7 +61,16 @@ const run = async (): Promise<number> => {
   // ---- ProviderConnectFlow + ModelSelector: keyboard-only path ----
   await page.evaluate(() => { window.location.hash = '#/settings'; });
   await page.waitForTimeout(300);
-  await page.locator('text=API providers').scrollIntoViewIfNeeded();
+  // `text=API providers` is a SUBSTRING match, and the empty state right below
+  // this heading reads "No API providers connected yet" — so it resolved to two
+  // elements and Playwright's strict mode threw. It only broke once BYOK had no
+  // provider connected, which is exactly the state CI runs in.
+  //
+  // `#byok-providers` is the heading's own id AND the `anchorId` two feature
+  // surfaces are registered against (SettingsView.tsx:32,35), so
+  // workforce-settings.test.tsx already fails if it stops rendering. Anchoring
+  // here borrows a contract the app maintains instead of matching on prose.
+  await page.locator('#byok-providers').scrollIntoViewIfNeeded();
   await page.click('[data-testid="connect-provider-btn"]');
   await page.waitForTimeout(400);
 
