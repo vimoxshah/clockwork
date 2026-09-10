@@ -11,10 +11,25 @@
  *   fetches THAT DAY's events, one local day wide. Aggregate to see the shape
  *   of the year, detail to read a day: the summary never replaces the runs.
  *
- * WHAT THE YEAR VIEW DOES NOT FIX. It is a payload and row-count win, not a
- * latency win. The daemon's `/calendar` cost is dominated by RRULE expansion
- * (see the route's own note in packages/daemon/src/api.ts), which both modes
- * pay in full. A year view is not faster to arrive; it is smaller when it does.
+ * WHAT THE YEAR VIEW COSTS, CORRECTED. This used to read "a payload and
+ * row-count win, not a latency win", because the daemon's `/calendar` cost was
+ * dominated by an RRULE replay both modes paid in full. That replay is gone
+ * (`advancedAnchorMs` in packages/daemon/src/recurrence.ts) and the fold is a
+ * latency win as well now — see the route's own note in
+ * packages/daemon/src/api.ts for the measured numbers, which are the only place
+ * they belong.
+ *
+ * THREE KINDS OF MARK, AND THEY ARE NOT ONE KIND (T4-4)
+ *   RUN       a filled chip in the state's colour. It happened, or is happening.
+ *   BOOKED    a SOLID outline. The one occurrence the scheduler has materialized
+ *             in `next_fire` and will actually claim.
+ *   PROJECTED a DASHED, dimmed outline — a ghost. This is the rule's arithmetic
+ *             over the visible range, nothing more: editing the task moves it,
+ *             and no ledger row exists for it yet.
+ * Drawing the last two the same way let a prediction borrow the authority of a
+ * commitment, which is what made "every job visible" a claim the calendar could
+ * not back. The dash and the dim are inline here because this component ships
+ * no new stylesheet rules, the same bargain `YearGrid` below already makes.
  */
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { api } from '../api';
@@ -60,6 +75,50 @@ export interface ComposerPrefill {
   runAtLocal: string;
 }
 
+/**
+ * `CalendarEvent` plus the flag the daemon added for T4-4.
+ *
+ * It is declared here rather than beside `CalendarEvent` in `../api` only
+ * because this change was scoped to this file; the field belongs on
+ * `CalendarBookingT` and `CalendarEvent` there. Optional either way — a daemon
+ * older than the field answers without it, and then every booking reads as
+ * booked, which is exactly the look this component had before.
+ */
+type CalEvent = CalendarEvent & { projected?: boolean };
+
+/** The bound the daemon applied to the forward projection, when it reports one. */
+interface ProjectionLimitT {
+  perSchedule: number;
+  truncated: boolean;
+  refused: number;
+}
+type LimitsWithProjection = CalendarLimitsT & { projection?: ProjectionLimitT };
+
+/**
+ * A materialized booking: solid, because `.cal-event.booking` is dashed and the
+ * dash is what now means "projected". One declaration, so a booked chip and a
+ * ghost can never drift into looking alike.
+ */
+const BOOKED_CHIP: CSSProperties = { borderStyle: 'solid' };
+/** A ghost: the stylesheet's dash, dimmed so it reads as lighter than a commitment. */
+const PROJECTED_CHIP: CSSProperties = { opacity: 0.6 };
+
+/** The outline style for a non-run chip, or nothing for a run. */
+function chipStyle(ev: CalEvent): CSSProperties | undefined {
+  if (ev.kind !== 'booking') return undefined;
+  return ev.projected ? PROJECTED_CHIP : BOOKED_CHIP;
+}
+
+/**
+ * What a non-run event is, in one word. The tooltip, the day-list chip, the
+ * side panel and the a11y name all read from here, so a reader who cannot see
+ * the dash is told the same thing a reader who can see it is shown.
+ */
+function kindLabel(ev: CalEvent): string {
+  if (ev.kind === 'human') return 'Personal';
+  return ev.projected ? 'Projected' : 'Booked';
+}
+
 function stateClass(state?: string): string {
   if (!state) return 'booking';
   if (state === 'completed') return 'st-completed';
@@ -75,8 +134,8 @@ function stateClass(state?: string): string {
  * draws. Shared by the month/week window fetch and by the year view's
  * single-day fetch, so a run reads the same however it was asked for.
  */
-function toEvents(data: CalendarDetailT | null): CalendarEvent[] {
-  const out: CalendarEvent[] = [];
+function toEvents(data: CalendarDetailT | null): CalEvent[] {
+  const out: CalEvent[] = [];
   for (const r of data?.runs ?? []) {
     const at = r.scheduled_for ?? r.started_at ?? r.ended_at;
     if (at == null) continue;
@@ -91,8 +150,17 @@ function toEvents(data: CalendarDetailT | null): CalendarEvent[] {
       outcomeReason: r.outcome_reason ?? null,
     });
   }
-  for (const b of data?.bookings ?? []) {
-    out.push({ kind: 'booking', id: `b-${b.taskId}-${b.at}`, taskId: b.taskId, name: b.name, at: b.at });
+  for (const b of (data?.bookings ?? []) as Array<CalendarDetailT['bookings'][number] & { projected?: boolean }>) {
+    out.push({
+      kind: 'booking',
+      id: `b-${b.taskId}-${b.at}`,
+      taskId: b.taskId,
+      name: b.name,
+      at: b.at,
+      // Absent means booked: an older daemon sends no flag, and treating that
+      // as "projected" would ghost every chip on the calendar.
+      projected: b.projected === true,
+    });
   }
   // human events from subscribed ICS calendars (read-only overlay)
   for (const h of data?.humans ?? []) {
@@ -132,7 +200,7 @@ export default function CalendarView({
   const [selectedTs, setSelectedTs] = useState<number | null>(() =>
     localStorage.getItem('clockwork.calview') === 'year' ? null : todayMidnight(),
   );
-  const [detailEvent, setDetailEvent] = useState<CalendarEvent | null>(null);
+  const [detailEvent, setDetailEvent] = useState<CalEvent | null>(null);
   /**
    * Whether the selected day's full list is open. A boolean rather than a
    * second timestamp on purpose: the list always describes `selectedTs`, and
@@ -199,11 +267,11 @@ export default function CalendarView({
 
   /** Whichever request draws the grid in the current mode. */
   const source = mode === 'year' ? yearDays : cal;
-  const limits: CalendarLimitsT | undefined =
+  const limits: LimitsWithProjection | undefined =
     (mode === 'year' ? yearDays.data?.limits : cal.data?.limits) ?? undefined;
 
   const eventsByDay = useMemo(() => {
-    const map = new Map<number, CalendarEvent[]>();
+    const map = new Map<number, CalEvent[]>();
     for (const e of toEvents(cal.data)) {
       const dayTs = todayMidnight(new Date(e.at));
       const arr = map.get(dayTs) ?? [];
@@ -378,7 +446,10 @@ export default function CalendarView({
                           <button
                             key={ev.id}
                             className={`cal-event ${ev.kind === 'run' ? stateClass(ev.state) : ev.kind === 'human' ? 'human' : 'booking'}`}
-                            title={`${timeLabel(ev.at)} · ${ev.name}`}
+                            style={chipStyle(ev)}
+                            data-projected={ev.kind === 'booking' ? String(ev.projected === true) : undefined}
+                            title={`${timeLabel(ev.at)} · ${ev.name}${ev.kind === 'run' ? '' : ` — ${kindLabel(ev)}`}`}
+                            aria-label={`${timeLabel(ev.at)} ${ev.name}${ev.kind === 'run' ? '' : `, ${kindLabel(ev)}`}`}
                             onClick={(e) => { e.stopPropagation(); setDetailEvent(ev); }}
                           >
                             {timeLabel(ev.at)} {ev.name}
@@ -427,7 +498,7 @@ export default function CalendarView({
                   onKeyDown={(e) => e.key === 'Enter' && setDetailEvent(ev)}>
                   <span className={`chip ${ev.kind === 'run' ? chipFor(ev.state!) : ''}`}>{ev.name}</span>
                   <span className="mono" style={{ color: 'var(--dim)' }}>
-                    {ev.kind === 'run' ? stateLabel(ev.state) : 'Booked'}
+                    {ev.kind === 'run' ? stateLabel(ev.state) : kindLabel(ev)}
                   </span>
                 </div>
               ))}
@@ -490,21 +561,44 @@ export default function CalendarView({
  * `limits` and each of its members are optional: a daemon older than the field
  * answers without it, and then there is nothing honest to say.
  */
-function TruncationNotice({ limits }: { limits?: CalendarLimitsT }): JSX.Element | null {
-  if (!limits?.truncated) return null;
+function TruncationNotice({ limits }: { limits?: LimitsWithProjection }): JSX.Element | null {
+  const projection = limits?.projection;
+  const refused = projection?.refused ?? 0;
+  if (!limits?.truncated && refused === 0) return null;
   const parts: string[] = [];
   const say = (c: { returned: number; total: number; truncated: boolean } | undefined, noun: string): void => {
     if (c?.truncated) parts.push(`${c.returned} of ${c.total} ${noun}`);
   };
-  say(limits.days, 'days');
-  say(limits.runs, 'runs');
-  say(limits.bookings, 'booked occurrences');
-  say(limits.humans, 'calendar events');
+  say(limits?.days, 'days');
+  say(limits?.runs, 'runs');
+  // BOOKINGS ARE NOT "X OF Y" WHEN THE PROJECTION STOPPED. The daemon bounds
+  // the expansion itself rather than expanding everything and trimming, so once
+  // it stops early it does not know the true total either — the count it
+  // reports is a FLOOR. Printing "1,008 of 1,008" would be the same silent lie
+  // the bound exists to prevent, one word further on.
+  if (projection?.truncated) {
+    parts.push(`at least ${limits?.bookings?.returned ?? 0} upcoming occurrences`);
+  } else {
+    say(limits?.bookings, 'booked occurrences');
+  }
+  say(limits?.humans, 'calendar events');
   return (
-    <p className="hint" role="status" data-testid="calendar-truncated">
-      This window is capped at {limits.rowLimit} rows, so you are seeing {parts.join(', ')}. Narrow
-      the range to see the rest.
-    </p>
+    <>
+      {limits?.truncated && (
+        <p className="hint" role="status" data-testid="calendar-truncated">
+          This window is capped at {limits.rowLimit} rows
+          {projection?.truncated ? `, and each job to ${projection.perSchedule} upcoming occurrences` : ''}, so
+          you are seeing {parts.join(', ')}. Narrow the range to see the rest.
+        </p>
+      )}
+      {refused > 0 && (
+        <p className="hint" role="status" data-testid="calendar-refused">
+          {refused} schedule{refused === 1 ? '' : 's'} could not be projected: the daemon refuses to expand
+          the recurrence rule, because it would either never finish or block the request for seconds. Edit
+          the task’s schedule to fix it.
+        </p>
+      )}
+    </>
   );
 }
 
@@ -638,11 +732,11 @@ function MonthCell({
   onEvent,
 }: {
   cell: GridCell;
-  events: CalendarEvent[];
+  events: CalEvent[];
   selected: boolean;
   onSelect: () => void;
   onMore: () => void;
-  onEvent: (e: CalendarEvent) => void;
+  onEvent: (e: CalEvent) => void;
 }): JSX.Element {
   const shown = events.slice(0, MAX_PER_CELL);
   const hidden = events.length - shown.length;
@@ -667,7 +761,10 @@ function MonthCell({
           <button
             key={ev.id}
             className={`cal-event ${ev.kind === 'run' ? stateClass(ev.state) : ev.kind === 'human' ? 'human' : 'booking'}`}
-            title={`${timeLabel(ev.at)} · ${ev.name}${ev.state ? ` — ${ev.state}` : ''}`}
+            style={chipStyle(ev)}
+            data-projected={ev.kind === 'booking' ? String(ev.projected === true) : undefined}
+            title={`${timeLabel(ev.at)} · ${ev.name}${ev.state ? ` — ${ev.state}` : ` — ${kindLabel(ev)}`}`}
+            aria-label={`${timeLabel(ev.at)} ${ev.name}${ev.state ? `, ${ev.state}` : `, ${kindLabel(ev)}`}`}
             onClick={(e) => {
               e.stopPropagation();
               onEvent(ev);
@@ -705,9 +802,9 @@ function DayDialog({
   onBook,
 }: {
   ts: number;
-  events: CalendarEvent[];
+  events: CalEvent[];
   onClose: () => void;
-  onEvent: (e: CalendarEvent) => void;
+  onEvent: (e: CalEvent) => void;
   onBook: () => void;
 }): JSX.Element {
   useEffect(() => {
@@ -728,7 +825,8 @@ function DayDialog({
   // arrived in: the point of this view is reading the day in sequence.
   const ordered = [...events].sort((a, b) => a.at - b.at);
   const runs = ordered.filter((e) => e.kind === 'run').length;
-  const booked = ordered.filter((e) => e.kind === 'booking').length;
+  const booked = ordered.filter((e) => e.kind === 'booking' && e.projected !== true).length;
+  const projected = ordered.filter((e) => e.kind === 'booking' && e.projected === true).length;
   const humans = ordered.filter((e) => e.kind === 'human').length;
   const spend = ordered.reduce((sum, e) => sum + (e.costUsd ?? 0), 0);
 
@@ -749,6 +847,7 @@ function DayDialog({
           </span>
           {runs > 0 && <span>{runs} run{runs === 1 ? '' : 's'}</span>}
           {booked > 0 && <span>{booked} booked</span>}
+          {projected > 0 && <span>{projected} projected</span>}
           {humans > 0 && <span>{humans} from your calendar</span>}
           {spend > 0 && <span>${spend.toFixed(4)}</span>}
         </div>
@@ -767,7 +866,13 @@ function DayDialog({
                   {ev.kind === 'run' ? (
                     <span className={`chip ${chipFor(ev.state!)}`}>{stateLabel(ev.state)}</span>
                   ) : (
-                    <span className="chip">{ev.kind === 'human' ? 'Personal' : 'Booked'}</span>
+                    <span
+                      className="chip"
+                      style={chipStyle(ev)}
+                      data-projected={ev.kind === 'booking' ? String(ev.projected === true) : undefined}
+                    >
+                      {kindLabel(ev)}
+                    </span>
                   )}
                   <span className="mono day-list-cost">
                     {ev.kind === 'run' ? `$${(ev.costUsd ?? 0).toFixed(4)}` : ''}
@@ -797,7 +902,7 @@ function EventDialog({
   onClose,
   onOpenTask,
 }: {
-  event: CalendarEvent;
+  event: CalEvent;
   onClose: () => void;
   onOpenTask: () => void;
 }): JSX.Element {
@@ -833,7 +938,16 @@ function EventDialog({
               <span>${(event.costUsd ?? 0).toFixed(4)}</span>
             </>
           ) : (
-            <span className="chip">Booked — future occurrence</span>
+            <span
+              className="chip"
+              data-projected={event.kind === 'booking' ? String(event.projected === true) : undefined}
+            >
+              {event.kind === 'human'
+                ? 'From your calendar'
+                : event.projected === true
+                  ? 'Projected — not booked yet'
+                  : 'Booked — future occurrence'}
+            </span>
           )}
         </div>
 
@@ -850,7 +964,13 @@ function EventDialog({
 
         {event.kind === 'booking' && (
           <>
-            <p className="hint">This is a scheduled future occurrence of a task. Nothing has run yet.</p>
+            <p className="hint">
+              {event.projected === true
+                ? 'This is where the task’s recurrence rule lands, not a commitment: only the next '
+                  + 'occurrence is materialized, and editing the schedule moves everything after it. '
+                  + 'Nothing has run yet.'
+                : 'This is the next occurrence the scheduler has materialized for this task. Nothing has run yet.'}
+            </p>
             <div className="actions">
               <button className="btn" onClick={onOpenTask}>
                 Manage in Tasks →

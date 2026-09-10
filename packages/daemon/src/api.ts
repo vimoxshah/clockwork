@@ -268,6 +268,86 @@ export interface CalendarCollectionLimit {
 }
 
 /**
+ * T4-4 — the FORWARD PROJECTION's own bound, which is a different bound from
+ * `CALENDAR_ROW_LIMIT` and has to be, because the two are bounding different
+ * things.
+ *
+ * `CALENDAR_ROW_LIMIT` bounds ROWS ALREADY IN THE DATABASE. There are only so
+ * many runs, so the worst case is knowable. A projection has no such backstop:
+ * it is generated on demand from a rule, and `FREQ=MINUTELY` over a year view
+ * is 525,600 occurrences per schedule. Capping the ARRAY would not help —
+ * measured on an Apple M4, that expansion cost 820-1,024ms whether the caller
+ * asked for 62 rows or 5,000, because the cost is in the walk, not the answer.
+ * So the bound has to be handed DOWN to `occurrencesBetweenBounded`, where it
+ * stops the walk.
+ *
+ * WHY PER DAY OF WINDOW. A calendar cell is one day wide. A month cell draws
+ * `MAX_PER_CELL` names and then "+N more"; a year cell draws a count. Twenty-
+ * four per day is one an hour — the densest schedule that still reads as a
+ * schedule rather than as a number — so the bound is stated in the unit the
+ * view is built from and widens with the view instead of being one constant
+ * that is wrong for two of the three:
+ *
+ *   week  (7 days)   ->   168 per schedule
+ *   month (42-day grid) -> 1,008 per schedule
+ *   year  (365 days) -> 8,760, clamped to the 5,000 row ceiling
+ *
+ * WHY A FAIR SHARE ON TOP. Per-schedule alone is unbounded in the NUMBER of
+ * schedules: 500 enabled hourly tasks over a month view is 504,000
+ * occurrences. Dividing the row ceiling by the number of recurring schedules
+ * bounds the total, and — this is the half that serves the feature rather than
+ * the budget — it stops one dense job from spending the whole budget and
+ * leaving the weekly one with no ghosts at all. Every schedule keeps at least
+ * one, so no enabled job disappears from the calendar entirely.
+ *
+ * WHAT IT COSTS, SAID OUT LOUD: a schedule denser than the bound fills the
+ * FRONT of the window and then stops, so its ghosts thin out at the far end
+ * rather than spreading evenly. That is the honest price of bounding the walk,
+ * and it is why `limits.projection.truncated` exists.
+ */
+export const CALENDAR_PROJECTION_PER_DAY = 24;
+
+/** The projection bound a response applied, and whether it bit. */
+export interface CalendarProjectionLimit {
+  /** The most occurrences ONE schedule could contribute to this window. */
+  perSchedule: number;
+  /** True when at least one schedule's expansion stopped at `perSchedule`. */
+  truncated: boolean;
+  /**
+   * Schedules `guardSchedule` refused to expand. Not a cap — a refusal, and
+   * not all for the same reason: `unreachable` shapes never terminate inside
+   * rrule 2.8.1, while `count_too_large` and `slow_anchor` do terminate but
+   * block the request for seconds first (a stated COUNT of 40,000,000 costs 79
+   * of them). Either way the answer is missing that job, so it is counted here
+   * rather than left to look like a schedule with nothing coming up.
+   */
+  refused: number;
+}
+
+/**
+ * How many occurrences one schedule may contribute to a calendar window.
+ *
+ * @param spanMs width of the window actually being PROJECTED (from "now", or
+ *   from the window start when the whole window is in the future) to its end.
+ * @param recurringSchedules how many rrule/cron schedules share the budget.
+ *   `once` schedules are excluded: they yield at most one occurrence each, so
+ *   counting them would shrink everybody else's share for nothing.
+ * @param rowLimit the response's row ceiling; `?limit=` may only lower it, and
+ *   it lowers this with it.
+ * @returns the per-schedule occurrence cap, never below 1.
+ */
+export function calendarProjectionLimit(
+  spanMs: number,
+  recurringSchedules: number,
+  rowLimit: number = CALENDAR_ROW_LIMIT,
+): number {
+  const days = Math.max(1, Math.ceil(spanMs / 86_400_000));
+  const perView = Math.min(rowLimit, days * CALENDAR_PROJECTION_PER_DAY);
+  const fairShare = Math.floor(rowLimit / Math.max(1, recurringSchedules));
+  return Math.max(1, Math.min(perView, fairShare));
+}
+
+/**
  * The local calendar day of an instant as `YYYY-MM-DD`.
  *
  * LOCAL, not UTC, and that is the whole point: the grid snaps every event to
@@ -1743,7 +1823,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       rowLimit = Math.min(asked, CALENDAR_ROW_LIMIT);
     }
 
-    const { occurrencesBetween } = await import('./recurrence.js');
+    const { occurrencesBetweenBounded } = await import('./recurrence.js');
 
     // A run belongs to the window if ANY of its three timestamps lands inside
     // it; it is FILED under the first one it has. Both modes use the same
@@ -1877,8 +1957,28 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
         : runsReturned;
     }
 
-    // Bookings: expand every enabled schedule into the visible window.
-    const bookings: Array<{ taskId: string; name: string; at: number; kind: 'booking' }> = [];
+    // Bookings: project every enabled schedule across the visible window (T4-4).
+    //
+    // WHAT CHANGED, AND WHY IT WAS WRONG. This loop already walked forward from
+    // "now" to `to`, so the rhythm was half there — but it asked for a flat 62
+    // occurrences per schedule and then reported nothing about that number. Two
+    // consequences, and the second is the worse one. An hourly job over a
+    // 42-day month grid has 1,008 occurrences and got 62: it appeared for two
+    // and a half days and then vanished for the rest of the month, which is a
+    // couple of ghosts where the task's whole point is a rhythm. And
+    // `bookingsTotal` only ever counted what came back, so `bookings.truncated`
+    // was computed as `total > returned` — false — and the response said the
+    // answer was complete. A bound that does not report itself is the one thing
+    // the S-64 note above says is worse than no bound.
+    //
+    // FORWARD ONLY, still. The projection starts at `now`, never at `from`, and
+    // that is deliberate rather than a leftover: a ghost on a past date is a
+    // claim that something was scheduled then, and for any date before the task
+    // existed that claim is false. A past occurrence that WAS real already has a
+    // row in `runs`.
+    const bookings: Array<{
+      taskId: string; name: string; at: number; kind: 'booking'; projected: boolean;
+    }> = [];
     let bookingsTotal = 0;
     const scheds = deps.db
       .prepare(
@@ -1891,6 +1991,11 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       id: string; task_id: string; kind: string; rrule: string | null; cron: string | null;
       run_at: number | null; tz: string; next_fire: number | null; task_name: string;
     }>;
+    const projectFrom = Math.max(from, Date.now() - 1000);
+    const recurring = scheds.filter((s) => s.kind === 'rrule' || s.kind === 'cron').length;
+    const projectionLimit = calendarProjectionLimit(Math.max(0, to - projectFrom), recurring, rowLimit);
+    let projectionTruncated = false;
+    let projectionRefused = 0;
     for (const s of scheds) {
       try {
         if (s.kind === 'queue') continue;
@@ -1898,12 +2003,27 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
         if (s.kind === 'once') {
           ats = s.run_at != null && s.run_at >= from && s.run_at <= to && s.next_fire != null ? [s.run_at] : [];
         } else {
-          ats = occurrencesBetween(
+          // The projection must not be the path that hangs the daemon. A rule
+          // whose BY parts are unreachable from its own INTERVAL grid spins
+          // forever inside rrule 2.8.1, and the save-time guard (see the
+          // `/tasks` handler) only stops NEW ones — a row written before that
+          // check existed, or by an import, is still in the table. Refusing it
+          // here is the read path's version of the same decision: a read skips
+          // what it cannot safely compute and says how many it skipped, where a
+          // write refuses the request outright.
+          const hazard = guardSchedule(s.kind as 'rrule' | 'cron', s.rrule, MAX_RRULE_COUNT);
+          if (!hazard.safe) {
+            projectionRefused++;
+            continue;
+          }
+          const expanded = occurrencesBetweenBounded(
             { kind: s.kind as 'rrule' | 'cron', rrule: s.rrule, cron: s.cron, runAt: s.run_at, tz: s.tz },
-            Math.max(from, Date.now() - 1000),
+            projectFrom,
             to,
-            62,
+            projectionLimit,
           );
+          ats = expanded.occurrences;
+          if (expanded.truncated) projectionTruncated = true;
         }
         for (const at of ats) {
           bookingsTotal++;
@@ -1912,7 +2032,16 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
           // the count, the detail view needs the rows, and neither may grow
           // without limit.
           if (group === null && bookings.length < rowLimit) {
-            bookings.push({ taskId: s.task_id, name: s.task_name, at, kind: 'booking' });
+            // BOOKED vs PROJECTED. `next_fire` is the one occurrence the
+            // scheduler has materialized and will actually claim; everything
+            // after it is this route's arithmetic on the rule, and editing the
+            // task moves it. A one-shot is always booked — the row IS the
+            // commitment. Drawing the two the same way would let a prediction
+            // borrow the authority of a commitment.
+            const booked = s.kind === 'once' || (s.next_fire != null && at === s.next_fire);
+            bookings.push({
+              taskId: s.task_id, name: s.task_name, at, kind: 'booking', projected: !booked,
+            });
           }
         }
       } catch {
@@ -1968,20 +2097,37 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       truncated: total > returned,
     });
 
+    // The projection's bound, reported the way `rowLimit` is: the number that
+    // was applied, and whether it bit. `bookings.total` is what the expansion
+    // actually counted, so when `projection.truncated` is true that total is a
+    // FLOOR — the window holds more occurrences than anything here could know
+    // without doing the work the bound exists to avoid. That is why the flag is
+    // separate from the count instead of folded into it.
+    const projection: CalendarProjectionLimit = {
+      perSchedule: projectionLimit,
+      truncated: projectionTruncated,
+      refused: projectionRefused,
+    };
+
     if (group === 'day') {
       const all = [...dayRows.values()].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
       const days = all.length > rowLimit ? all.slice(0, rowLimit) : all;
       const sum = (rows: DayRow[], pick: (r: DayRow) => number): number =>
         rows.reduce((acc, r) => acc + pick(r), 0);
+      const shippedBookings = sum(days, (r) => r.bookings);
       const limits = {
         rowLimit,
-        truncated: all.length > rowLimit,
+        truncated: all.length > rowLimit || projectionTruncated,
+        projection,
         days: collection(days.length, all.length),
         // Shipped-vs-existing per collection: when the day rows are capped,
         // the runs on the days that were cut are counted here and NOT in the
         // response body, which is exactly what a caller needs to know.
         runs: collection(sum(days, (r) => r.runs), sum(all, (r) => r.runs)),
-        bookings: collection(sum(days, (r) => r.bookings), bookingsTotal),
+        bookings: {
+          ...collection(shippedBookings, bookingsTotal),
+          truncated: bookingsTotal > shippedBookings || projectionTruncated,
+        },
         humans: collection(sum(days, (r) => r.humans), humansTotal),
       };
       return { from, to, group: 'day' as const, days, limits };
@@ -1996,9 +2142,16 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       limits: {
         rowLimit,
         truncated:
-          runsTruncated || bookings.length < bookingsTotal || humans.length < humansTotal,
+          runsTruncated
+          || bookings.length < bookingsTotal
+          || humans.length < humansTotal
+          || projectionTruncated,
+        projection,
         runs: { returned: runsReturned, total: runsTotal, truncated: runsTruncated },
-        bookings: collection(bookings.length, bookingsTotal),
+        bookings: {
+          ...collection(bookings.length, bookingsTotal),
+          truncated: bookingsTotal > bookings.length || projectionTruncated,
+        },
         humans: collection(humans.length, humansTotal),
       },
     };

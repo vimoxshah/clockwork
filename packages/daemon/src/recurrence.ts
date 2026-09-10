@@ -280,6 +280,27 @@ function advancedAnchorMs(rule: ParsedRule, notAfterWallMs: number): number {
 }
 
 /**
+ * How many occurrences the cron branch walks before it stops, whatever `limit`
+ * says. Pre-existing (it was written inline as `Math.min(limit, 200)`); it is
+ * named and REPORTED now rather than applied silently, because a caller that
+ * asks a year-wide window for 5,000 rows and gets 200 has been cut.
+ */
+const CRON_EXPANSION_CEILING = 200;
+
+/** An expansion, plus whether it stopped at its own bound instead of the window's. */
+export interface BoundedOccurrences {
+  /** The EARLIEST occurrences in the window, at most `limit` of them. */
+  occurrences: number[];
+  /**
+   * True when the walk stopped because it reached `limit` (or, for cron,
+   * `CRON_EXPANSION_CEILING`), so the window holds MORE than came back. False
+   * means what came back is the whole window, and only then is the answer
+   * complete.
+   */
+  truncated: boolean;
+}
+
+/**
  * Enumerate occurrences in (fromMsExclusive, toMsInclusive] in UTC epoch ms.
  * Bounded work per call — the tick loop must stay O(due), never O(history).
  *
@@ -288,10 +309,52 @@ function advancedAnchorMs(rule: ParsedRule, notAfterWallMs: number): number {
  * forward from `fromMsExcl`, and the rrule branch stops as soon as it has
  * `limit` of them. `nextOccurrenceAfter` depends on it — it asks for one
  * occurrence and reads `found[0]`.
+ *
+ * Use `occurrencesBetweenBounded` where the caller has to be able to tell a
+ * complete answer from a capped one; this wrapper drops that flag.
  */
 export function occurrencesBetween(s: ScheduleLike, fromMsExcl: number, toMsIncl: number, limit = 500): number[] {
+  return occurrencesBetweenBounded(s, fromMsExcl, toMsIncl, limit).occurrences;
+}
+
+/**
+ * `occurrencesBetween`, with the bound it applied made visible.
+ *
+ * WHY THE STOP MOVED INSIDE `between()`. The contract above always SAID the
+ * rrule branch stops as soon as it has `limit` occurrences, and until now only
+ * the mapping loop did: `rule.between()` was called bare, so rrule materialized
+ * every Date in the padded window first and the cap only trimmed the result.
+ * `between()` is a replay (see `advancedAnchorMs`), so the cost was the
+ * window's density, never the caller's `limit` — measured on an Apple M4,
+ * `FREQ=MINUTELY` over a 365-day window: 525,601 Dates and 820-1,024ms, the
+ * SAME at `limit=62` as at `limit=5000`. Passing rrule its `iterator` argument
+ * (`between(after, before, inc, iterator)`; returning false stops the walk)
+ * makes the cap bound the WORK: the same expansion at `limit=1000` costs 10.9ms.
+ *
+ * The occurrence list is unchanged by that move, deliberately. The kept
+ * occurrences are collected in exactly the old order, sliced at exactly the old
+ * point, then deduped and sorted exactly as before — so `nextOccurrenceAfter`,
+ * the tick loop's catch-up sweep and the save-time ladder all see what they saw.
+ * One extra occurrence past `limit` is collected and dropped, which is what
+ * lets `truncated` distinguish "the window holds exactly `limit`" from "the
+ * window holds more"; the same `LIMIT n + 1` trick the calendar's runs query
+ * uses.
+ *
+ * @param s the schedule to expand
+ * @param fromMsExcl lower bound, EXCLUSIVE (an occurrence exactly here is skipped)
+ * @param toMsIncl upper bound, inclusive
+ * @param limit the most occurrences to return; the walk stops there
+ * @returns the earliest occurrences in the window and whether the bound bit
+ */
+export function occurrencesBetweenBounded(
+  s: ScheduleLike,
+  fromMsExcl: number,
+  toMsIncl: number,
+  limit = 500,
+): BoundedOccurrences {
   if (s.kind === 'once') {
-    return s.runAt != null && s.runAt > fromMsExcl && s.runAt <= toMsIncl ? [s.runAt] : [];
+    const at = s.runAt != null && s.runAt > fromMsExcl && s.runAt <= toMsIncl ? [s.runAt] : [];
+    return { occurrences: at, truncated: false };
   }
 
   if (s.kind === 'rrule') {
@@ -328,13 +391,14 @@ export function occurrencesBetween(s: ScheduleLike, fromMsExcl: number, toMsIncl
         rule = RRule.fromString(ruleText.replace(EPOCH_DTSTART_LINE, dtstartLineFor(anchorMs)));
       }
     }
-    const between = rule.between(lowerBound, upperBound, true);
-    // Map lazily and stop at `limit` KEPT occurrences. Mapping the whole array
-    // first would be ~1M luxon conversions for a MINUTELY rule over the 732-day
-    // horizon, and taking a suffix of it would answer the far end of the
-    // horizon instead of the next fire.
+    // Map and filter INSIDE rrule's own walk, and stop it at `limit` kept
+    // occurrences (plus the one that proves there are more). Doing it after the
+    // fact would be ~525k luxon conversions for a MINUTELY rule over a year and
+    // ~1M over the 732-day horizon — and rrule would have built every one of
+    // those Dates before the first conversion. Taking a suffix instead would
+    // answer the far end of the horizon rather than the next fire.
     const out: number[] = [];
-    for (const d of between) {
+    rule.between(lowerBound, upperBound, true, (d) => {
       const wall = DateTime.fromJSDate(d, { zone: 'utc' });
       const at = wallTimeToUtcMs(wall, s.tz);
       // The wall window is deliberately loose — truncated to the minute, taken
@@ -344,19 +408,29 @@ export function occurrencesBetween(s: ScheduleLike, fromMsExcl: number, toMsIncl
       // scheduler asks for the next fire after the occurrence it just claimed,
       // and answering with that same instant would freeze next_fire forever
       // behind its own ledger row.
-      if (at <= fromMsExcl || at > toMsIncl) continue;
-      out.push(at);
-      if (out.length >= limit) break;
-    }
-    return [...new Set(out)].sort((a, b) => a - b);
+      //
+      // A rejected date does NOT stop the walk: the pad is up to 25 hours of
+      // occurrences at the near end, and every one of them has to be stepped
+      // over before the window proper begins.
+      if (at > fromMsExcl && at <= toMsIncl) out.push(at);
+      return out.length <= limit;
+    });
+    const truncated = out.length > limit;
+    // `out.slice(0, limit)` is exactly the array the old loop broke out of,
+    // element for element, so the dedupe and the sort see what they always saw.
+    const kept = truncated ? out.slice(0, limit) : out;
+    return { occurrences: [...new Set(kept)].sort((a, b) => a - b), truncated };
   }
 
   // cron — croner supports IANA tz natively
   const job = new Cron(s.cron ?? '', { name: 'cw-expand', timezone: s.tz, paused: true });
   try {
     const out: number[] = [];
+    const cap = Math.min(limit, CRON_EXPANSION_CEILING);
     let cur = new Date(fromMsExcl);
-    for (let i = 0; i < Math.min(limit, 200); i++) {
+    // `cap + 1` for the same reason as the rrule branch: the extra step is what
+    // tells "the window holds exactly `cap`" from "the window holds more".
+    for (let i = 0; i < cap + 1; i++) {
       const nextAny = (job as any).nextRun(cur) ?? (job as any)._nextRun?.(cur);
       if (!nextAny) break;
       const next = nextAny as Date;
@@ -364,7 +438,9 @@ export function occurrencesBetween(s: ScheduleLike, fromMsExcl: number, toMsIncl
       out.push(next.getTime());
       cur = next;
     }
-    return out.sort((a, b) => a - b);
+    const truncated = out.length > cap;
+    const kept = truncated ? out.slice(0, cap) : out;
+    return { occurrences: kept.sort((a, b) => a - b), truncated };
   } finally {
     job.stop();
   }
