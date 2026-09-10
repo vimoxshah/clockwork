@@ -466,7 +466,10 @@ Open, reproducible, and written down here rather than discovered by you:
   `FREQ=HOURLY;INTERVAL=2;BYHOUR=3`, whose hours stay even — never terminates
   inside rrule 2.8.1's skip loop. It behaved that way before the anchor work and
   it behaves that way after, because the reachable residues depend only on
-  `gcd(INTERVAL, 24)`. Nothing in Clockwork refuses such a rule yet.
+  `gcd(INTERVAL, 24)`. `guardSchedule` now refuses exactly this shape when a
+  task is saved, with an `unreachable` verdict — but the tick path that fires
+  scheduled runs is deliberately left unguarded, so a hazardous row saved
+  before the guard existed can still hang.
 - **Four older capabilities have no screen, and two of them have no setter
   either.** Retention is API-only (`PUT /retention`), and an outbound webhook's
   URL is API-only (a task's or profile's delivery config). **Quiet hours has no

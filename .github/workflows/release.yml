@@ -171,7 +171,7 @@ jobs:
              pnpm, no Node to install, no token to paste.
 
           ### Requirements
-          - macOS 14+ · Apple Silicon
+          - macOS 13+ · Apple Silicon
           - git, and one provider CLI you are already logged in to
             (claude/codex/opencode/hermes). These are yours and cannot be bundled;
             \`clockworkd doctor\` names either one when it is missing.
