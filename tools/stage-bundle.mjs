@@ -107,9 +107,18 @@ function main() {
   if (!existsSync(uiDist)) throw new Error(`packages/ui/dist is missing — run \`pnpm build\` first`);
   cpSync(uiDist, path.join(STAGE, 'packages', 'ui', 'dist'), { recursive: true });
 
-  cpSync(path.join(ROOT, 'resources', 'skill-pack'), path.join(STAGE, 'resources', 'skill-pack'), {
-    recursive: true,
-  });
+  // Both bundled resource trees. `resources/templates` was missing until
+  // 2026-09-10 and the omission was invisible from inside the repo: the daemon
+  // resolves it relative to its own compiled location, so it works in a source
+  // checkout and returns nothing in the shipped app. GET /templates/bundled
+  // answered `{"templates":[]}` on a real install of v0.12.0 while the
+  // CHANGELOG claimed the five were reachable. Found by installing the DMG,
+  // which is the only place it could be found.
+  for (const tree of ['skill-pack', 'templates']) {
+    const src = path.join(ROOT, 'resources', tree);
+    if (!existsSync(src)) throw new Error(`resources/${tree} is missing — the app would ship without it`);
+    cpSync(src, path.join(STAGE, 'resources', tree), { recursive: true });
+  }
 
   // Tauri finds an external binary by the target triple appended to the name,
   // so the file has to be spelled for the machine this build targets.
