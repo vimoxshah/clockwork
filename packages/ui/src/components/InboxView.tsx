@@ -61,6 +61,20 @@ export function matchesFilter(r: Pick<RunRowT, 'id' | 'state'>, f: OutcomeFilter
 }
 
 /**
+ * Is this run still going, as far as the REPORT VIEW is concerned — i.e. can
+ * it still produce output a live tail should show?
+ *
+ * Deliberately NOT the same set as the "Active" filter chip above, which also
+ * counts `queued` (a booking with no child yet, so nothing to tail) and drops
+ * the two waiting states (a run paused on a human is very much still running,
+ * and its tail is exactly where the human should answer). Two questions, two
+ * sets; merging them would break one of them.
+ */
+export function isRunActive(state: string): boolean {
+  return ['running', 'preparing', 'finalizing', 'waiting_approval', 'awaiting_user'].includes(state);
+}
+
+/**
  * Honest empty state: "No runs yet" is only true when there truly are no
  * runs. A filter or search that simply matched nothing gets its own message
  * instead of implying the user has never booked a run.
@@ -315,7 +329,20 @@ export default function InboxView({ version }: { version: number }): JSX.Element
 
       <div className="report">
         {!selected && <div className="empty">Select a run to read its report.</div>}
-        {selected && <ReportDetail runId={selected} version={version} />}
+        {/* `key` is load-bearing, not a lint appeasement. ReportDetail keeps
+            the previous run's data on screen while a refetch is in flight (so
+            an SSE frame cannot blank the live tail — see the guards inside
+            it), and the ONLY thing that then stops the old run's report being
+            shown under a new run's id is remounting on the id. */}
+        {selected && (
+          <ReportDetail
+            key={selected}
+            runId={selected}
+            version={version}
+            approvals={(approvals.data ?? []).filter((a) => String(a.run_id) === selected)}
+            onApprovalChanged={approvals.reload}
+          />
+        )}
       </div>
     </div>
   );
@@ -329,7 +356,18 @@ export function setPendingRunId(runId: string): void {
   window.dispatchEvent(new CustomEvent('clockwork:open-run', { detail: runId }));
 }
 
-function ReportDetail({ runId, version }: { runId: string; version: number }): JSX.Element {
+function ReportDetail({
+  runId,
+  version,
+  approvals = [],
+  onApprovalChanged,
+}: {
+  runId: string;
+  version: number;
+  /** unresolved approvals belonging to THIS run, so a decision can be made here */
+  approvals?: any[];
+  onApprovalChanged?: () => void;
+}): JSX.Element {
   const detail = useAsync(() => api.report(runId), [runId, version]);
   const tr = useAsync(
     () => (detail.data ? api.transcript(runId) : Promise.resolve({ available: false, lines: [] })),
@@ -337,10 +375,18 @@ function ReportDetail({ runId, version }: { runId: string; version: number }): J
   );
   const [showTr, setShowTr] = useState(false);
 
-  if (detail.loading) {
+  // `&& !detail.data` on both guards, and that is the whole reason the live
+  // tail can accumulate. App.tsx bumps `version` on EVERY SSE frame, so a
+  // chatty run re-runs this fetch constantly; on a bare `detail.loading` the
+  // component returned the spinner each time, unmounting LiveTail and
+  // throwing away every line it had collected. Keeping the previous report on
+  // screen during a refetch is also what a person expects — the report did
+  // not stop existing because a newer one is being fetched. Same for a
+  // transient error: a failed refresh must not erase a good report.
+  if (detail.loading && !detail.data) {
     return <div className="state-line"><span className="spinner" /> Loading report…</div>;
   }
-  if (detail.error) {
+  if (detail.error && !detail.data) {
     return (
       <div className="error-banner" role="alert">
         Couldn’t load report: {detail.error}
@@ -352,7 +398,7 @@ function ReportDetail({ runId, version }: { runId: string; version: number }): J
 
   const { run, report } = detail.data;
   const spec = safeJson(run.jobspec_json);
-  const active = ['running', 'preparing', 'finalizing', 'waiting_approval', 'awaiting_user'].includes(run.state);
+  const active = isRunActive(run.state);
 
   return (
     <>
@@ -370,7 +416,24 @@ function ReportDetail({ runId, version }: { runId: string; version: number }): J
 
       <TaskMemoryPanel taskId={run.task_id} runId={runId} version={version} />
 
-      {active && <LiveTail runId={runId} />}
+      {/* Above the tail on purpose: an approval that arrives while you are
+          watching the run work is the one thing you must not have to go
+          looking for. Same card the inbox list uses, so the decision is
+          answerable here without navigating anywhere. */}
+      {approvals.length > 0 && (
+        <div data-testid="run-needs-you" role="alert">
+          <div className="chip needs-you" style={{ display: 'inline-block', marginBottom: 6 }}>
+            NEEDS YOU — {approvals.length === 1 ? 'this run is waiting on you' : `${approvals.length} decisions waiting`}
+          </div>
+          {approvals.map((a) => (
+            <ApprovalCard key={a.id} approval={a} onChanged={onApprovalChanged ?? (() => {})} />
+          ))}
+        </div>
+      )}
+
+      {active && (
+        <LiveTail runId={runId} costUsd={run.cost_usd} turns={run.turns} engine={spec.engine} />
+      )}
       {report?.summary ? (
         <div className="summary-block">{report.summary}</div>
       ) : (
@@ -438,38 +501,143 @@ function ReportDetail({ runId, version }: { runId: string; version: number }): J
   );
 }
 
-/** Live streaming output: subscribes to run.log SSE events for this run while it executes. */
-function LiveTail({ runId }: { runId: string }): JSX.Element {
-  const [lines, setLines] = useState<Array<{ at: number; line: string }>>([]);
+/** How much of a run's output the tail holds. Older lines live in the journal. */
+const TAIL_MAX_LINES = 200;
+/** Within this many pixels of the bottom still counts as "following". */
+const TAIL_STICK_PX = 24;
+
+interface TailLine {
+  at: number;
+  text: string;
+}
+
+/**
+ * The live run view (T4-1): what the agent is saying, right now.
+ *
+ * Two sources, because neither is enough alone. `run.log` over SSE only
+ * carries what happens after this component mounts, so a tab opened mid-run
+ * would start blank and never recover the earlier output; `GET
+ * /runs/:id/events` serves the journal the daemon has been appending to since
+ * the run started. The subscription is registered FIRST and the seed fetched
+ * alongside it, never in sequence — a line that lands during the fetch is
+ * then merely shown twice at the seam, where waiting would have lost it.
+ *
+ * The daemon coalesces log lines into ~10 frames/sec per run
+ * (run-manager.ts LOG_COALESCE_MS), so a frame carries an ARRAY of lines and
+ * one timestamp for the batch; within a 100ms window that stamp is the line's
+ * own time to the precision anybody reads it at.
+ */
+function LiveTail({
+  runId,
+  costUsd,
+  turns,
+  engine,
+}: {
+  runId: string;
+  costUsd: number | null;
+  turns: number;
+  engine: string | undefined;
+}): JSX.Element {
+  const [seed, setSeed] = useState<{ lines: TailLine[]; earlierHidden: boolean } | null>(null);
+  const [seedError, setSeedError] = useState<string | null>(null);
+  const [live, setLive] = useState<TailLine[]>([]);
+  // Following the output, or has the user scrolled up to read something?
+  const [following, setFollowing] = useState(true);
   const preRef = useRef<HTMLPreElement | null>(null);
+
   useEffect(() => {
     const onSse = (e: Event): void => {
-      const ev = (e as CustomEvent).detail as { type?: string; runId?: string; line?: string; at?: number };
-      if (ev?.type === 'run.log' && ev.runId === runId && typeof ev.line === 'string') {
-        setLines((ls) => [...ls.slice(-200), { at: ev.at ?? Date.now(), line: ev.line as string }]);
-      }
+      const ev = (e as CustomEvent).detail as { type?: string; runId?: string; lines?: unknown; at?: number };
+      if (ev?.type !== 'run.log' || ev.runId !== runId || !Array.isArray(ev.lines)) return;
+      const at = typeof ev.at === 'number' ? ev.at : Date.now();
+      const batch = (ev.lines as unknown[]).filter((l): l is string => typeof l === 'string').map((text) => ({ at, text }));
+      if (batch.length === 0) return;
+      setLive((ls) => [...ls, ...batch].slice(-TAIL_MAX_LINES));
     };
     window.addEventListener('clockwork:sse', onSse);
     return () => window.removeEventListener('clockwork:sse', onSse);
   }, [runId]);
-  // auto-scroll to the newest line
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .runEvents(runId)
+      .then((r) => {
+        if (!alive) return;
+        setSeed({
+          lines: r.lines.map((l) => ({ at: l.at, text: l.text })).slice(-TAIL_MAX_LINES),
+          earlierHidden: r.from > 0 || r.skipped > 0 || r.lines.length > TAIL_MAX_LINES,
+        });
+      })
+      .catch((e) => {
+        // Say so rather than showing an empty box that looks like a quiet run.
+        if (alive) setSeedError(e?.message ?? String(e));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [runId]);
+
+  const lines = useMemo(
+    () => [...(seed?.lines ?? []), ...live].slice(-TAIL_MAX_LINES),
+    [seed, live],
+  );
+
   useEffect(() => {
     const el = preRef.current;
+    if (el && following) el.scrollTop = el.scrollHeight;
+  }, [lines, following]);
+
+  const onScroll = (): void => {
+    const el = preRef.current;
+    if (!el) return;
+    setFollowing(el.scrollHeight - el.scrollTop - el.clientHeight <= TAIL_STICK_PX);
+  };
+
+  const jumpToLatest = (): void => {
+    setFollowing(true);
+    const el = preRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [lines]);
+  };
+
   return (
     <div className="live-tail" data-testid="live-tail">
-      <div className="hint" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div className="hint" style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
         <span className="spinner" /> Live output
+        <span className="mono" data-testid="live-tail-cost">
+          {fmtCost(costUsd, engine, 4, 'not reported')}
+        </span>
+        <span className="mono" data-testid="live-tail-turns">
+          {turns} {turns === 1 ? 'turn' : 'turns'}
+        </span>
+        {!following && (
+          <button className="btn small" data-testid="live-tail-follow" onClick={jumpToLatest}>
+            Paused — jump to latest
+          </button>
+        )}
       </div>
+      {seedError && (
+        <p className="hint" data-testid="live-tail-seed-error">
+          Earlier output couldn’t be loaded ({seedError}) — showing what arrives from here on.
+        </p>
+      )}
+      {seed?.earlierHidden && (
+        <p className="hint">Showing the last {TAIL_MAX_LINES} lines — the full output is in the transcript.</p>
+      )}
       {lines.length === 0 ? (
         <p className="hint">Waiting for output…</p>
       ) : (
-        <pre ref={preRef} className="mono" style={{ maxHeight: 260, overflow: 'auto', fontSize: 12 }}>
+        <pre
+          ref={preRef}
+          onScroll={onScroll}
+          className="mono"
+          data-testid="live-tail-output"
+          style={{ maxHeight: 260, overflow: 'auto', fontSize: 12 }}
+        >
           {lines.map((l, i) => (
             <div key={i}>
-              <span style={{ color: 'var(--dim)' }}>{new Date(l.at).toLocaleTimeString()} </span>
-              {l.line}
+              <span style={{ color: 'var(--dim)' }}>{l.at ? `${new Date(l.at).toLocaleTimeString()} ` : ''}</span>
+              {l.text}
             </div>
           ))}
         </pre>

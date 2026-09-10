@@ -368,6 +368,15 @@ function guardHomeScopedPath(inputPath: string): HomeGuardResult {
 // so every other endpoint keeps the stock 1 MiB ceiling.
 const IMPORT_BODY_LIMIT = 12 * 1024 * 1024;
 
+// GET /runs/:id/events (T4-1 live-tail catch-up). The byte ceiling bounds one
+// response against a run that logged for hours; the line ceilings bound it
+// against a run that logged a million short lines inside that window. Both
+// are advertised back to the caller (`from`, `skipped`, `complete`) rather
+// than applied silently.
+const RUN_EVENTS_MAX_BYTES = 256 * 1024;
+const RUN_EVENTS_DEFAULT_LINES = 200;
+const RUN_EVENTS_MAX_LINES = 1000;
+
 /** label precedence: explicit body.label > X-WR-CALNAME > filename w/o extension > fallback. */
 function deriveImportLabel(explicit: unknown, calName: string | null, filename: string): string {
   const trimmedExplicit = typeof explicit === 'string' ? explicit.trim() : '';
@@ -1385,6 +1394,113 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       return { available: true, totalLines: allLines.length, lines: tail };
     } catch (e) {
       return reply.code(500).send({ error: `unreadable: ${String(e).slice(0, 80)}` });
+    }
+  });
+
+  /**
+   * Live-tail catch-up (T4-1). The run's event journal, from a byte offset.
+   *
+   * `run.log` over SSE only carries what happens after you subscribe, so a
+   * tab opened mid-run started blank and could never recover the earlier
+   * output. This serves the same journal `run-manager.ts` appends to
+   * (`<dataDir>/runs/<id>/stream.jsonl`), so the UI can seed its tail and
+   * then let the stream take over.
+   *
+   * `since` is a BYTE offset, not a line index: the file only ever grows, so
+   * a byte offset stays valid across calls and needs no re-read to interpret.
+   * The response says where its lines actually START (`from`) rather than
+   * assuming they begin at `since` — on the first call against a long run
+   * this route seeks to the TAIL of a large file instead of returning its
+   * first 200 lines, and `from > since` is how the caller is told so.
+   *
+   * Masked the way the sibling `/runs/:id/transcript` masks (S-68). The live
+   * `run.log` frames are NOT masked — they never have been — so a credential
+   * in the output is redacted here and not there; unifying that is a change
+   * to shipped broadcast behaviour and belongs to its own task.
+   */
+  app.get('/runs/:id/events', async (req, reply) => {
+    const runId = String((req.params as any).id);
+    // Existence first, filesystem second: `:id` reaches path.join below, and
+    // an id that matches a run row is one the daemon minted itself.
+    const row = deps.db.prepare('SELECT id FROM runs WHERE id=?').get(runId);
+    if (!row) return reply.code(404).send({ error: 'not_found' });
+
+    const q = req.query as Record<string, unknown>;
+    const sinceRaw = Number.parseInt(String(q.since ?? '0'), 10);
+    const since = Number.isFinite(sinceRaw) && sinceRaw > 0 ? sinceRaw : 0;
+    const limitRaw = Number.parseInt(String(q.limit ?? ''), 10);
+    const limit =
+      Number.isFinite(limitRaw) && limitRaw > 0
+        ? Math.min(limitRaw, RUN_EVENTS_MAX_LINES)
+        : RUN_EVENTS_DEFAULT_LINES;
+
+    const file = path.join(deps.dataDir, 'runs', runId, 'stream.jsonl');
+    const empty = { runId, since, from: since, nextSince: since, lines: [], skipped: 0, complete: true };
+    // A queued run, or one whose child has said nothing yet, has no journal.
+    // That is emptiness, not an error — 404 here would read as "no such run".
+    if (!existsSync(file)) return empty;
+
+    const fs = await import('node:fs');
+    let fd: number;
+    try {
+      fd = fs.openSync(file, 'r');
+    } catch {
+      return empty;
+    }
+    try {
+      const size = fs.fstatSync(fd).size;
+      if (since >= size) return { ...empty, from: size, nextSince: size };
+
+      // Seek to the tail on a cold read of a big journal: the point of this
+      // route is the last screenful, and returning the first 200 lines of a
+      // 40MB run would be a plausible-looking wrong answer.
+      const start = since === 0 && size > RUN_EVENTS_MAX_BYTES ? size - RUN_EVENTS_MAX_BYTES : since;
+      const want = Math.min(size - start, RUN_EVENTS_MAX_BYTES);
+      const buf = Buffer.alloc(want);
+      const read = fs.readSync(fd, buf, 0, want, start);
+      const slice = buf.subarray(0, read);
+
+      // Whole lines only, in bytes — a partial line at either end is left for
+      // the next call, and cutting on the buffer (not the decoded string)
+      // keeps `nextSince` a byte offset even with multi-byte characters.
+      const lastNl = slice.lastIndexOf(0x0a);
+      if (lastNl < 0) return { ...empty, from: start, nextSince: since, complete: false };
+      const headSkip = start > since ? slice.indexOf(0x0a) + 1 : 0;
+      const from = start + headSkip;
+      const nextSince = start + lastNl + 1;
+      const text = headSkip > lastNl ? '' : slice.subarray(headSkip, lastNl + 1).toString('utf8');
+
+      const { maskSecrets } = await import('@clockwork/runner');
+      const parsed: Array<{ at: number; kind: string; text: string }> = [];
+      for (const raw of text.split('\n')) {
+        if (raw.trim().length === 0) continue;
+        try {
+          const o = JSON.parse(raw) as { t?: unknown; kind?: unknown; text?: unknown };
+          parsed.push({
+            at: typeof o.t === 'number' ? o.t : 0,
+            kind: typeof o.kind === 'string' ? o.kind : 'log',
+            text: maskSecrets(String(o.text ?? '')),
+          });
+        } catch {
+          // A torn write is one unreadable line, not an unreadable run.
+        }
+      }
+      const skipped = Math.max(0, parsed.length - limit);
+      return {
+        runId,
+        since,
+        from,
+        nextSince,
+        lines: parsed.slice(-limit),
+        skipped,
+        complete: nextSince >= size,
+      };
+    } catch (e) {
+      return reply.code(500).send({ error: `unreadable: ${String(e).slice(0, 80)}` });
+    } finally {
+      try {
+        fs.closeSync(fd);
+      } catch {}
     }
   });
 
