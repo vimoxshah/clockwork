@@ -1,6 +1,6 @@
 [package]
 name = "clockwork"
-version = "0.11.2"
+version = "0.12.0"
 description = "The calendar where your agents show up for work."
 edition = "2021"
 
