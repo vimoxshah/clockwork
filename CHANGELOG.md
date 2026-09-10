@@ -8,6 +8,20 @@ is a red build here, not a marketing choice.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.1] — 2026-09-10
+
+### Fixed
+
+- **The five bundled job templates never shipped inside the app.**
+  `tools/stage-bundle.mjs` staged `resources/skill-pack` and not
+  `resources/templates`, so `GET /templates/bundled` answered
+  `{"templates":[]}` on a real install of 0.12.0 while 0.12.0's own notes said
+  the five were reachable. The omission could not be seen from inside the
+  repository: the daemon resolves those trees relative to its own compiled
+  location, so a source checkout finds them and only the shipped app does not.
+  The composer carries its own copy of the five, so they were always bookable —
+  it was the claim that was wrong, not the button.
+
 ## [0.12.0] — 2026-09-10
 
 ### Fixed
