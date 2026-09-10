@@ -163,12 +163,29 @@ export default function App(): JSX.Element {
       [],
     ),
   );
+  // ⌘5 — Analytics (T4-10). useGlobalShortcuts (⌘1-4/⌘N/⌘,) and its SHORTCUTS
+  // registry live in CommandPalette.tsx, which also feeds Settings → Keyboard
+  // shortcuts (SettingsView.tsx) — both out of this change's touch set, so
+  // Analytics gets its own narrow listener here rather than a fifth case
+  // added there. That guide will not list ⌘5 until that file is updated; see
+  // docs/SHORTCUTS.md.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if ((e.metaKey || e.ctrlKey) && e.key === '5') {
+        e.preventDefault();
+        setTab('analytics');
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
   const commands: Command[] = useMemo(
     () => [
       { id: 'nav-calendar', label: 'Open Calendar', section: 'Navigate', shortcut: '⌘1', run: () => setTab('calendar') },
       { id: 'nav-inbox', label: 'Open Inbox', section: 'Navigate', shortcut: '⌘2', run: () => setTab('inbox') },
       { id: 'nav-tasks', label: 'Open Tasks', section: 'Navigate', shortcut: '⌘3', run: () => setTab('tasks') },
       { id: 'nav-agents', label: 'Open Agents', section: 'Navigate', shortcut: '⌘4', run: () => setTab('agents') },
+      { id: 'nav-analytics', label: 'Open Analytics', section: 'Navigate', shortcut: '⌘5', run: () => setTab('analytics') },
       { id: 'new-task', label: 'New task', section: 'Create', shortcut: '⌘N', run: () => setTab('new') },
       { id: 'settings', label: 'Open Settings', section: 'Settings', shortcut: '⌘,', run: () => setTab('settings') },
       { id: 'theme-light', label: 'Theme: light', section: 'Settings', run: () => document.dispatchEvent(new CustomEvent('clockwork:set-theme', { detail: 'light' })) },

@@ -60,9 +60,14 @@ jobs:
   # and require no real provider CLI, API spend, or network call. Runs the
   # promoted subset only (packages/ui/e2e/smoke/) — the rest of e2e/ is
   # debugging tools, not tests.
+  #
+  # T4-10 promoted spikes/a11y-audit.cjs + spikes/kbd-a11y-check.cjs here too,
+  # rewritten to actually assert (the originals printed diagnostics and always
+  # exited 0). timeout-minutes went 5 -> 8: two more real-browser scripts,
+  # each sweeping every tab, don't fit the old 5-minute ceiling.
   smoke:
     runs-on: macos-14
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
 
@@ -92,7 +97,7 @@ jobs:
       - name: Install Playwright Chromium
         run: ./node_modules/.bin/playwright install chromium
 
-      - name: Playwright smoke (book/run/report + command palette)
+      - name: Playwright smoke (book/run/report + command palette + a11y/keyboard audits)
         env:
           CW_ENGINE: mock
           CW_MOCK_STEP_MS: "250"
@@ -119,6 +124,17 @@ jobs:
           # dependency or reach for a network-fetching `npx tsx`.
           ./packages/daemon/node_modules/.bin/tsx packages/ui/e2e/smoke/book-run-report.ts
           ./packages/daemon/node_modules/.bin/tsx packages/ui/e2e/smoke/command-palette.ts
+          # T4-10: run after book-run-report.ts so Tasks/Inbox hold a real row
+          # (the Tasks overflow-menu + "Finished" bucket checks need one),
+          # not an empty state. kbd-a11y-check.ts BEFORE a11y-audit.ts,
+          # deliberately: this step has no `&&`/`||` between commands, so it
+          # runs under the runner's default `bash -e` and stops at the first
+          # non-zero exit. a11y-audit.ts is currently red on two findings
+          # this task could not fix (TasksView.tsx / ComposerView.tsx contrast
+          # — see the PR description) — if it ran first, kbd-a11y-check.ts
+          # would never execute at all, not even show up in the log.
+          ./packages/daemon/node_modules/.bin/tsx packages/ui/e2e/smoke/kbd-a11y-check.ts
+          ./packages/daemon/node_modules/.bin/tsx packages/ui/e2e/smoke/a11y-audit.ts
 
       - name: Daemon log
         if: failure()
