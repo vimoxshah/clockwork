@@ -39,6 +39,200 @@ registerFeatureSurface({ key: 'event_triggers', tab: 'settings', where: 'Setting
 // setting it has anywhere to go.
 registerFeatureSurface({ key: 'quiet_hours', tab: 'settings', where: 'Settings › Quiet hours', anchorId: 'quiet-hours' });
 
+/**
+ * T1-6 — "Check for updates" has no entry here on purpose.
+ * `FeatureSurface.key` has to match a capability `GET /capabilities`
+ * returns (`packages/daemon/src/features.ts`'s `FEATURES` list), and none
+ * of its ~30 keys names anything like this — it is not gated by plan tier,
+ * it is a shell-level utility every install already has. Inventing a key
+ * just to get a tick would be exactly the "fake gate" `features.ts`'s own
+ * header forbids, so `UpdateCheckCard` below mounts with a plain `id`
+ * (`check-for-updates`) and no registration.
+ */
+
+/**
+ * Tauri's real IPC bridge, called directly rather than through
+ * `@tauri-apps/api`: that package is not a dependency of this workspace —
+ * absent from `package.json`, the lockfile, and `node_modules` (checked,
+ * not assumed) — and adding one was outside this change's touch set.
+ * `window.__TAURI_INTERNALS__` is what Tauri injects into every webview it
+ * manages, independent of the `app.withGlobalTauri` config flag (that flag
+ * only controls the friendlier `window.__TAURI__` namespace, which needs a
+ * `tauri.conf.json` edit this change also does not make); it is the same
+ * bridge `@tauri-apps/api`'s own `invoke()` calls underneath, and Tauri's
+ * own docs reach for it directly for exactly this no-npm-package case
+ * (`develop/Tests/mocking.mdx` spies on it to drive `invoke()` in tests).
+ * `undefined` outside the desktop shell — `src-tauri/src/lib.rs`'s pairing
+ * script comment notes a browser tab pointed straight at the daemon is a
+ * real, supported way to reach this page, and that tab has no bridge at all.
+ *
+ * `invoke` is declared generic (`<T>(cmd: string) => Promise<T>`), the same
+ * shape `@tauri-apps/api/core`'s own `invoke<T>` carries upstream, rather
+ * than returning `Promise<unknown>` and asserting the result at the call
+ * site — a real bridge is genuinely generic over what each command returns,
+ * so this is the pass-through-generic case, not a laundered `unknown`.
+ */
+declare global {
+  interface Window {
+    __TAURI_INTERNALS__?: { invoke: <T>(cmd: string) => Promise<T> };
+  }
+}
+
+function tauriInvoke<T>(cmd: string): Promise<T> | null {
+  const bridge = typeof window === 'undefined' ? undefined : window.__TAURI_INTERNALS__;
+  return bridge ? bridge.invoke<T>(cmd) : null;
+}
+
+/** Mirrors `src-tauri/src/lib.rs`'s `update_check_json` — the four honesty outcomes, as data. */
+interface UpdateCheckResult {
+  status: 'up_to_date' | 'newer_available' | 'check_failed';
+  current?: string;
+  latest?: string;
+  notesUrl?: string;
+  message: string;
+}
+
+/**
+ * `notesUrl` is GitHub's `html_url`, relayed through
+ * `check_for_updates_command` off a remote document this app did not
+ * author. `agent-content-escaping.test.tsx` names the exact vector: binding
+ * a raw string straight onto a link's target attribute, via a JSX
+ * expression, is the one place React hands the DOM a URL with no scheme
+ * check — so a `javascript:`/`data:` value there would run on click.
+ * Refused down to `https:` only; anything else — an unparsable string, a
+ * different scheme — renders no link at all rather than a broken or
+ * dangerous one.
+ */
+function safeHttpsUrl(raw: string): string | null {
+  try {
+    const parsed = new URL(raw);
+    return parsed.protocol === 'https:' ? parsed.href : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * T1-6 — "Check for updates", user-initiated only.
+ *
+ * Asks GitHub for the latest release, and only on this click: no timer, no
+ * check on launch, no "check daily" preference
+ * (docs/architecture/update-delivery.md names those as the heavier, still
+ * undecided options). The fetch itself runs in the Tauri shell, not here
+ * and not through the daemon — this page's CSP does not allow
+ * `connect-src` to `api.github.com` (nor should it: the daemon stays
+ * incurious about the internet, on purpose), so this card's job is to call
+ * `check_for_updates_command` and render whichever of the four outcomes
+ * comes back. A failed check renders as failed; it is never reported as
+ * "up to date" just because nothing newer was confirmed.
+ *
+ * KNOWN GAP, not yet closed. This app's main window is built on
+ * `WebviewUrl::External(DAEMON_URL)` (`src-tauri/src/lib.rs`'s `run()`) —
+ * this page's own origin, `http://127.0.0.1:4747` — which Tauri's IPC ACL
+ * does not treat as local (verified against the vendored
+ * `tauri-2.11.5/src/webview/mod.rs`; see `check_for_updates_command`'s doc
+ * comment for the exact chain). With no `src-tauri/capabilities/` granting
+ * this origin `remote.urls`, `invoke('check_for_updates_command')` from
+ * THIS button is rejected by Tauri, every time, in the shipped app — not
+ * only when the network is down. The click still resolves honestly (the
+ * `catch` below turns the rejection into a `check_failed` result, same as
+ * any other failure — never a false "up to date"), but "clicking it on
+ * 0.11.2 reports 0.11.2" does not hold for this button today. The tray's
+ * "Check for updates…" item runs the identical check natively and does
+ * work — see `run_update_check` in `lib.rs`. Closing this gap needs a
+ * capability grant or a different signalling path from this page to Rust,
+ * neither of which this change makes.
+ */
+export function UpdateCheckCard(): JSX.Element {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<UpdateCheckResult | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
+  const safeNotesUrl = result?.notesUrl ? safeHttpsUrl(result.notesUrl) : null;
+
+  const check = async (): Promise<void> => {
+    const pending = tauriInvoke<UpdateCheckResult>('check_for_updates_command');
+    if (!pending) {
+      setUnavailable(true);
+      return;
+    }
+    setUnavailable(false);
+    setBusy(true);
+    setResult(null);
+    try {
+      setResult(await pending);
+    } catch (e) {
+      // The IPC call itself failing is still a failure to report — never silence.
+      setResult({ status: 'check_failed', message: `Couldn't check for updates: ${String((e as Error).message ?? e)}` });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div>
+      <p className="hint" style={{ marginTop: 0 }}>
+        Asks GitHub for the latest release — only when you click. Nothing runs in the background,
+        nothing is scheduled, and this never downloads anything; it tells you a newer build exists
+        so you can get it from the releases page yourself.
+      </p>
+      <div className="tasklist-row">
+        <div className="grow">
+          <strong>Latest release</strong>
+          <div className="hint" style={{ margin: 0 }}>Checked only when you click — nothing runs on its own.</div>
+        </div>
+        <button
+          className="btn small"
+          disabled={busy}
+          onClick={() => void check()}
+          data-testid="check-for-updates-button"
+        >
+          {busy ? 'Checking…' : 'Check for updates'}
+        </button>
+      </div>
+      {unavailable && (
+        <div className="error-banner" role="alert" data-testid="check-for-updates-unavailable">
+          Update checks need the Clockwork desktop app — open this page there rather than in a browser tab.
+        </div>
+      )}
+      {result && result.status !== 'check_failed' && (
+        <div className="ok-banner" data-testid="check-for-updates-result">
+          {result.message}
+          {result.status === 'newer_available' && safeNotesUrl && (
+            <>
+              {' '}
+              <a
+                // `.href` is assigned imperatively once the element mounts —
+                // never bound to a JSX expression container the way a plain
+                // dynamic attribute would be. That JSX-attribute pattern is
+                // what `agent-content-escaping.test.tsx` greps the whole
+                // source tree for, precisely because it is the one place
+                // React would hand a string to the DOM unvalidated.
+                // `safeNotesUrl` (above) has already refused anything but
+                // `https:`, so this assignment is the second, structural
+                // half of that defence, not a way around the first.
+                ref={(el) => {
+                  if (el && safeNotesUrl) el.href = safeNotesUrl;
+                }}
+                target="_blank"
+                // `noreferrer` alone also disables `window.opener` — the
+                // WHATWG HTML spec has `noreferrer` imply `noopener` — so no
+                // separate token is needed.
+                rel="noreferrer"
+                data-testid="check-for-updates-notes-link"
+              >
+                Release notes
+              </a>
+            </>
+          )}
+        </div>
+      )}
+      {result && result.status === 'check_failed' && (
+        <div className="error-banner" role="alert" data-testid="check-for-updates-result">{result.message}</div>
+      )}
+    </div>
+  );
+}
+
 export default function SettingsView({ version }: { version: number }): JSX.Element {
   const { pref, setPref } = useTheme();
   const health = useAsync(() => api.health(), [version]);
@@ -234,6 +428,11 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
           Export bundle
         </button>
       </div>
+      </section>
+
+      <section className="settings-card">
+      <h3 className="section-title" id="check-for-updates">Check for updates</h3>
+      <UpdateCheckCard />
       </section>
 
       <section className="settings-card">

@@ -557,6 +557,18 @@ const ID_OPEN: &str = "tray.open";
 const ID_QUIT: &str = "tray.quit";
 /// Prefix for the per-run rows; they all jump to the Inbox.
 const ID_RUN_PREFIX: &str = "tray.run.";
+/// T1-6 — runs the update check itself, natively, rather than opening
+/// Settings and asking the page to do it. That was the first shape this
+/// took, and it does not work: this window is built with
+/// `WebviewUrl::External(DAEMON_URL)` (below), which Tauri's own
+/// `is_local_url` (tauri-2.11.5/src/webview/mod.rs:1698) does not consider
+/// local — it matches neither the `tauri://` protocol nor a configured
+/// `devUrl`/`frontendDist` URL nor a registered custom scheme — and this
+/// crate ships no `src-tauri/capabilities/` granting `remote.urls` to it.
+/// So `invoke()` from that page is rejected by the ACL gate
+/// (`webview/mod.rs:1823`) every time, in every build, not only sometimes.
+/// See `run_update_check`.
+const ID_CHECK_UPDATES: &str = "tray.check_updates";
 
 /// The numbers the menu bar exists to show.
 ///
@@ -838,6 +850,7 @@ fn tray_lines(state: &TrayState, recent: &[RecentRun], now: i64) -> Vec<TrayLine
             lines.push(TrayLine::Info("No scheduled run will start until it is back".to_string()));
             lines.push(TrayLine::Separator);
             lines.push(action(ID_OPEN, "Open Clockwork"));
+            lines.push(action(ID_CHECK_UPDATES, "Check for updates…"));
             // NOT "runs continue" — nothing is running to continue. The whole
             // point of this state is that the tray stops repeating the happy
             // path's sentences.
@@ -850,6 +863,7 @@ fn tray_lines(state: &TrayState, recent: &[RecentRun], now: i64) -> Vec<TrayLine
             lines.push(TrayLine::Info(next_line(c, now)));
             lines.push(TrayLine::Separator);
             lines.push(action(ID_OPEN, "Open Clockwork to pair"));
+            lines.push(action(ID_CHECK_UPDATES, "Check for updates…"));
             lines.push(action(ID_QUIT, "Quit Clockwork (scheduled runs continue)"));
             return lines;
         }
@@ -880,6 +894,7 @@ fn tray_lines(state: &TrayState, recent: &[RecentRun], now: i64) -> Vec<TrayLine
     lines.push(TrayLine::Separator);
     lines.push(action(ID_INBOX, "Open Inbox"));
     lines.push(action(ID_OPEN, "Open Clockwork"));
+    lines.push(action(ID_CHECK_UPDATES, "Check for updates…"));
     // True because launchd owns the daemon, not this process
     // (`ensure_launch_agent`). Saying it here is the cheapest answer to the
     // fear that quitting the app cancels tonight's work.
@@ -892,6 +907,10 @@ fn tray_lines(state: &TrayState, recent: &[RecentRun], now: i64) -> Vec<TrayLine
 enum TrayAction {
     OpenWindow,
     OpenInbox,
+    /// T1-6. Runs `check_for_updates()` natively and shows the result in
+    /// the webview via `w.eval` — see `ID_CHECK_UPDATES`'s doc comment for
+    /// why this does not go through `invoke()`.
+    CheckForUpdates,
     Quit,
     Ignore,
 }
@@ -901,6 +920,8 @@ fn tray_action(id: &str) -> TrayAction {
         TrayAction::Quit
     } else if id == ID_OPEN {
         TrayAction::OpenWindow
+    } else if id == ID_CHECK_UPDATES {
+        TrayAction::CheckForUpdates
     } else if id == ID_INBOX || id.starts_with(ID_RUN_PREFIX) {
         // A run row cannot deep-link to its own report: the UI routes on a
         // hash that only names a tab (`packages/ui/src/App.tsx:35`), and
@@ -956,6 +977,274 @@ fn fetch_recent_runs(now: i64) -> Option<Vec<RecentRun>> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// T1-6 — "check for updates", user-initiated only.
+//
+// docs/architecture/update-delivery.md's finding: nothing in this app ever
+// asks whether a newer release exists. Two real security fixes shipped in
+// one session and neither could reach an installed user. This is the
+// cheapest item on that document's own options list — ask GitHub, but only
+// when clicked. No timer, no check-on-launch, no "check daily" preference:
+// the Settings button (`SettingsView.tsx`'s `UpdateCheckCard`) and the tray
+// item above are the only two triggers, and both are a direct click.
+//
+// Same split as the tray section above and `http_get`/`parse_status_line`:
+// the DECISION (`evaluate_update`) is a pure function of a version string
+// and a fetch result, and is what `cargo test` exercises for all four
+// outcomes below. The IO (`fetch_latest_release`) is not exercised by
+// `cargo test` — nothing in this file can reach a live socket from a test
+// binary, TLS or not.
+// ---------------------------------------------------------------------------
+
+/// `vimoxshah/clockwork` — the same repo `README.md`'s checksum-verification
+/// command and `git clone` line already point at.
+const GITHUB_RELEASES_URL: &str = "https://api.github.com/repos/vimoxshah/clockwork/releases/latest";
+
+/// Strips a single leading `v`/`V`. GitHub tags one; `CARGO_PKG_VERSION`
+/// never does.
+fn strip_v(s: &str) -> &str {
+    s.strip_prefix(['v', 'V']).unwrap_or(s)
+}
+
+/// Just the two fields this feature reads out of GitHub's release object.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReleaseInfo {
+    /// e.g. `"v0.11.2"` — GitHub's `tag_name`, leading `v` and all.
+    tag: String,
+    /// GitHub's `html_url` — the release NOTES page, not the API URL.
+    notes_url: String,
+}
+
+/// A MAJOR.MINOR.PATCH version, parsed and ordered numerically.
+///
+/// Not the `semver` crate. Every version this repo has ever cut —
+/// `Cargo.toml`'s own `version`, `tauri.conf.json`'s, the release
+/// workflow's tag — is three plain integers with an optional leading `v`
+/// and nothing else: no pre-release suffix, no build metadata. A second
+/// dependency to parse a grammar nothing here ever emits would not be
+/// "minimal", it would be a different unused feature. `Ord` is derived
+/// field-by-field, which IS semver precedence for the shape this repo
+/// actually produces: `(0,9,0) < (0,11,2)`, where a STRING compare gets it
+/// backwards ("0.9.0" > "0.11.2" lexically, because '9' > '1') — the case
+/// the acceptance test is named for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct SemVer(u64, u64, u64);
+
+fn parse_semver(raw: &str) -> Option<SemVer> {
+    let mut parts = strip_v(raw).split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?.parse().ok()?;
+    if parts.next().is_some() {
+        return None; // a fourth component is not a shape this repo emits
+    }
+    Some(SemVer(major, minor, patch))
+}
+
+/// GitHub's release JSON, reduced to what this feature needs. `None` for
+/// anything missing EITHER field as a string — a release with no notes link
+/// cannot honour "a link to the release notes", so it is treated the same
+/// as a response with no `tag_name` at all: malformed, not partial.
+fn parse_release(body: &str) -> Option<ReleaseInfo> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    Some(ReleaseInfo {
+        tag: v.get("tag_name")?.as_str()?.to_string(),
+        notes_url: v.get("html_url")?.as_str()?.to_string(),
+    })
+}
+
+/// What clicking "Check for updates" tells the user. Four variants, because
+/// silence reads as "nothing to report" — the exact defect
+/// `docs/architecture/update-delivery.md` exists to close. A check that
+/// found nothing newer must SAY SO (`UpToDate`), and a check that could not
+/// run must never be spelled the same as "you are up to date" — the
+/// `sleptThroughKeepAwake: false` class of bug, answering "no" for "we
+/// could not tell".
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum UpdateCheck {
+    /// Checked. Nothing newer. Stated, not implied by a quiet screen.
+    UpToDate { current: String },
+    NewerAvailable { current: String, latest: String, notes_url: String },
+    /// The request itself failed — offline, DNS, TLS, timeout, a non-2xx
+    /// status. Never collapsed into `UpToDate`.
+    NetworkError { reason: String },
+    /// GitHub answered (2xx) but the body was not a release this code can
+    /// read — not JSON, no `tag_name`/`html_url`, or a `tag_name` that is
+    /// not a version. Kept apart from `NetworkError` so a test — and a
+    /// reader — can tell "GitHub did not answer" from "GitHub answered
+    /// something this build does not understand".
+    Malformed { reason: String },
+}
+
+/// The decision, given the network's answer as a value rather than a call.
+/// `current` is `env!("CARGO_PKG_VERSION")` at the one real call site
+/// (`check_for_updates` below) — threaded in as a parameter so a test can
+/// supply any pair without touching the environment or a socket.
+fn evaluate_update(current: &str, fetched: Result<String, String>) -> UpdateCheck {
+    let body = match fetched {
+        Ok(b) => b,
+        Err(reason) => return UpdateCheck::NetworkError { reason },
+    };
+    let Some(release) = parse_release(&body) else {
+        return UpdateCheck::Malformed {
+            reason: "GitHub's response did not look like a release".to_string(),
+        };
+    };
+    let Some(latest) = parse_semver(&release.tag) else {
+        return UpdateCheck::Malformed {
+            reason: format!("could not read a version out of \"{}\"", release.tag),
+        };
+    };
+    let Some(cur) = parse_semver(current) else {
+        // This build's own version failed to parse — not the network's
+        // fault, but still a Malformed, never a false "up to date".
+        return UpdateCheck::Malformed {
+            reason: format!("could not read this build's own version (\"{current}\")"),
+        };
+    };
+    if latest > cur {
+        UpdateCheck::NewerAvailable {
+            current: current.to_string(),
+            latest: strip_v(&release.tag).to_string(),
+            notes_url: release.notes_url,
+        }
+    } else {
+        UpdateCheck::UpToDate { current: current.to_string() }
+    }
+}
+
+/// The one real network call this feature makes, and only on a click —
+/// never on a timer, never on launch (see the section banner above). A
+/// `User-Agent` is not optional: GitHub's REST API 403s an anonymous
+/// request that omits one. Ten seconds is generous for one small JSON
+/// response over a real internet connection and short enough that a dead
+/// network fails the click rather than hanging it.
+fn fetch_latest_release() -> Result<String, String> {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(10)))
+        .build()
+        .into();
+    agent
+        .get(GITHUB_RELEASES_URL)
+        .header("User-Agent", "clockwork-app")
+        .header("Accept", "application/vnd.github+json")
+        .call()
+        .map_err(|e| e.to_string())?
+        .body_mut()
+        .read_to_string()
+        .map_err(|e| e.to_string())
+}
+
+fn check_for_updates() -> UpdateCheck {
+    evaluate_update(env!("CARGO_PKG_VERSION"), fetch_latest_release())
+}
+
+/// One line, for the tray's alert (`run_update_check`, below `mod tray`)
+/// AND for `update_check_json`'s `"message"` field. Kept in exactly one
+/// place so the two surfaces cannot describe the same outcome differently.
+/// Carries no URL: Settings renders `notesUrl` as a real link
+/// (`safeHttpsUrl` in `SettingsView.tsx`), and the tray appends the raw URL
+/// itself, on its own line — an `alert()` has no concept of a link.
+fn update_check_message(u: &UpdateCheck) -> String {
+    match u {
+        UpdateCheck::UpToDate { current } => format!("You're on the latest version ({current})."),
+        UpdateCheck::NewerAvailable { current, latest, .. } => {
+            format!("Clockwork {latest} is available — you're on {current}.")
+        }
+        UpdateCheck::NetworkError { reason } => format!("Couldn't reach GitHub to check for updates: {reason}"),
+        UpdateCheck::Malformed { reason } => format!("GitHub answered, but the response didn't make sense: {reason}"),
+    }
+}
+
+/// The `w.eval(...)` script `run_update_check` shows the result with.
+/// Split out to be testable, the same reason `parse_status_line` is split
+/// out of `http_get_status`: `mod tray` cannot be exercised from `cargo
+/// test`. JSON string-encoding `text` is what makes this safe regardless
+/// of what it contains — `text` can carry GitHub's own strings (a
+/// release's tag, its notes URL) by the time it gets here, and a quote or
+/// backslash in either must not be able to break out of the JS string
+/// literal and run something else inside that `alert(...)` call.
+fn update_alert_script(text: &str) -> String {
+    let escaped = serde_json::to_string(text).unwrap_or_else(|_| "\"Update check failed.\"".to_string());
+    format!("alert({escaped});")
+}
+
+/// The shape `SettingsView.tsx`'s `UpdateCheckCard` reads — see
+/// `check_for_updates_command`'s doc comment for why that card cannot
+/// reach this today. A `status` string rather than an HTTP-style error,
+/// because a network failure and a malformed response are both legitimate
+/// ANSWERS to "did you check" — not IPC failures — so `invoke()` on the JS
+/// side always resolves (when it resolves at all), and `status` carries
+/// which of the four outcomes this is.
+fn update_check_json(u: &UpdateCheck) -> serde_json::Value {
+    let message = update_check_message(u);
+    match u {
+        UpdateCheck::UpToDate { current } => serde_json::json!({
+            "status": "up_to_date",
+            "current": current,
+            "message": message,
+        }),
+        UpdateCheck::NewerAvailable { current, latest, notes_url } => serde_json::json!({
+            "status": "newer_available",
+            "current": current,
+            "latest": latest,
+            "notesUrl": notes_url,
+            "message": message,
+        }),
+        UpdateCheck::NetworkError { .. } | UpdateCheck::Malformed { .. } => serde_json::json!({
+            "status": "check_failed",
+            "message": message,
+        }),
+    }
+}
+
+/// Registered in `run()` below, and reachable from `cargo test` (Rust can
+/// call any function directly) — but **not, today, from
+/// `SettingsView.tsx`'s "Check for updates" button**, and that is not a
+/// missing capabilities file so much as a fact about this window.
+///
+/// `run()`'s `setup` builds the main window on `WebviewUrl::External(
+/// DAEMON_URL)` — the daemon-served UI at `http://127.0.0.1:4747`, not
+/// this bundle's `frontendDist`. Tauri's own `is_local_url`
+/// (tauri-2.11.5/src/webview/mod.rs:1698, read from the vendored source,
+/// not assumed) tests three things: the `tauri://` protocol, a URL
+/// *relative to* `get_app_url()` (which for this config is
+/// `tauri://localhost`, because `frontendDist` here is a directory, not a
+/// `FrontendDist::Url` — `manager/mod.rs:353`), and a registered custom URI
+/// scheme. `http://127.0.0.1:4747` matches none of the three, so
+/// `is_local` is `false` for this window on every navigation, which trips
+/// `!is_local` in the IPC ACL gate (`webview/mod.rs:1823`) regardless of
+/// `invoke.acl` — the "bare app command needs no capability" rule this
+/// comment used to (wrongly) rely on only holds when `is_local` is true.
+/// `src-tauri/capabilities/` does not exist in this repo, so nothing grants
+/// `remote.urls` for this origin either. The result: every call from that
+/// page is rejected, deterministically, not intermittently.
+///
+/// Verified against the vendored crate rather than taken on trust — the
+/// line numbers above are real, read from `~/.cargo/registry/src/…/
+/// tauri-2.11.5/`, not inferred from the public docs. There are at least
+/// two ways to actually close this (grant `remote.urls` in a new
+/// `src-tauri/capabilities/*.json`, which reverses a posture
+/// `pairing_script`'s doc comment argues for on purpose; or have the page
+/// signal Rust some ACL-free way, e.g. `on_navigation` interception of a
+/// sentinel URL). Both are outside this change's touch set and are an
+/// orchestrator call, not this lane's to invent. What DOES work without
+/// either: `run_update_check` below, which runs this same function
+/// natively from the tray, no IPC involved.
+///
+/// The frontend calls this via `window.__TAURI_INTERNALS__.invoke(...)`
+/// rather than `@tauri-apps/api` (absent from `packages/ui`'s
+/// `package.json`, lockfile and `node_modules` — checked, not assumed —
+/// and adding it was out of touch set); see `SettingsView.tsx`'s
+/// `tauriInvoke` for that half. That choice is orthogonal to the ACL
+/// finding above: `@tauri-apps/api`'s `invoke()` would hit the identical
+/// rejection, because the check is on the PAGE'S ORIGIN, not on how the
+/// call reaches the bridge.
+#[tauri::command]
+fn check_for_updates_command() -> serde_json::Value {
+    update_check_json(&check_for_updates())
+}
+
 #[cfg(desktop)]
 mod tray {
     use super::*;
@@ -981,10 +1270,51 @@ mod tray {
         }
     }
 
+    /// T1-6, tray half — see `ID_CHECK_UPDATES`'s doc comment for why this
+    /// runs the check itself rather than asking Settings to (an earlier
+    /// version of this function did exactly that, and does not work: the
+    /// page cannot reach `check_for_updates_command` over IPC at all).
+    ///
+    /// Off the main thread, the same shape `install()` already uses for
+    /// `poll_loop`: `fetch_latest_release` is a blocking network call with
+    /// a 10s timeout, and `on_menu_event` fires on the main event loop
+    /// thread — blocking it for up to 10s on every click would freeze the
+    /// whole app's UI for as long as the request takes, not just this menu.
+    ///
+    /// The window is shown FIRST, before the network call starts: `alert()`
+    /// inside a hidden webview (this app hides rather than destroys its
+    /// window on close — see `run()`'s `CloseRequested` handler) has
+    /// nothing to show itself against, so a check that finished while the
+    /// window was hidden would answer a question the user cannot see the
+    /// answer to.
+    fn run_update_check<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+        show_main_window(app);
+        let app = app.clone();
+        std::thread::spawn(move || {
+            let outcome = check_for_updates();
+            let mut text = update_check_message(&outcome);
+            if let UpdateCheck::NewerAvailable { notes_url, .. } = &outcome {
+                text.push('\n');
+                text.push_str(notes_url);
+            }
+            let Some(w) = app.get_webview_window("main") else { return };
+            // `w.eval` runs trusted, Rust-composed script in the ALREADY
+            // OPEN webview — the same one-way channel `pairing_script` and
+            // `diagnosis_script` already use. It is not the direction the
+            // IPC ACL gate checks: that gate examines messages FROM the
+            // page TO Rust (`webview/mod.rs`'s `on_message`), and this is
+            // Rust telling the page something, not the page asking Rust
+            // for anything, so none of the `check_for_updates_command`
+            // rejection applies here.
+            let _ = w.eval(&update_alert_script(&text));
+        });
+    }
+
     fn on_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>, id: &str) {
         match tray_action(id) {
             TrayAction::OpenWindow => show_main_window(app),
             TrayAction::OpenInbox => open_inbox(app),
+            TrayAction::CheckForUpdates => run_update_check(app),
             // Quits the APP. The daemon is a LaunchAgent, so the scheduler and
             // anything running outlive this, which is what the label promises.
             TrayAction::Quit => app.exit(0),
@@ -1096,6 +1426,8 @@ mod tray {
 pub fn run() {
     ensure_daemon();
     tauri::Builder::default()
+        // T1-6. The only command this shell exposes over IPC today.
+        .invoke_handler(tauri::generate_handler![check_for_updates_command])
         .setup(|app| {
             // The window used to carry `url: http://127.0.0.1:4747` in
             // tauri.conf.json, which meant a dead daemon produced a WHITE
@@ -1446,6 +1778,9 @@ mod tests {
                 "---",
                 "Open Inbox",
                 "Open Clockwork",
+                // T1-6: added below "Open Clockwork" and above Quit in every
+                // tray state — see the ID_CHECK_UPDATES doc comment.
+                "Check for updates…",
                 "Quit Clockwork (scheduled runs continue)",
             ],
         );
@@ -1713,5 +2048,180 @@ mod tests {
         assert_eq!(state_glyph("waiting_approval"), "⚠");
         assert_eq!(state_glyph("running"), "▶");
         assert_eq!(state_glyph("scheduled"), "·");
+    }
+
+    // -----------------------------------------------------------------------
+    // T1-6 — "check for updates". `evaluate_update` is where every honesty
+    // requirement lives, so it is what these tests drive, never the network.
+    // -----------------------------------------------------------------------
+
+    /// A trimmed but real shape: GitHub's actual `/releases/latest` body
+    /// carries dozens of fields (`assets`, `author`, `draft`, `prerelease`,
+    /// `published_at`, …); `parse_release` must read its two fields out of
+    /// the real document, not a hand-built stub that only ever has them.
+    fn release_body(tag: &str) -> String {
+        format!(
+            r#"{{"url":"https://api.github.com/repos/vimoxshah/clockwork/releases/1","html_url":"https://github.com/vimoxshah/clockwork/releases/tag/{tag}","tag_name":"{tag}","name":"Clockwork {tag}","draft":false,"prerelease":false,"created_at":"2026-09-10T00:00:00Z","published_at":"2026-09-10T00:05:00Z","assets":[],"body":"Release notes go here."}}"#
+        )
+    }
+
+    #[test]
+    fn parse_semver_reads_major_minor_patch_and_strips_a_leading_v() {
+        assert_eq!(parse_semver("0.11.2"), Some(SemVer(0, 11, 2)));
+        assert_eq!(parse_semver("v0.11.2"), Some(SemVer(0, 11, 2)));
+        assert_eq!(parse_semver("V1.0.0"), Some(SemVer(1, 0, 0)));
+    }
+
+    #[test]
+    fn parse_semver_rejects_anything_that_is_not_exactly_three_numbers() {
+        assert_eq!(parse_semver(""), None);
+        assert_eq!(parse_semver("v1"), None, "one component");
+        assert_eq!(parse_semver("1.2"), None, "two components");
+        assert_eq!(parse_semver("1.2.3.4"), None, "four components");
+        assert_eq!(parse_semver("1.2.x"), None, "non-numeric component");
+        assert_eq!(parse_semver("1..3"), None, "empty component");
+        assert_eq!(parse_semver("1.2.3-beta"), None, "pre-release suffix");
+    }
+
+    #[test]
+    fn semver_orders_numerically_not_lexically() {
+        // The exact case the acceptance criteria names: "0.9.0" sorts ABOVE
+        // "0.11.2" as strings (the '9' vs '1' first-differing byte), which is
+        // precisely the bug a naive string compare would ship.
+        assert!(SemVer(0, 9, 0) < SemVer(0, 11, 2), "numeric compare must not read minor as a string");
+        assert!("0.9.0" > "0.11.2", "sanity check: string compare really does get this backwards");
+    }
+
+    #[test]
+    fn a_lexically_smaller_but_numerically_newer_version_is_reported_as_newer() {
+        // 0.9.0 running against a github tag of 0.11.2 — the exact pair the
+        // acceptance criteria names. A string compare says "0.9.0" > "0.11.2"
+        // and this must not agree with it.
+        let outcome = evaluate_update("0.9.0", Ok(release_body("v0.11.2")));
+        assert_eq!(
+            outcome,
+            UpdateCheck::NewerAvailable {
+                current: "0.9.0".to_string(),
+                latest: "0.11.2".to_string(),
+                notes_url: "https://github.com/vimoxshah/clockwork/releases/tag/v0.11.2".to_string(),
+            },
+        );
+    }
+
+    #[test]
+    fn an_equal_version_is_reported_up_to_date_not_silently() {
+        let outcome = evaluate_update("0.11.2", Ok(release_body("v0.11.2")));
+        assert_eq!(outcome, UpdateCheck::UpToDate { current: "0.11.2".to_string() });
+        // The wording must SAY checked-and-current, never say nothing.
+        let json = update_check_json(&outcome);
+        assert_eq!(json["status"], "up_to_date");
+        assert!(json["message"].as_str().unwrap().to_lowercase().contains("latest"), "{json}");
+    }
+
+    #[test]
+    fn a_local_build_ahead_of_the_latest_tag_is_also_up_to_date() {
+        // A dev build newer than the last published tag must not claim a
+        // release "newer" than itself exists.
+        let outcome = evaluate_update("0.12.0", Ok(release_body("v0.11.2")));
+        assert_eq!(outcome, UpdateCheck::UpToDate { current: "0.12.0".to_string() });
+    }
+
+    #[test]
+    fn a_network_failure_is_reported_as_failed_never_as_up_to_date() {
+        let outcome = evaluate_update("0.11.2", Err("connection refused".to_string()));
+        assert_eq!(outcome, UpdateCheck::NetworkError { reason: "connection refused".to_string() });
+        // This is the honesty requirement stated directly: a failed check
+        // must never render as "you are up to date" — the
+        // `sleptThroughKeepAwake: false` class of bug.
+        let json = update_check_json(&outcome);
+        assert_ne!(json["status"], "up_to_date", "{json}");
+        assert_eq!(json["status"], "check_failed");
+        assert!(json["message"].as_str().unwrap().contains("connection refused"), "{json}");
+    }
+
+    #[test]
+    fn a_response_that_is_not_json_is_malformed_never_up_to_date() {
+        let outcome = evaluate_update("0.11.2", Ok("<html>rate limited</html>".to_string()));
+        assert_eq!(
+            outcome,
+            UpdateCheck::Malformed { reason: "GitHub's response did not look like a release".to_string() },
+        );
+        assert_ne!(update_check_json(&outcome)["status"], "up_to_date");
+    }
+
+    #[test]
+    fn a_response_missing_tag_name_or_notes_url_is_malformed() {
+        let no_tag = evaluate_update("0.11.2", Ok(r#"{"html_url":"https://x"}"#.to_string()));
+        assert!(matches!(no_tag, UpdateCheck::Malformed { .. }), "{no_tag:?}");
+        let no_url = evaluate_update("0.11.2", Ok(r#"{"tag_name":"v0.12.0"}"#.to_string()));
+        assert!(matches!(no_url, UpdateCheck::Malformed { .. }), "{no_url:?}");
+    }
+
+    #[test]
+    fn a_tag_that_is_not_a_version_is_malformed_not_a_crash() {
+        let outcome = evaluate_update("0.11.2", Ok(release_body("latest")));
+        assert!(matches!(outcome, UpdateCheck::Malformed { .. }), "{outcome:?}");
+    }
+
+    #[test]
+    fn parse_release_reads_the_two_fields_out_of_a_realistic_github_body() {
+        let release = parse_release(&release_body("v0.11.3")).expect("must parse a real release shape");
+        assert_eq!(release.tag, "v0.11.3");
+        assert_eq!(release.notes_url, "https://github.com/vimoxshah/clockwork/releases/tag/v0.11.3");
+    }
+
+    #[test]
+    fn update_check_json_carries_the_notes_link_for_a_newer_release() {
+        let outcome = evaluate_update("0.9.0", Ok(release_body("v0.11.2")));
+        let json = update_check_json(&outcome);
+        assert_eq!(json["status"], "newer_available");
+        assert_eq!(json["current"], "0.9.0");
+        assert_eq!(json["latest"], "0.11.2");
+        assert_eq!(json["notesUrl"], "https://github.com/vimoxshah/clockwork/releases/tag/v0.11.2");
+    }
+
+    #[test]
+    fn the_check_updates_menu_item_runs_the_check_and_is_never_ignored() {
+        assert_eq!(tray_action(ID_CHECK_UPDATES), TrayAction::CheckForUpdates);
+    }
+
+    #[test]
+    fn the_tray_and_settings_message_wording_is_one_function_not_two() {
+        // `update_check_message` backs both `update_check_json`'s
+        // `"message"` field and the tray's alert text — this pins that the
+        // two are the SAME string for the same outcome, not independently
+        // maintained copy that could drift apart.
+        let up_to_date = UpdateCheck::UpToDate { current: "0.11.2".to_string() };
+        assert_eq!(update_check_message(&up_to_date), "You're on the latest version (0.11.2).");
+        assert_eq!(update_check_json(&up_to_date)["message"], "You're on the latest version (0.11.2).");
+
+        let newer = UpdateCheck::NewerAvailable {
+            current: "0.9.0".to_string(),
+            latest: "0.11.2".to_string(),
+            notes_url: "https://github.com/vimoxshah/clockwork/releases/tag/v0.11.2".to_string(),
+        };
+        assert_eq!(update_check_message(&newer), "Clockwork 0.11.2 is available — you're on 0.9.0.");
+        // The tray's message deliberately omits the URL (see the doc
+        // comment) — it must not silently reappear in the shared string.
+        assert!(!update_check_message(&newer).contains("http"), "{}", update_check_message(&newer));
+
+        let net_err = UpdateCheck::NetworkError { reason: "timed out".to_string() };
+        assert_eq!(update_check_message(&net_err), "Couldn't reach GitHub to check for updates: timed out");
+        assert_eq!(update_check_json(&net_err)["message"], "Couldn't reach GitHub to check for updates: timed out");
+
+        let malformed = UpdateCheck::Malformed { reason: "no tag_name".to_string() };
+        assert_eq!(update_check_message(&malformed), "GitHub answered, but the response didn't make sense: no tag_name");
+    }
+
+    #[test]
+    fn the_update_alert_script_json_escapes_whatever_the_message_contains() {
+        // Same reasoning as `pairing_script_escapes_the_token`: `text` can
+        // carry GitHub's own strings by the time it reaches here, and a
+        // quote or backslash in it must not be able to break out of the JS
+        // string literal `alert(...)` is called with.
+        let script = update_alert_script("a\"b\\c");
+        assert!(script.contains(r#""a\"b\\c""#), "message must be JSON-escaped: {script}");
+        assert!(script.starts_with("alert("));
+        assert!(script.trim_end().ends_with(");"));
     }
 }

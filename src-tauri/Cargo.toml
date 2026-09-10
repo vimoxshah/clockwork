@@ -23,3 +23,14 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# T1-6 — "check for updates" needs one real TLS request, to api.github.com.
+# `http_get`/`http_get_status` above are a hand-rolled client on purpose: they
+# only ever speak plaintext HTTP to 127.0.0.1, and rolling TLS by hand is not
+# something to attempt for a feature this small. `ureq`'s DEFAULT features are
+# already `rustls` + `gzip` (github.com/algesten/ureq README, "Features") —
+# pure-Rust TLS via rustls/webpki-roots, no OpenSSL to link against on macOS —
+# so no extra feature flags are enabled here. `json` (serde-body helpers) is
+# left off: `serde_json` is already a dependency and every other body in this
+# file is parsed the same way (`serde_json::from_str` on a `String`), so a
+# second JSON path would just be two ways to do one thing.
+ureq = "3"
