@@ -2565,6 +2565,124 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     };
   });
 
+  // ---- onboarding (T4-2): what a one-click sample run should point at ----
+  //
+  // Answers a question; books nothing. The caller creates the task through
+  // POST /tasks like any other booking, so the sample passes the same schema,
+  // the same policy gate and the same autonomy ceiling as work a human typed.
+  // A route that both chose the target AND created the task would be a second,
+  // unaudited way into the tasks table.
+  //
+  // WHAT IT WILL NOT DO: search. There is no walk, no depth, no ignore-list —
+  // three places the daemon already knows about, in order, and the answer is
+  // "nothing found" the moment they are exhausted. A first-run feature that
+  // crawls a stranger's disk to find something to point an agent at is a worse
+  // product than one that admits it found nothing and offers a snippet.
+  app.get('/onboarding/sample', async () => {
+    const { readdirSync } = await import('node:fs');
+    const { preflightRepo, runGit } = await import('@clockwork/runner');
+    const { ONBOARDING_SAMPLE_PROFILE_SLUG, ONBOARDING_BUNDLED_SAMPLE_JOB, onboardingRepoReviewJob } = await import(
+      './profile-library.js'
+    );
+    const home = process.env.HOME ?? '';
+
+    /** First candidate that a run could actually use wins; `null` means say so. */
+    const findRepo = (): { path: string; name: string; source: 'booked' | 'cloned' | 'home' } | null => {
+      const accept = (
+        p: string,
+        source: 'booked' | 'cloned' | 'home',
+      ): { path: string; name: string; source: 'booked' | 'cloned' | 'home' } | null => {
+        // `git rev-parse` walks UP the tree, so `isGitRepo` alone answers yes
+        // for any directory that merely LIVES under a repository — and for
+        // every directory in $HOME on a machine where $HOME itself is one
+        // (dotfiles-as-home-repo is a real setup). The candidate has to BE the
+        // repository root, so compare the toplevel git reports against it.
+        const top = runGit(['rev-parse', '--show-toplevel'], p);
+        if (top.code !== 0) return null;
+        try {
+          if (realpathSync(top.out.trim()) !== realpathSync(p)) return null;
+        } catch {
+          return null;
+        }
+        // The same preflight run-manager applies before it cuts a worktree.
+        // A `git init`-ed directory with no commits passes every check above
+        // and then fails the run with "Repository has no commits yet" —
+        // pointing a first run at one is worse than finding nothing at all.
+        if (!preflightRepo(p, null).ok) return null;
+        return { path: p, name: path.basename(p) || p, source };
+      };
+
+      // 1. A repo this daemon has already been pointed at. Soft-deleted tasks
+      //    count: the row is gone from the UI, but the user's choice of repo is
+      //    still the best evidence there is of which repo they care about.
+      try {
+        const rows = deps.db
+          .prepare(
+            `SELECT repo_path FROM tasks WHERE repo_path IS NOT NULL AND repo_path <> '' ORDER BY created_at DESC LIMIT 20`,
+          )
+          .all() as unknown as Array<{ repo_path: string }>;
+        for (const r of rows) {
+          const hit = accept(r.repo_path, 'booked');
+          if (hit) return hit;
+        }
+      } catch {
+        /* no tasks table yet — fall through */
+      }
+
+      // 2. Anything POST /repos/clone fetched on the user's behalf. Same
+      //    directory that route writes to, deliberately (it hardcodes $HOME
+      //    rather than dataDir), so the two cannot drift apart.
+      try {
+        for (const name of readdirSync(`${home}/.clockwork/repos`).sort((a, b) => a.localeCompare(b))) {
+          const hit = accept(`${home}/.clockwork/repos/${name}`, 'cloned');
+          if (hit) return hit;
+        }
+      } catch {
+        /* nothing cloned */
+      }
+
+      // 3. "The first git repo the folder browser finds" — literally the same
+      //    listing /fs/browse returns for its default location: $HOME, top
+      //    level only, dotted entries hidden, the same 500 cap, the same
+      //    localeCompare order, the same `.git`-is-a-directory test. If the
+      //    picker would show it with a git badge, this finds it; if it would
+      //    not, neither does this.
+      try {
+        const dirs = readdirSync(home, { withFileTypes: true })
+          .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+          .map((e) => e.name)
+          .sort((a, b) => a.localeCompare(b))
+          .slice(0, 500);
+        for (const name of dirs) {
+          const dir = `${home}/${name}`;
+          let badged = false;
+          try {
+            badged = statSync(`${dir}/.git`).isDirectory();
+          } catch {
+            /* not a repo */
+          }
+          if (!badged) continue;
+          const hit = accept(dir, 'home');
+          if (hit) return hit;
+        }
+      } catch {
+        /* unreadable $HOME */
+      }
+      return null;
+    };
+
+    const repo = findRepo();
+    const profile = profiles.bySlug(ONBOARDING_SAMPLE_PROFILE_SLUG);
+    return {
+      repo,
+      /** Said back to the user verbatim when `repo` is null — "we looked here". */
+      lookedIn: ['repos you have booked work against before', '~/.clockwork/repos', '~ (top level only)'],
+      profileSlug: ONBOARDING_SAMPLE_PROFILE_SLUG,
+      profileId: profile?.id ?? null,
+      job: repo ? onboardingRepoReviewJob(repo.name) : ONBOARDING_BUNDLED_SAMPLE_JOB,
+    };
+  });
+
   // ---- user preferences (notification sound/volume) ----
   app.get('/prefs', async () => readPrefs(deps.dataDir));
 

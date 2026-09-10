@@ -3,7 +3,7 @@
  * error boundary, SSE-driven refresh counter, theme provider.
  */
 import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { api, openEventStream, setToken } from './api';
+import { api, getToken, openEventStream, setToken } from './api';
 import { ThemeProvider } from './theme';
 import CalendarView from './components/CalendarView';
 import AgentsView from './components/AgentsView';
@@ -266,7 +266,23 @@ export default function App(): JSX.Element {
                   is doing, so it cannot be a per-section concern. */}
               <VersionSkewNotice health={health} />
               <StalePageNotice stale={stalePage} health={health} />
-              {tab !== 'new' && <OnboardingGate version={dataVersion} onBook={() => setTab('new')} />}
+              {/* T4-2's payoff: the sample run is handed straight to the live
+                  view. Same handoff the toast click uses below — the id is
+                  queued module-side, so it survives the Inbox not being
+                  mounted at the moment this fires.
+
+                  The opening tag stays on the line below rather than wrapping
+                  in parentheses: version-skew.test.tsx reads this file and
+                  looks for the literal `{tab !== 'new' && <OnboardingGate` to
+                  prove the skew notice is mounted ABOVE the gate. */}
+              {tab !== 'new' && <OnboardingGate
+                version={dataVersion}
+                onBook={() => setTab('new')}
+                onWatchRun={(runId) => {
+                  setPendingRunId(runId);
+                  setTab('inbox');
+                }}
+              />}
               {tab === 'calendar' && (
                 <CalendarView
                   version={dataVersion}
@@ -420,13 +436,167 @@ export function StalePageNotice({
 /** Module-level prefill handoff calendar → composer. */
 let composerPrefill: { runAtLocal: string } | null = null;
 
-/** FR-21: first-run environment detection. */
-function OnboardingGate({ version, onBook }: { version: number; onBook: () => void }): JSX.Element | null {
+/**
+ * T4-2 — the contract "Run a sample job now" books under.
+ *
+ * Stated HERE, at the booking site, and not taken from whatever
+ * `/onboarding/sample` answers. The daemon's job is to pick which repo and
+ * what to say; these three are the reason it is safe to fire a run at a
+ * stranger's machine on their first click, and a route response must not be
+ * able to soften them.
+ *
+ * `plan` is the one that matters. The runner passes it to the CLI as
+ * `--permission-mode plan` (claude-cli-runner.ts `mapPermissionMode`), which
+ * is the same "propose, don't apply" guarantee F8's diagnostics rely on —
+ * prompt wording is not what holds this line, and neither is the Code
+ * Reviewer's read-only mission. Underneath it sits the actual boundary: every
+ * run executes in a throwaway worktree under ~/.clockwork/worktrees, and
+ * `buildSandboxSpec` puts the repo in the Seatbelt profile's READ paths while
+ * only the worktree and scratch dir reach its write allowlist. A write into
+ * the user's checkout is refused by the OS, not discouraged by a paragraph.
+ */
+export const SAMPLE_JOB_PERMISSION_MODE = 'plan';
+/** A first run must not be able to cost real money. Turns and wall-clock bound it well inside the cap. */
+export const SAMPLE_JOB_BUDGET = { maxUsd: 0.5, maxTurns: 30, timeoutSec: 900 };
+
+/**
+ * The same 15s as ComposerView's `ASAP_LEAD_MS`, for the same reason: POST
+ * /tasks refuses a `once` whose `runAt` is already behind `Date.now()` at
+ * validation, and the clock moves while the request is in flight. Restated
+ * rather than imported because ComposerView does not export it and that file
+ * is outside this change's touch set.
+ */
+const SAMPLE_ASAP_LEAD_MS = 15_000;
+
+/** What GET /onboarding/sample answers: where to point the sample, and what it should say. */
+interface SamplePlan {
+  /** null = nothing found. Never a guess. */
+  repo: { path: string; name: string; source: string } | null;
+  /** The places the daemon looked, said back to the user verbatim. */
+  lookedIn: string[];
+  profileSlug: string;
+  profileId: string | null;
+  job: { name: string; prompt: string; bundled: boolean };
+}
+
+/**
+ * GET /onboarding/sample.
+ *
+ * Not a method on the `api` client object because `src/api.ts` is outside this
+ * change's touch set. It keeps that module's contract deliberately — bearer
+ * header, throw on any non-2xx with the daemon's own `error` string — so the
+ * two cannot start answering differently. The one thing it does not reproduce
+ * is the 401 unauthorized broadcast, and it does not need to: every other call
+ * this component makes goes through `api`, so a rotated token still reaches
+ * the connect gate through them.
+ */
+async function fetchSamplePlan(): Promise<SamplePlan> {
+  const res = await fetch('/onboarding/sample', { headers: { authorization: `Bearer ${getToken()}` } });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error ?? `daemon answered ${res.status}`);
+  }
+  return (await res.json()) as SamplePlan;
+}
+
+/** FR-21: first-run environment detection. T4-2: and one click that uses it. */
+export function OnboardingGate({
+  version,
+  onBook,
+  onWatchRun,
+}: {
+  version: number;
+  onBook: () => void;
+  /** Hand the started run to the live view (T4-1) — the payoff of the click. */
+  onWatchRun: (runId: string) => void;
+}): JSX.Element | null {
   const [status, setStatus] = useState<Awaited<ReturnType<typeof api.onboardingStatus>> | null>(null);
   const [dismissed, setDismissed] = useState(() => sessionStorage.getItem('cw.onboard.dismissed') === '1');
+  const [sampleBusy, setSampleBusy] = useState(false);
+  const [sampleError, setSampleError] = useState<string | null>(null);
+  /** Set only when the daemon found no repo. It is an OFFER; nothing is booked yet. */
+  const [noRepo, setNoRepo] = useState<SamplePlan | null>(null);
   useEffect(() => {
     void api.onboardingStatus().then(setStatus).catch(() => {});
   }, [version]);
+
+  /** Book `plan`, start it now, and hand the run to the live view. */
+  const book = async (plan: SamplePlan): Promise<void> => {
+    const task = await api.createTask({
+      name: plan.job.name,
+      prompt: plan.job.prompt,
+      // Undefined for the bundled snippet, and JSON.stringify drops it: no
+      // repoPath means a scratch run, so the answer to "we found nothing of
+      // yours" never cuts a worktree from anything the user owns.
+      repoPath: plan.repo?.path,
+      // By slug, not by the id the route also returns: the profile this books
+      // under is a decision of this component, and resolving it server-side
+      // (TaskCreate.profileSlugMention) means an unknown slug is a 422 rather
+      // than a task quietly booked with no profile at all.
+      profileSlugMention: plan.profileSlug,
+      permissionMode: SAMPLE_JOB_PERMISSION_MODE,
+      budget: SAMPLE_JOB_BUDGET,
+      schedule: {
+        kind: 'once',
+        runAt: Date.now() + SAMPLE_ASAP_LEAD_MS,
+        tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      },
+      overlapPolicy: 'skip',
+      missedPolicy: 'run-late',
+      context: { files: [] },
+      delivery: { osNotify: true },
+    });
+    // ASAP means the next scheduler sweep, and that sweep is 30s wide
+    // (main.ts `scheduler.start(30_000)`) — half the minute this button
+    // promises, spent watching nothing. So the booking is kicked by hand, the
+    // same way InboxView's "Run it again" does.
+    const { runId } = await api.runNow(task.id);
+    // …which leaves the one-shot occurrence still armed, and that is not
+    // harmless. The next sweep finds a `once` that is due and either books a
+    // SECOND $0.50 run (if this one already finished) or fires a
+    // "Skipped: previous run still executing" notification while the user is
+    // watching their first ever run. A consumed one-shot is exactly what
+    // `enabled: false` means. Best-effort: failing here costs a duplicate, not
+    // the run just started, so it must never block the handoff below.
+    try {
+      await api.patchTask(task.id, { enabled: false });
+    } catch {
+      /* worst case is the duplicate described above */
+    }
+    onWatchRun(runId);
+  };
+
+  const runSample = async (): Promise<void> => {
+    setSampleBusy(true);
+    setSampleError(null);
+    try {
+      const plan = await fetchSamplePlan();
+      if (!plan.repo) {
+        // Nothing found. Say so and offer the bundled snippet. Booking a guess
+        // here would point an agent at a directory nobody chose.
+        setNoRepo(plan);
+        return;
+      }
+      await book(plan);
+    } catch (e) {
+      setSampleError(String((e as Error).message ?? e));
+    } finally {
+      setSampleBusy(false);
+    }
+  };
+
+  const runBundled = async (plan: SamplePlan): Promise<void> => {
+    setSampleBusy(true);
+    setSampleError(null);
+    try {
+      await book(plan);
+    } catch (e) {
+      setSampleError(String((e as Error).message ?? e));
+    } finally {
+      setSampleBusy(false);
+    }
+  };
+
   if (!status || dismissed || status.hasTasks) return null;
   return (
     <div className="onboard">
@@ -450,9 +620,34 @@ function OnboardingGate({ version, onBook }: { version: number; onBook: () => vo
           never by Clockwork.
         </p>
       )}
+      <p className="hint" style={{ margin: '8px 0 0' }}>
+        In a hurry? One click books a read-only review of the first git repo Clockwork can find,
+        caps it at ${SAMPLE_JOB_BUDGET.maxUsd.toFixed(2)}, starts it now and takes you to the live
+        view. It cannot change your code — the run is plan-mode inside a throwaway worktree, and
+        the sandbox mounts your repo read-only.
+      </p>
       <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+        {/* `readyToBook`, not `hasProvider`. The two disagree on exactly the
+            machine this button would break: `hasProvider` is true with a BYOK
+            key and no Claude CLI, and this booking carries no `byokId`, so it
+            resolves to the profile's `cli` engine and fails at spawn.
+            `readyToBook` is claude + auth + git, which is what THIS booking
+            needs — git included, because the run cuts a worktree. */}
+        <button
+          className="btn primary small"
+          data-testid="onboard-run-sample"
+          disabled={sampleBusy || !status.readyToBook}
+          title={
+            status.readyToBook
+              ? undefined
+              : 'Needs the Claude CLI installed, signed in, and git available — the sample run uses them'
+          }
+          onClick={() => void runSample()}
+        >
+          {sampleBusy ? 'Booking…' : 'Run a sample job now'}
+        </button>
         {!status.hasTasks && (
-          <button className="btn primary small" onClick={onBook}>
+          <button className="btn small" onClick={onBook}>
             Book your first run
           </button>
         )}
@@ -471,6 +666,32 @@ function OnboardingGate({ version, onBook }: { version: number; onBook: () => vo
           Got it
         </button>
       </div>
+      {noRepo && (
+        <div className="ok-banner" data-testid="onboard-sample-offer" style={{ marginTop: 10 }}>
+          <strong>No git repository found — nothing was booked.</strong>
+          <p className="hint" style={{ margin: '4px 0' }}>
+            Clockwork looked in {noRepo.lookedIn.join(', ')}. It will not go hunting through the
+            rest of your disk for something to point an agent at.
+          </p>
+          <p className="hint" style={{ margin: '4px 0 8px' }}>
+            It can review a small bundled snippet instead — same reviewer, same $
+            {SAMPLE_JOB_BUDGET.maxUsd.toFixed(2)} cap, and no repository of yours is opened at all.
+          </p>
+          <button
+            className="btn primary small"
+            data-testid="onboard-sample-bundled"
+            disabled={sampleBusy}
+            onClick={() => void runBundled(noRepo)}
+          >
+            {sampleBusy ? 'Booking…' : 'Review the bundled sample'}
+          </button>
+        </div>
+      )}
+      {sampleError && (
+        <div className="error-banner" role="alert" data-testid="onboard-sample-error" style={{ marginTop: 10 }}>
+          Couldn’t start the sample run: {sampleError}
+        </div>
+      )}
     </div>
   );
 }
