@@ -52,6 +52,25 @@ export const BUDGET_GUARDS_SURFACE = registerFeatureSurface({
   anchorId: 'budget-guards',
 });
 
+/**
+ * T1-10: `DeliveryConfig.webhook.url` (packages/shared/src/schemas.ts) and
+ * `selectedChannels()` reading it (delivery-dispatch.ts) have been wired since
+ * T-211/ADR-018 — POST /tasks always accepted this field. Only the screen was
+ * missing (README's Known limits named it API-only), so this is the first
+ * build where the field has anywhere to be typed in. The field itself sits
+ * inside the Telegram approvals section (beside the Telegram chat id, per
+ * T1-10), but `where` names the field, not that section — the channel is
+ * unrelated to Telegram, and the anchor scrolls straight to its own `<div>`,
+ * so there is no need for the matrix's "Show me" to describe a detour through
+ * someone else's heading.
+ */
+export const WEBHOOKS_SURFACE = registerFeatureSurface({
+  key: 'webhooks',
+  tab: 'new',
+  where: 'New task › Webhook URL',
+  anchorId: 'webhook-delivery',
+});
+
 
 /**
  * How far ahead an ASAP booking is placed. `POST /tasks` refuses a `once`
@@ -153,6 +172,17 @@ export function notInThePast(d: Date, now = new Date()): Date {
  *   in Settings, so the task row only holds the opt-in.
  * - Email carries recipients only, for the same reason — the relay password is
  *   a credential and stays in Settings.
+ * - A webhook URL, when set, attaches `{ url }` (T1-10). Unlike Slack's
+ *   incoming-webhook URL, this one is NOT itself the credential — it names a
+ *   generic HTTP endpoint (`WebhookChannel`, `delivery.ts`) that only ever
+ *   RECEIVES Clockwork's own HMAC-signed payload; knowing the URL lets you
+ *   receive that payload, not post as Clockwork. The shared secret that signs
+ *   it (`webhookSecret`) stays in Settings, same reasoning as Slack's URL and
+ *   the SMTP password — but the destination itself belongs on the task row,
+ *   which is exactly what `DeliveryConfig.webhook.url`
+ *   (`packages/shared/src/schemas.ts`) and `selectedChannels()`
+ *   (`delivery-dispatch.ts`) already expected before this field had anywhere
+ *   to be typed in.
  *
  * `extra` is a fourth, optional parameter rather than three more positional
  * ones so the existing three-argument call sites and tests read unchanged.
@@ -161,13 +191,14 @@ export function buildTaskDelivery(
   chatIdRaw: string,
   isGroup: boolean,
   allowedUserIdsRaw: string,
-  extra: { slack?: boolean; emailToRaw?: string } = {},
+  extra: { slack?: boolean; emailToRaw?: string; webhookUrlRaw?: string } = {},
 ): Record<string, unknown> {
   const chatId = chatIdRaw.trim();
   const emailTo = (extra.emailToRaw ?? '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
+  const webhookUrl = (extra.webhookUrlRaw ?? '').trim();
   const delivery: Record<string, unknown> = { osNotify: true };
   if (chatId) {
     delivery.telegram = {
@@ -184,6 +215,7 @@ export function buildTaskDelivery(
   }
   if (extra.slack) delivery.slack = { enabled: true };
   if (emailTo.length > 0) delivery.email = { to: emailTo };
+  if (webhookUrl) delivery.webhook = { url: webhookUrl };
   return delivery;
 }
 
@@ -392,6 +424,7 @@ export default function ComposerView({
     telegramChatId: '',
     telegramIsGroup: false,
     telegramAllowedUserIds: '',
+    webhookUrl: '',
     slackEnabled: false,
     emailTo: '',
   }));
@@ -444,6 +477,18 @@ export default function ComposerView({
     if (!Number.isFinite(maxUsdN) || maxUsdN <= 0) return setError('Budget must be a positive number.');
     if (!Number.isInteger(maxTurnsN) || maxTurnsN < 1) return setError('Max turns must be a positive integer.');
     if (!Number.isInteger(timeoutSecN) || timeoutSecN < 30) return setError('Timeout must be at least 30 seconds.');
+    const webhookUrlTrimmed = form.webhookUrl.trim();
+    if (webhookUrlTrimmed) {
+      // Validating, not constructing: `new URL` throws on anything that is not
+      // an absolute URL, which is exactly what `DeliveryConfig.webhook.url`
+      // (z.string().url()) will refuse server-side — catching it here saves the
+      // round trip.
+      try {
+        void new URL(webhookUrlTrimmed);
+      } catch {
+        return setError('Webhook URL must be an absolute URL, e.g. https://example.com/hook.');
+      }
+    }
 
     let schedule: Record<string, unknown>;
     if (form.kind === 'once') {
@@ -468,6 +513,7 @@ export default function ComposerView({
     const delivery = buildTaskDelivery(form.telegramChatId, form.telegramIsGroup, form.telegramAllowedUserIds, {
       slack: form.slackEnabled,
       emailToRaw: form.emailTo,
+      webhookUrlRaw: form.webhookUrl,
     });
 
     setBusy(true);
@@ -1117,6 +1163,27 @@ export default function ComposerView({
                   )}
                 </div>
               )}
+
+              {/* A separate channel from Telegram above, sharing its section only
+                  because T1-10 places it beside the chat id field. It carries
+                  the same two payloads Slack and email do (the run report, and
+                  a notice when a run is waiting) and, like them, cannot answer
+                  back — no Approve/Deny button, because the daemon binds
+                  loopback only (S-2) and could not receive one. */}
+              <div id={WEBHOOKS_SURFACE.anchorId} className="mt-3">
+                <Label htmlFor="c-webhook-url">Webhook URL (optional)</Label>
+                <Input
+                  id="c-webhook-url"
+                  placeholder="https://example.com/hooks/clockwork"
+                  value={form.webhookUrl}
+                  onChange={(e) => setForm({ ...form, webhookUrl: e.target.value })}
+                />
+                <p className="mt-1 text-xxs text-dim">
+                  A generic endpoint for the run report and a notice when a run is waiting — HMAC-signed
+                  if a webhook secret is set in Settings → Notifications &amp; delivery.
+                  Approving or denying still happens in this app or in Telegram, never here.
+                </p>
+              </div>
             </section>
 
             {/*
