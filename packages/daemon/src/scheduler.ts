@@ -19,6 +19,11 @@ export const GRACE_MS = 120_000; // NFR-1: missed-run detection within 120s of w
 
 export interface SchedulerDeps {
   db: DB;
+  /** T1-15: the resolved data dir (CLOCKWORK_HOME, or $HOME/.clockwork by
+   *  default — see main.ts's single resolution) that fired runs' worktree
+   *  and scratch paths are built under. Threaded through to buildJobSpec so
+   *  this file never re-derives it from $HOME on its own. */
+  dataDir: string;
   clock: Clock;
   /** enqueue a claimed occurrence as a runnable run; returns run id */
   enqueueRun(spec: JobSpec): void;
@@ -249,7 +254,7 @@ export class Scheduler {
       }
     }
     const runId = newId();
-    const spec = buildJobSpec(runId, task, now, occurrenceAt, this.deps.db);
+    const spec = buildJobSpec(runId, task, now, occurrenceAt, this.deps.db, this.deps.dataDir);
     const insertRun = this.deps.db.transaction(() => {
       this.insertRunRow(runId, task, sched, occurrenceAt, now, 'queued');
       this.deps.db
@@ -263,7 +268,7 @@ export class Scheduler {
   }
 
   private insertRunRow(runId: string, task: TaskRow, sched: ScheduleRow, occurrenceAt: number, now: number, state: string): void {
-    const spec = buildJobSpec(runId, task, now, occurrenceAt, this.deps.db);
+    const spec = buildJobSpec(runId, task, now, occurrenceAt, this.deps.db, this.deps.dataDir);
     this.deps.db
       .prepare(
         `INSERT INTO runs (id, task_id, occurrence_at, schedule_id, jobspec_json, state, state_changed_at, scheduled_for)
@@ -277,7 +282,26 @@ export class Scheduler {
 }
 
 /** Frozen JobSpec snapshot at enqueue (S-5) — edits affect NEXT occurrence only. */
-export function buildJobSpec(runId: string, task: TaskRow, now: number, occurrenceAt: number, db: DB): JobSpec {
+export function buildJobSpec(
+  runId: string,
+  task: TaskRow,
+  now: number,
+  occurrenceAt: number,
+  db: DB,
+  // T1-15: threaded from SchedulerDeps.dataDir at both real call sites in
+  // this file. Optional — and defaulting to the exact formula main.ts uses
+  // to resolve it — only because this function is also called on the
+  // pre-T1-15 5-arg signature from three places outside this change's touch
+  // set: run-manager.ts:1095 (builds a real successor/retry spec — this is
+  // the caller where the default actually matters, since `this.deps.dataDir`
+  // IS in scope there but nothing threads it through), main.ts's inert
+  // hazard-sweep placeholder (sweepHazardousSchedules — nothing ever executes
+  // that spec), and three test files. A bare `process.env.HOME` fallback
+  // here would silently reintroduce the bug for these callers; mirroring
+  // main.ts's resolution instead keeps it correct (CLOCKWORK_HOME-respecting)
+  // even where this fix could not reach.
+  dataDir: string = process.env.CLOCKWORK_HOME ?? `${process.env.HOME}/.clockwork`,
+): JobSpec {
   const profile = task.profile_id
     ? (db.prepare('SELECT * FROM profiles WHERE id = ?').get(task.profile_id) as any)
     : null;
@@ -295,9 +319,9 @@ export function buildJobSpec(runId: string, task: TaskRow, now: number, occurren
     budget: { maxUsd: task.budget_usd, maxTurns: task.max_turns, timeoutSec: task.timeout_sec },
     repoPath: task.repo_path ?? null,
     baseBranch: task.base_branch ?? null,
-    worktreePath: `${process.env.HOME ?? '~'}/.clockwork/worktrees/${slug}/${runId}`,
+    worktreePath: `${dataDir}/worktrees/${slug}/${runId}`,
     branch: branchFor(slug, runId),
-    scratchPath: task.repo_path ? null : `${process.env.HOME ?? '~'}/.clockwork/scratch/${runId}`,
+    scratchPath: task.repo_path ? null : `${dataDir}/scratch/${runId}`,
     profile: profile
       ? {
           id: profile.id,

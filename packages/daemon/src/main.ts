@@ -505,6 +505,11 @@ export async function main(argv: string[] = process.argv): Promise<number> {
   const scheduler = new Scheduler({
     db,
     clock,
+    // T1-15: the SAME resolved dataDir buildServer gets, threaded rather than
+    // re-derived. SchedulerDeps makes this required on purpose — the scheduled
+    // path is the one that writes real worktrees, and an optional field nothing
+    // populated in production is how it silently kept using $HOME.
+    dataDir,
     enqueueRun: (_spec) => runManager.pump(),
     notify: (kind, taskName, detail) => {
       void notifier.send(`Clockwork: ${taskName}`, detail);

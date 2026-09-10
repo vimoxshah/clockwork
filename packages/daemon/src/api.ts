@@ -542,7 +542,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
         return null; // the pair stays 'approved' with no execute run — visible, not silent
       }
       // §3: shallow copy — never write the rendered prompt back to tasks.prompt
-      const runId = enqueueRunNow(deps.db, { ...row, prompt: promptOverride });
+      const runId = enqueueRunNow(deps.db, { ...row, prompt: promptOverride }, deps.dataDir);
       deps.runManager.pump();
       return runId;
     },
@@ -681,7 +681,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       if (!taskRow) return null;
       const pv = evaluatePolicy((taskRow as any).engine ?? null, (taskRow as any).byok_id ?? null, Number(taskRow.budget_usd ?? 2));
       if (pv) return null;
-      const runId = enqueueRunNow(deps.db, taskRow);
+      const runId = enqueueRunNow(deps.db, taskRow, deps.dataDir);
       audit('run.enqueue', 'run', runId, { taskId: taskRow.id, taskName: taskRow.name, via: 'sentinel' });
       deps.runManager.pump();
       return runId;
@@ -723,7 +723,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       // permission_mode 'plan' makes "propose, don't apply" a runner guarantee
       // rather than prompt wording. The shallow copy is deliberate: the
       // diagnostic prompt is never written back to tasks.prompt (spec §3).
-      const runId = enqueueRunNow(deps.db, { ...taskRow, prompt: promptOverride, permission_mode: 'plan' });
+      const runId = enqueueRunNow(deps.db, { ...taskRow, prompt: promptOverride, permission_mode: 'plan' }, deps.dataDir);
       deps.runManager.pump();
       return runId;
     },
@@ -1063,7 +1063,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       audit('run.enqueue_rejected', 'task', row.id, { code: peGate.code, pairId: peGate.pairId, pairStatus: peGate.pairStatus });
       return reply.code(409).send(peGate);
     }
-    const runId = enqueueRunNow(deps.db, row);
+    const runId = enqueueRunNow(deps.db, row, deps.dataDir);
     audit('run.enqueue', 'run', runId, { taskId: row.id, taskName: row.name, via: 'run-now' });
     deps.runManager.pump();
     return reply.code(202).send({ runId });
@@ -1216,7 +1216,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       const peGate = planExecuteGate(taskRow.id, 'run');
       if (peGate) return respond(409, peGate, false, peGate.code);
 
-      const runId = enqueueRunNow(deps.db, taskRow);
+      const runId = enqueueRunNow(deps.db, taskRow, deps.dataDir);
       // Stash the event payload into the run's spec so prompts can use {{event.*}}.
       try {
         const specRow = deps.db.prepare('SELECT jobspec_json FROM runs WHERE id=?').get(runId) as any;
@@ -3468,10 +3468,26 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
   return { app, token, sseClients };
 }
 
-/** FR-5: manual run-now — ad-hoc runs recorded like scheduled ones. */
-export function enqueueRunNow(db: DB, taskRow: any): string {
+/**
+ * FR-5: manual run-now — ad-hoc runs recorded like scheduled ones.
+ *
+ * @param dataDir T1-15: the resolved data dir (`ApiDeps.dataDir`) that the
+ *   run's worktree and scratch paths are built under. Every in-file call
+ *   passes `deps.dataDir` explicitly. Optional, and defaulting to the exact
+ *   formula main.ts uses to resolve it, only because pause.test.ts,
+ *   analytics.test.ts, workforce-api.test.ts and report-verdict-update.test.ts
+ *   still call this on the pre-T1-15 2-arg signature and are outside this
+ *   change's touch set. A bare `process.env.HOME` fallback would silently
+ *   reintroduce the bug for THIS caller; mirroring main.ts's resolution
+ *   instead keeps it correct even for the callers this fix could not reach.
+ */
+export function enqueueRunNow(
+  db: DB,
+  taskRow: any,
+  dataDir: string = process.env.CLOCKWORK_HOME ?? `${process.env.HOME}/.clockwork`,
+): string {
   const now = Date.now();
-  const spec = jobSpecForTask(db, taskRow, now);
+  const spec = jobSpecForTask(db, taskRow, now, dataDir);
   db.prepare(
     `INSERT INTO runs (id, task_id, jobspec_json, state, state_changed_at, scheduled_for) VALUES (?, ?, ?, 'queued', ?, ?)`,
   ).run(spec.runId, taskRow.id, JSON.stringify(spec), now, now);
@@ -3479,7 +3495,7 @@ export function enqueueRunNow(db: DB, taskRow: any): string {
   return spec.runId;
 }
 
-function jobSpecForTask(db: DB, taskRow: any, now: number) {
+function jobSpecForTask(db: DB, taskRow: any, now: number, dataDir: string) {
   const profile = taskRow.profile_id ? (db.prepare('SELECT * FROM profiles WHERE id=?').get(taskRow.profile_id) as any) : null;
   const slug = slugify(taskRow.name);
   const runId = newId();
@@ -3496,9 +3512,9 @@ function jobSpecForTask(db: DB, taskRow: any, now: number) {
     budget: { maxUsd: taskRow.budget_usd, maxTurns: taskRow.max_turns, timeoutSec: taskRow.timeout_sec },
     repoPath: taskRow.repo_path ?? null,
     baseBranch: taskRow.base_branch ?? null,
-    worktreePath: `${process.env.HOME ?? '~'}/.clockwork/worktrees/${slug}/${runId}`,
+    worktreePath: `${dataDir}/worktrees/${slug}/${runId}`,
     branch: branchFor(slug, runId),
-    scratchPath: taskRow.repo_path ? null : `${process.env.HOME ?? '~'}/.clockwork/scratch/${runId}`,
+    scratchPath: taskRow.repo_path ? null : `${dataDir}/scratch/${runId}`,
     profile: profile
       ? {
           id: profile.id,
