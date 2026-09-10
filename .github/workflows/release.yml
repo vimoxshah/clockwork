@@ -27,6 +27,15 @@ jobs:
   dmg:
     name: dmg (${{ matrix.dmg_arch }})
     runs-on: macos-14 # Apple Silicon; the x64 leg cross-compiles from here
+    # T1-1: hoisted to JOB level on purpose. A step's `if:` is evaluated before
+    # that step's own `env:` block exists, so `if: env.APPLE_CERT_P12 != ''`
+    # beside a step-level `env: APPLE_CERT_P12: ${{ secrets... }}` reads an
+    # empty string and the step ALWAYS SKIPS — silently, and identically
+    # whether or not a certificate is configured. Every release so far was
+    # unsigned for that reason as much as for the missing certificate, and
+    # adding the secret alone would not have changed it.
+    env:
+      APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
     strategy:
       # One leg failing must not cancel the other. They produce different
       # artifacts, and the surviving leg's log is how you tell "the cross
@@ -207,6 +216,16 @@ jobs:
         env:
           # Only set signing vars when APPLE_CERTIFICATE is actually configured;
           # empty-string vars make Tauri attempt a keychain import that fails.
+          #
+          # T1-1 WARNING — TWO NAMES, BOTH REQUIRED. The step above imports the
+          # certificate when the SECRET `APPLE_CERT_P12` is present; this step
+          # decides whether to sign from the VARIABLE `APPLE_CERTIFICATE`. They
+          # are different things with different names, so setting only the
+          # secret imports a certificate and then builds unsigned anyway, and
+          # the log says "No signing certificate configured" while one sits in
+          # the keychain. Configuring signing means setting BOTH, plus the
+          # variable APPLE_SIGNING_IDENTITY. Left as two gates rather than
+          # unified because no run here can verify a change to it.
           APPLE_CERTIFICATE: ${{ vars.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY || '-' }}
