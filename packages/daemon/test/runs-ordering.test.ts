@@ -9,6 +9,17 @@
  *
  * The COALESCE also defeated every index, because it is not sargable, so each
  * call sorted the whole table.
+ *
+ * AND THE DEFECT WAS WIDER THAN THE TRAY SYMPTOM. All four INSERT INTO runs
+ * paths — `api.ts` enqueueRunNow, `run-manager.ts` chain-fire, `scheduler.ts`
+ * insertRunRow, `main.ts`'s hazard placeholder — write a non-null
+ * `scheduled_for`. So the COALESCE resolved to `scheduled_for` for every row
+ * ever written, and `state_changed_at` was dead weight in the expression.
+ * That means two FINISHED runs were ordered by when they were BOOKED, not by
+ * when they finished — so a run-late or long-queued run appeared out of order
+ * in plain history, with no future booking involved at all. The last test
+ * below is the one that catches that half; the fixture in the first test
+ * cannot, because there the two timestamps agree.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
@@ -65,6 +76,16 @@ describe('a future booking never outranks a run that already happened', () => {
     seed('r-mid', 'completed', NOW - 2 * DAY, NOW - 2 * DAY, NOW - 2 * DAY);
     seed('r-new', 'completed', NOW - DAY, NOW - DAY, NOW - DAY);
     expect(runs.list({ limit: 50 }).map((r) => r.id)).toEqual(['r-new', 'r-mid', 'r-old']);
+  });
+
+  it('orders two finished runs by when they FINISHED, not by when they were booked', () => {
+    // The half the tray symptom hid. Booked in one order, finished in the
+    // other: r-late was booked first but ran late, so it finished last.
+    // Under the old COALESCE this returned ['r-early', 'r-late'] — plain
+    // history in the wrong order, no future booking anywhere in the fixture.
+    seed('r-late', 'completed', NOW - 1 * DAY, NOW - 9 * DAY, NOW - 1 * DAY);
+    seed('r-early', 'completed', NOW - 5 * DAY, NOW - 8 * DAY, NOW - 5 * DAY);
+    expect(runs.list({ limit: 50 }).map((r) => r.id)).toEqual(['r-late', 'r-early']);
   });
 
   it('holds the same order when the list is filtered to one task', () => {
