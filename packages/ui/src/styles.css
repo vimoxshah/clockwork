@@ -16,7 +16,11 @@
   --surface-active: #1f2536;
   --fg: #e9ebf3;
   --muted: #9ba1b6;
-  --dim: #838ba4; /* WCAG AA on dark surface (was #6a7189 = 3.58:1) */
+  /* AA against the WORST surface it lands on, not the default one. The
+     previous value cleared 5.22:1 on --surface and exactly 4.50:1 on
+     --surface-active — the selected persona card — where antialiasing
+     measured it at 4.38:1. Checked against all three surfaces. */
+  --dim: #8b93ab; /* worst case 4.98:1 on --surface-active */
   --border: #232a3d;
   --border-strong: #2a3247;
 
@@ -51,11 +55,21 @@
   --surface-active: #e4e7ee;
   --fg: #191d27;
   --muted: #575e70;
-  --dim: #667082; /* WCAG AA on light surface (was #868da0 = 3.32:1) */
+  /* Same fix, and light was further out: #667082 cleared 4.99:1 on white
+     but only 4.03:1 on --surface-active. The audit runs in dark mode, so
+     it never saw this one — found by checking the token against every
+     surface rather than the one the failing screenshot happened to use. */
+  --dim: #5c6474; /* worst case 4.81:1 on --surface-active */
   --border: #e2e5ec;
   --border-strong: #ccd1dc;
 
-  --accent: #b57308; /* darkened brass for contrast on white */
+  /* The old value said "darkened brass for contrast on white" and did not
+     reach it: #b57308 is 3.87:1 on white and 3.13:1 on --surface-active,
+     so accent text failed AA on EVERY light surface, not just the busy
+     ones. Found because the a11y sweep clicks the Tasks disclosure and
+     the pointer stays on it, so :hover was the state that got measured —
+     3.62:1 against --bg. Checked against all four light surfaces now. */
+  --accent: #8a5806; /* worst case 4.88:1 on --surface-active */
   --accent-fg: #ffffff;
 
   --success: #178a48;
