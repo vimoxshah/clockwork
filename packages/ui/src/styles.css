@@ -495,7 +495,15 @@ label.f { display: block; color: var(--muted); font-size: 12px; margin: 12px 0 4
   background: color-mix(in srgb, var(--bg) 88%, transparent);
   backdrop-filter: blur(6px);
 }
-.tasklist { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 10px; }
+/* T1-14: 380px gave four columns at 1600px, and a card that narrow could not
+   hold a task name, its outcome chip and three buttons without wrapping into
+   an unreadable stack. 440px gives three, which fits the content the T4-5
+   redesign put in a row. Measured against a real render, not guessed. */
+.tasklist { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: 10px; }
+.task-row-title { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.task-row-name { overflow-wrap: anywhere; }
+.task-row-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.task-row-chips:empty { display: none; }
 .tasklist .tasklist-row { margin-bottom: 0; height: 100%; flex-wrap: wrap; }
 @media (max-width: 860px) { .tasklist { grid-template-columns: 1fr; } }
 

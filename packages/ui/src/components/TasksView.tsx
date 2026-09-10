@@ -697,8 +697,14 @@ function TaskRow({
   return (
     <div className="tasklist-row" data-testid={gate ? 'task-row-execute-half' : 'task-row'}>
       <div className="grow">
-        <strong>
-          {task.name}{' '}
+        {/* T1-14: the chips used to sit inline INSIDE the <strong>, so a card
+            narrower than the title wrapped mid-phrase — "Nightly security
+            scan last: Completed" broke across three lines. Name on its own
+            row, chips on a second row that wraps as a group. Caught by
+            looking at a rendered screenshot; jsdom cannot see it. */}
+        <strong className="task-row-title">
+          <span className="task-row-name">{task.name}</span>
+          <span className="task-row-chips">
           {lastOutcome && (
             <span className={`chip ${chipFor(lastOutcome.state)}`} data-testid="last-outcome">
               last: {stateLabel(lastOutcome.state)}
@@ -710,6 +716,7 @@ function TaskRow({
             !task.enabled && <span className="chip failed">paused</span>
           )}
           {role === 'plan' && <span className="chip">plan half</span>}
+          </span>
         </strong>
         <div className="hint" style={{ margin: 0 }}>
           next {task.enabled ? (task.nextFire ? humanNextFire(task.nextFire) : '—') : '—'}
