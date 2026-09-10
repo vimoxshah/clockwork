@@ -91,7 +91,36 @@ export const RunReport = z.object({
   endedAt: z.number().nullable(),
   ranLateMs: z.number().nonnegative().default(0), // S-10 banner data
   coveredOccurrences: z.array(z.number()).default([]), // S-11 coalescing disclosure
-  sleptThroughKeepAwake: z.boolean().default(false), // S-16 note
+  /**
+   * S-16 / T1-9. How long this Mac was ASLEEP inside the run's window, in ms.
+   * Produced by `KeepAwake.sleepDuring()`; see its docstring for the method.
+   *
+   * Three states, and the third is the point of the field:
+   *   `undefined` — NOBODY CHECKED. Off macOS, or a run this daemon never
+   *                 observed (recovered after a restart), or a report written
+   *                 before T1-9. Not a claim that the Mac stayed awake.
+   *   `0`         — watched end to end, no sleep found.
+   *   `> 0`       — frozen for at least this long. It is a floor: the
+   *                 sampler subtracts one scheduled interval from each gap.
+   *
+   * `.optional()` and not `.default(0)`, for the reason spelled out at length
+   * on `proposedEvents` below — RunReport is the zod OUTPUT type, so a default
+   * makes the key REQUIRED on every report literal and writes a value into
+   * `report_json` for every run. Here that written value would be the very
+   * lie the field exists to stop telling.
+   */
+  sleptDuringRunMs: z.number().nonnegative().optional(),
+  /**
+   * The boolean face of `sleptDuringRunMs`, kept because the README and the
+   * S-16 note both name it. Same three states; `undefined` = not checked.
+   *
+   * DO NOT RENDER OFF THIS FIELD. Until T1-9 it was `.default(false)` and
+   * `run-manager.finalize()` wrote a literal `false` on every run without
+   * ever computing it, so every report stored before then carries a `false`
+   * that means "nobody looked". `sleptDuringRunMs` is absent on all of those,
+   * which is why readers key off that one instead.
+   */
+  sleptThroughKeepAwake: z.boolean().optional(),
   approvals: z.array(ApprovalRecord).default([]),
   timeline: z.array(TimelineEntry).default([]),
   deliveries: z.array(DeliveryReceipt).default([]),

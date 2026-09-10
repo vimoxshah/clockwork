@@ -69,7 +69,18 @@ export interface RunManagerDeps {
   notify(kind: string, title: string, body: string): void;
   broadcast(event: Record<string, unknown>): void;
   safetyJournal: SafetyJournal;
-  keepAwake?: { arm(key: string, durationSec: number): boolean; release(key: string): void };
+  /**
+   * `observe`/`sleepDuring` (T1-9) are optional on top of an already-optional
+   * dep so the `{ arm, release }` stubs in existing tests still typecheck.
+   * The real `KeepAwake` main.ts constructs implements all four, so the wiring
+   * needs no edit there.
+   */
+  keepAwake?: {
+    arm(key: string, durationSec: number): boolean;
+    release(key: string): void;
+    observe?(key: string, wallNow: number): void;
+    sleepDuring?(key: string): number | null;
+  };
   /** bundled skill pack resolver (T-112) */
   resolveSkill?: (ref: { name: string; version: string }) => string | null;
   /** F4 sentinel-worker (plan/AGENT-WORKFORCE-SPEC.md): called after every run
@@ -268,6 +279,11 @@ export class RunManager {
     if (spec.repoPath) this.repoMutex.set(spec.repoPath, row.id);
     // FR-25/S-15: arm keep-awake across the run's wall-clock budget
     this.deps.keepAwake?.arm(row.id, spec.budget.timeoutSec + 300);
+    // T1-9's sleep window is NOT opened here, next to arm(). Everything below
+    // — prompt rendering, preflight, `git worktree add` — sits between this
+    // line and the first watchdog tick, so a slow repo's setup would land in
+    // the first sampled gap and read as a sleep. It is opened in spawnChild,
+    // beside the watchdog that samples it.
 
     try {
       // Event placeholders (goal #27): materialize {{event.*}} from a trigger
@@ -445,6 +461,16 @@ export class RunManager {
       }
     });
 
+    // T1-9: open the sleep window HERE, on the last line before the watchdog
+    // that samples it, and with a FRESH clock read — `now` is the timestamp
+    // startRun took before preflight and `git worktree add`, and seeding with
+    // it would charge that setup to the first sampled gap. Nothing may await
+    // between this line and the setInterval below, or the same gap reopens.
+    //
+    // Not gated on arm()'s return, deliberately: arm() declines on battery,
+    // and a laptop on battery is the machine most likely to sleep.
+    this.deps.keepAwake?.observe?.(runId, this.deps.clock.now());
+
     // watchdogs
     const watchdog = setInterval(() => {
       const r = this.getRun(runId);
@@ -453,6 +479,11 @@ export class RunManager {
         return;
       }
       const now2 = this.deps.clock.now();
+      // T1-9: sample BEFORE the heartbeat check. A sleep longer than
+      // HEARTBEAT_GAP_MS makes this very tick kill the run as `runner_crashed`
+      // on wake, and that report is the one that most needs to be able to say
+      // why. Sampling afterwards would lose the gap that caused the kill.
+      this.deps.keepAwake?.observe?.(runId, now2);
       if (r.heartbeat_at && now2 - r.heartbeat_at > HEARTBEAT_GAP_MS) {
         clearInterval(watchdog);
         this.killGroupIdentityVerified(r); // S-32
@@ -752,6 +783,14 @@ export class RunManager {
     // each title/notes itself.
     const proposals = extractProposedEvents(typeof outcome.summary === 'string' ? outcome.summary : '', now);
 
+    // T1-9: how long this Mac was asleep inside the run's window. `null` means
+    // nobody could know — off macOS, or a run this process never observed —
+    // and it must stay `undefined` in the report rather than collapse to
+    // `false`. This line used to be a literal `false` on every run, which is
+    // how the report came to deny the one failure the README warns about
+    // hardest. Read BEFORE the release() below, which drops the window.
+    const sleptMs = this.deps.keepAwake?.sleepDuring?.(runId) ?? null;
+
     const report: RunReport = {
       runId,
       taskId: spec.taskId,
@@ -779,7 +818,8 @@ export class RunManager {
       endedAt: now,
       ranLateMs: r.occurrence_at && r.started_at ? Math.max(0, r.started_at - r.occurrence_at - GRACE_NOTE_TOLERANCE_MS) : 0,
       coveredOccurrences: this.coveredOccurrences(r.schedule_id),
-      sleptThroughKeepAwake: false,
+      sleptDuringRunMs: sleptMs ?? undefined,
+      sleptThroughKeepAwake: sleptMs === null ? undefined : sleptMs > 0,
       approvals: this.approvalsFor(runId).map((a) => ({
         id: a.id,
         kind: a.kind as 'permission' | 'question',

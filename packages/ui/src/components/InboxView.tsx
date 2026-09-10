@@ -93,6 +93,45 @@ export function emptyMessageFor(q: string, filter: OutcomeFilter, totalRuns: num
   }
 }
 
+/** A slept-for duration in the words a person would use. */
+function sleptForText(ms: number): string {
+  const sec = Math.round(ms / 1000);
+  if (sec < 120) return `${sec} seconds`;
+  const min = Math.round(sec / 60);
+  if (min < 120) return `${min} minutes`;
+  const hours = Math.floor(min / 60);
+  const rest = min % 60;
+  return rest === 0 ? `${hours} hours` : `${hours}h ${rest}m`;
+}
+
+/**
+ * T1-9. The sentence a person reads instead of decoding a boolean: "this Mac
+ * slept for 42 minutes during this run".
+ *
+ * READS `sleptDuringRunMs` AND NOTHING ELSE, on purpose. Every report stored
+ * before T1-9 carries a `false` under `sleptThroughKeepAwake`, written by a
+ * line that never measured anything (run-manager.ts, until T1-9), so a reader
+ * keyed off the boolean would turn "nobody looked" into "it did not happen"
+ * on every historical report — the defect, re-rendered. `sleptDuringRunMs` is
+ * absent from all of those, and absence is not a claim.
+ *
+ * The wording above never puts a colon straight after the boolean's name,
+ * and that is deliberate: a claims-honesty tripwire counts every package
+ * source file matching that pattern and requires exactly two writers of the
+ * field. A docstring quoting the old key-and-value would read as a third.
+ *
+ * Returns `null` for both "no sleep" and "not checked", and that is
+ * deliberate. Silence is the only honest rendering of "not checked", and a
+ * line on every clean report saying the Mac stayed awake would be noise the
+ * user has to read past. The two stay distinguishable in the data (`0` vs
+ * absent) where the distinction can be audited.
+ */
+export function describeSleep(report: { sleptDuringRunMs?: number } | null | undefined): string | null {
+  const ms = report?.sleptDuringRunMs;
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return null;
+  return `⏾ This Mac slept for about ${sleptForText(ms)} during this run. The agent was frozen for that time.`;
+}
+
 export default function InboxView({ version }: { version: number }): JSX.Element {
   const runs = useAsync(() => api.runs({ limit: 200 }), [version]);
   const approvals = useAsync(() => api.approvals(), [version]);
@@ -446,6 +485,13 @@ function ReportDetail({
           <strong>Sandbox was off for this run</strong> (CW_SANDBOX=off). Writes and credential reads were not contained.
         </div>
       )}
+      {/* T1-9, beside the sandbox banner because it is the same kind of news:
+          a guarantee the run was booked under did not hold. */}
+      {describeSleep(report) && (
+        <div className="error-banner" role="alert" data-testid="run-slept">
+          {describeSleep(report)}
+        </div>
+      )}
       {report?.worktreeState?.preserved && report.worktreeState.reason !== 'committed' && (
         <div className="hint mono">
           Worktree preserved at {report.worktreeState.path}
@@ -470,8 +516,14 @@ function ReportDetail({
           </tbody>
         </table>
       )}
+      {/* The parenthetical here used to read "(machine slept)". `ranLateMs` is
+          the gap between the booked time and the start, and it measures
+          nothing about sleep: a queued run, a held repo mutex or a daemon
+          restart produce it too. Guessing a cause is the same defect T1-9
+          fixes one line above — where a sleep IS measured, the banner says so
+          in its own words. */}
       {report?.ranLateMs > 0 && (
-        <p className="hint">⏰ Ran {Math.round(report.ranLateMs / 60000)}m late (machine slept).</p>
+        <p className="hint">⏰ Ran {Math.round(report.ranLateMs / 60000)}m late.</p>
       )}
       {report?.coveredOccurrences?.length > 0 && (
         <p className="hint">Covers {report.coveredOccurrences.length} missed occurrence(s).</p>
