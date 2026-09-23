@@ -8,6 +8,28 @@ is a red build here, not a marketing choice.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] — 2026-09-23
+
+### Added
+
+- **Keyboard-first inbox triage.** `j`/`k` move between runs, `e` expands the
+  transcript, `x` closes — no mouse needed, ignored while typing.
+- **Virtualized report transcripts.** Long transcripts render as a windowed
+  diff list instead of one giant block: measured 117.6 fps average, p95
+  9.2 ms, 42 live DOM rows for a 10,000-line transcript at 1440×900.
+- **Mesh pairing foundation** (library only, no UI yet): single-use,
+  10-minute, Ed25519 peer-bound pairing nonces over a new `pairing_tokens`
+  table — the substrate multi-machine workers will use. Nothing books or
+  consumes a pairing today.
+- **Containment argv proofs.** Docker's resource caps are now unit-proven on
+  the real spawn path, and a Linux bubblewrap/systemd profile builder ships
+  with its deny-shape tests. Task-level Docker target selection is still not
+  wired: no task runs in Docker yet.
+
+### Fixed
+
+- Nothing user-facing this release; see Added.
+
 ## [0.12.1] — 2026-09-10
 
 ### Fixed
