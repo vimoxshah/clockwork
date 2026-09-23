@@ -10,7 +10,7 @@ cask "clockwork" do
   # Homebrew's own cop enforces (rubocops/cask/constants/stanza.rb).
   arch arm: "aarch64", intel: "x64"
 
-  version "0.12.1"
+  version "0.13.0"
   # The intel digest is a PLACEHOLDER, and deliberately 64 zeroes rather than
   # prose. No Intel DMG exists yet — v0.11.0, v0.11.1 and v0.11.2 each
   # published aarch64 only — and the first one comes out of the next tag built
@@ -24,8 +24,8 @@ cask "clockwork" do
   # `packaging/stage-release.sh` cannot fill it in yet: it hashes the aarch64
   # DMG only, and its sed matches `^  sha256 "` — a single digest at two-space
   # indent — so against the two-digest form below it silently changes nothing.
-  sha256 arm:   "fecea5550d2b8c69ae9bf7dcb9d08426b41cbfe8c4aa00db88c2bf62e1c95455",
-         intel: "8cfaca686d059298ce9871130998f96611fd113a5c54e2077e90ac6a088fbf5a"
+  sha256 arm:   "b7c609f724d2f0c694610b579935c93cf98e3edc2265c35f0d4cea44c166136e",
+         intel: "cf5d0d827dec32f9f03ffb278ce5308684d9f043315952ac84cbfbcc3037e02c"
 
   # Straight from the GitHub release, which is where the artifact and its
   # published checksum canonically live. It used to point at the marketing
