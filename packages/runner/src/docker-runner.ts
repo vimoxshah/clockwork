@@ -43,24 +43,36 @@ export async function isDockerAvailable(): Promise<boolean> {
   });
 }
 
-export function runInDocker(opts: DockerExecOptions): Promise<DockerExecResult> {
-  const log = opts.onLog ?? (() => {});
+/** Round6-B. Pure argv builder so caps are unit-provable without a daemon. */
+export function buildDockerArgs(opts: DockerExecOptions): string[] {
   const args = [
     'run',
     '--rm',
-    '--network', opts.network ?? 'none',
-    '-v', `${opts.workspace}:/workspace`,
-    '-w', '/workspace',
-    '--memory', `${opts.memoryMb ?? 2048}m`,
-    '--cpus', String(opts.cpus ?? 2),
-    '--pids-limit', String(opts.pidsLimit ?? 256),
-    '--security-opt', 'no-new-privileges',
+    '--network',
+    opts.network ?? 'none',
+    '-v',
+    `${opts.workspace}:/workspace`,
+    '-w',
+    '/workspace',
+    '--memory',
+    `${opts.memoryMb ?? 2048}m`,
+    '--cpus',
+    String(opts.cpus ?? 2),
+    '--pids-limit',
+    String(opts.pidsLimit ?? 256),
+    '--security-opt',
+    'no-new-privileges',
   ];
   for (const [k, v] of Object.entries(opts.env ?? {})) {
     args.push('-e', `${k}=${v}`);
   }
-  // split shell command through sh for portability across images
   args.push(opts.image, '/bin/sh', '-c', opts.command);
+  return args;
+}
+
+export function runInDocker(opts: DockerExecOptions): Promise<DockerExecResult> {
+  const log = opts.onLog ?? (() => {});
+  const args = buildDockerArgs(opts);
 
   return new Promise((resolve) => {
     const child = spawn('docker', args, { stdio: ['ignore', 'pipe', 'pipe'] });

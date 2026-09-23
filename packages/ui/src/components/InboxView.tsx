@@ -14,6 +14,7 @@ import { ProposedEvents } from './ProposedEvents';
 import { OutcomeControls } from './OutcomeControls';
 import { ApprovalCard } from './ApprovalCard';
 import { APPROVALS_SURFACE } from './ApprovalCard';
+import UnifiedDiff, { type DiffLine } from './UnifiedDiff';
 import { ProofOfWorkExport } from './ProofOfWorkExport';
 import { TaskMemoryPanel } from './TaskMemoryPanel';
 import { chipFor, stateLabel } from '../lib/runState';
@@ -424,6 +425,32 @@ export default function InboxView({ version }: { version: number }): JSX.Element
       setLastRead(ts);
     }
   };
+
+  // Keyboard-only triage (Round 4C): j/k move, e expands transcript,
+  // s marks read, x closes. Ignored inside inputs so typing never triages.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const idx = visibleRuns.findIndex((r) => r.id === selected);
+      if (e.key === 'j') {
+        const next = visibleRuns[Math.min(visibleRuns.length - 1, (idx < 0 ? -1 : idx) + 1)];
+        if (next) selectRun(next.id);
+      } else if (e.key === 'k') {
+        const prev = visibleRuns[Math.max(0, (idx < 0 ? 1 : idx) - 1)];
+        if (prev) selectRun(prev.id);
+      } else if (e.key === 'x') {
+        setSelected(null);
+      } else if (e.key === 's') {
+        if (selected) selectRun(selected);
+      } else if (e.key === 'e') {
+        document.querySelector<HTMLButtonElement>('[data-testid="transcript-toggle"]')?.click();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [visibleRuns, selected]);
 
   const markAllRead = (): void => {
     const now = Date.now();
@@ -1088,16 +1115,29 @@ function ReportDetail({
 
       {tr.data?.available && (
         <div className="transcript">
-          <button className="btn small" onClick={() => setShowTr((s) => !s)}>
+          <button className="btn small" data-testid="transcript-toggle" onClick={() => setShowTr((s) => !s)}>
             {showTr ? 'Hide transcript' : `Show transcript (${tr.data.totalLines ?? '?'} lines)`}
           </button>
-          {showTr && <pre>{tr.data.lines.join('\n')}</pre>}
+          {showTr && <TranscriptDiff lines={tr.data.lines} />}
         </div>
       )}
 
       {!active && <ProofOfWorkExport runId={runId} />}
     </>
   );
+}
+
+/** Transcript as virtualized diff rows: one ctx row per line, memoized. */
+function TranscriptDiff({ lines }: { lines: string[] }): JSX.Element {
+  const diffLines = useMemo<DiffLine[]>(
+    () =>
+      lines.map((text) => ({
+        kind: text.startsWith('+') ? 'add' : text.startsWith('-') ? 'del' : 'ctx',
+        text,
+      })),
+    [lines],
+  );
+  return <UnifiedDiff lines={diffLines} />;
 }
 
 /** How much of a run's output the tail holds. Older lines live in the journal. */

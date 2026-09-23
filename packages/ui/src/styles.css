@@ -608,3 +608,13 @@ label.f { display: block; color: var(--muted); font-size: 12px; margin: 12px 0 4
 
 /* Agents page: use the full width; 3-up cards from ~1200px, 2-up below. */
 .agents-page { width: 100%; max-width: none; }
+
+/* UnifiedDiff (Round 4C): virtualized rows, content-visibility keeps
+   off-screen rows out of layout without unmounting the window. */
+.ud-scroll { border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+.ud-row { display: flex; gap: 8px; padding: 1px 8px; min-height: 22px; content-visibility: auto; contain-intrinsic-size: auto 22px; }
+.ud-gutter { min-width: 3.5em; text-align: right; color: var(--dim); user-select: none; }
+.ud-add { background: rgba(75, 201, 127, 0.08); }
+.ud-del { background: rgba(224, 92, 92, 0.08); }
+.ud-hunk { color: var(--info); font-weight: 600; }
+.ud-active { outline: 1px solid var(--accent); outline-offset: -1px; }
