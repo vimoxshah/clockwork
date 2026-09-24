@@ -237,6 +237,13 @@ html, body { height: 100%; overflow: hidden; }
   border: none; cursor: pointer; width: 100%;
 }
 button.cal-event:hover { filter: brightness(1.12); }
+/* P2 drag/drop: a dragged booking keeps its chip; valid/invalid targets get
+   an inset outline in the outcome colour, never a layout shift. */
+button.cal-event[draggable="true"] { cursor: grab; }
+button.cal-event[draggable="true"]:active { cursor: grabbing; }
+.cal-cell.drop-ok, .week-col.drop-ok { box-shadow: 0 0 0 1.5px var(--ev-completed-fg) inset; }
+.cal-cell.drop-bad, .week-col.drop-bad { box-shadow: 0 0 0 1.5px var(--ev-failed-fg) inset; }
+.drop-preview { font-style: italic; }
 .cal-event.st-completed { background: var(--ev-completed-bg); color: var(--ev-completed-fg); }
 .cal-event.st-failed { background: var(--ev-failed-bg); color: var(--ev-failed-fg); }
 .cal-event.st-running { background: var(--ev-running-bg); color: var(--ev-running-fg); }

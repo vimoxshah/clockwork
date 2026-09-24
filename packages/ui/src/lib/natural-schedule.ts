@@ -96,8 +96,8 @@ function assertTz(tz: string): boolean {
   }
 }
 
-/** Wall-clock parts of an instant in tz. */
-function wallInTz(ms: number, tz: string): { y: number; mo: number; d: number; h: number; mi: number; jsDay: number } {
+/** Wall-clock parts of an instant in tz. Exported for drag/drop, same frame. */
+export function wallInTz(ms: number, tz: string): { y: number; mo: number; d: number; h: number; mi: number; jsDay: number } {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: tz,
     year: 'numeric',

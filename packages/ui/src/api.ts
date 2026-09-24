@@ -666,6 +666,16 @@ export const api = {
    */
   previewSchedule: (s: unknown) => req<SchedulePreviewT>('POST', '/schedule/preview', s),
   patchTask: (id: string, p: unknown) => req<TaskViewT>('PATCH', `/tasks/${id}`, p),
+  /**
+   * A task's raw schedule for drag/drop moves (P2). TaskViewT carries only
+   * nextFire, so the mover reads kind + rule + zone + the version CAS here,
+   * then writes back through patchTask. Same auth as everything else.
+   */
+  taskSchedule: (id: string) =>
+    req<{ kind: 'once' | 'rrule' | 'cron' | 'queue'; rrule: string | null; cron: string | null; runAt: number | null; tz: string; version: number }>(
+      'GET',
+      `/tasks/${id}/schedule`,
+    ),
   deleteTask: (id: string) => req<{ deleted: boolean }>('DELETE', `/tasks/${id}`),
   runNow: (id: string) => req<{ runId: string }>('POST', `/tasks/${id}/run-now`),
   calendar: (from: number, to: number) =>

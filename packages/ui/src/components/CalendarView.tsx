@@ -43,6 +43,7 @@ import {
 } from '../calendar';
 import type { CalendarDayT, CalendarDetailT, CalendarEvent, CalendarLimitsT } from '../api';
 import { chipFor, stateLabel } from '../lib/runState';
+import { useTaskDrag } from './useTaskDrag';
 
 const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const MAX_PER_CELL = 4;
@@ -207,6 +208,10 @@ export default function CalendarView({
    * two sources of truth for "which day" is a desync waiting to happen.
    */
   const [dayDialogOpen, setDayDialogOpen] = useState(false);
+  // P2 move tick: refreshes the grid fetch after a drop without touching the
+  // App-level version (a move is not a new booking). Beside the other state,
+  // ahead of the fetch that reads it.
+  const [moveTick, setMoveTick] = useState(0);
 
   /**
    * The seven days Week mode draws. The title, the fetch window and the columns
@@ -248,7 +253,7 @@ export default function CalendarView({
   // Month and week need events for their named chips; a year needs counts.
   const cal = useAsync(
     () => (mode === 'year' ? Promise.resolve(null) : api.calendar(range.from, range.to)),
-    [mode, range.from, range.to, version],
+    [mode, range.from, range.to, version, moveTick],
   );
   const yearDays = useAsync(
     () => (mode === 'year' ? api.calendarDays(range.from, range.to) : Promise.resolve(null)),
@@ -281,6 +286,17 @@ export default function CalendarView({
     for (const [, arr] of map) arr.sort((a, b) => a.at - b.at);
     return map;
   }, [cal.data]);
+
+  // The mover lives beside the only data it reads (eventsByDay for the
+  // drop-day conflict count). Everything else it needs comes through its
+  // own chip/cell prop builders.
+  const mover = useTaskDrag({
+    onMoved: () => setMoveTick((t) => t + 1),
+    countOthers: (dayTs, taskId) => {
+      const arr = eventsByDay.get(dayTs) ?? [];
+      return arr.filter((e) => e.kind === 'booking' && e.taskId !== taskId).length;
+    },
+  });
 
   const setModePersist = (m: CalMode): void => {
     localStorage.setItem('clockwork.calview', m);
@@ -349,6 +365,9 @@ export default function CalendarView({
     });
   };
 
+  // Drag/drop moves (P2): booking chips are the sources, month cells and week
+  // columns the targets. The tick above refreshes the grid after a move.
+
   return (
     <div>
       <div className="cal-toolbar">
@@ -396,6 +415,43 @@ export default function CalendarView({
       )}
 
       <TruncationNotice limits={limits} />
+      <p className="hint" style={{ margin: '4px 0 0' }}>
+        Tip: drag a booking chip onto another day to reschedule it. Keyboard or touch? Edit the
+        schedule in Tasks, or type it in New task — drag has no keyboard equivalent by nature.
+      </p>
+
+      {mover.notice && (
+        <div
+          className={mover.notice.ok ? 'ok-banner' : 'error-banner'}
+          role={mover.notice.ok ? 'status' : 'alert'}
+          data-testid="move-notice"
+        >
+          {mover.notice.text}{' '}
+          {mover.notice.ok && mover.undo && (
+            <>
+              <button className="btn small" data-testid="move-undo" onClick={mover.doUndo}>
+                Undo
+              </button>{' '}
+            </>
+          )}
+          <button className="btn small" onClick={mover.dismissNotice}>
+            Dismiss
+          </button>
+        </div>
+      )}
+      {mover.undo && !mover.notice && (
+        <div className="tasklist-row" data-testid="move-undo-standalone">
+          <div className="grow">
+            Moved “{mover.undo.name}” — still undoable:{' '}
+            <button className="btn small" data-testid="move-undo" onClick={mover.doUndo}>
+              Undo
+            </button>{' '}
+            <button className="btn small" onClick={mover.dismissNotice}>
+              Keep it
+            </button>
+          </div>
+        </div>
+      )}
 
       {!source.loading && !source.error && (
         <div className={`cal-wrap ${selectedTs == null ? 'no-side' : ''}`}>
@@ -421,6 +477,9 @@ export default function CalendarView({
                     setDayDialogOpen(true);
                   }}
                   onEvent={(e) => setDetailEvent(e)}
+                  drop={mover.cellDrop(c.ts)}
+                  preview={mover.preview && mover.preview.ts === c.ts ? mover.preview : null}
+                  chipDrag={mover.chipDrag}
                 />
               ))}
             </div>
@@ -429,14 +488,21 @@ export default function CalendarView({
               <div className="week-grid">
                 {cells.map((c) => {
                   const evs = eventsByDay.get(c.ts) ?? [];
+                  const colDrop = mover.cellDrop(c.ts);
+                  const colPreview = mover.preview && mover.preview.ts === c.ts ? mover.preview : null;
                   return (
                     <div
                       key={c.ts}
-                      className={`week-col ${c.isToday ? 'today' : ''}`}
+                      className={`week-col ${c.isToday ? 'today' : ''} ${colPreview && colPreview.tone !== 'neutral' ? (colPreview.tone === 'ok' ? 'drop-ok' : 'drop-bad') : ''}`}
                       onClick={() => setSelectedTs(c.ts)}
                       role="button"
                       tabIndex={0}
                       onKeyDown={(e) => e.key === 'Enter' && setSelectedTs(c.ts)}
+                      data-testid="week-col"
+                      data-ts={c.ts}
+                      onDragOver={colDrop.onDragOver}
+                      onDragLeave={colDrop.onDragLeave}
+                      onDrop={colDrop.onDrop}
                     >
                       <div className="daynum" style={{ fontWeight: c.isToday ? 700 : 400 }}>
                         {new Date(c.ts).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' })}
@@ -448,15 +514,26 @@ export default function CalendarView({
                             className={`cal-event ${ev.kind === 'run' ? stateClass(ev.state) : ev.kind === 'human' ? 'human' : 'booking'}`}
                             style={chipStyle(ev)}
                             data-projected={ev.kind === 'booking' ? String(ev.projected === true) : undefined}
-                            title={`${timeLabel(ev.at)} · ${ev.name}${ev.kind === 'run' ? '' : ` — ${kindLabel(ev)}`}`}
-                            aria-label={`${timeLabel(ev.at)} ${ev.name}${ev.kind === 'run' ? '' : `, ${kindLabel(ev)}`}`}
+                            data-testid={ev.kind === 'booking' ? `booking-chip-${ev.taskId}` : undefined}
+                            title={
+                              ev.kind === 'booking'
+                                ? `${timeLabel(ev.at)} · ${ev.name} — ${kindLabel(ev)}. Drag to move this job.`
+                                : `${timeLabel(ev.at)} · ${ev.name}${ev.kind === 'run' ? '' : ` — ${kindLabel(ev)}`}`
+                            }
+                            aria-label={`${timeLabel(ev.at)} ${ev.name}${ev.kind === 'run' ? '' : ev.kind === 'booking' ? `, ${kindLabel(ev)}. Drag to move this job.` : `, ${kindLabel(ev)}`}`}
                             onClick={(e) => { e.stopPropagation(); setDetailEvent(ev); }}
+                            {...(ev.kind === 'booking' ? mover.chipDrag(ev.taskId, ev.name) : {})}
                           >
                             {timeLabel(ev.at)} {ev.name}
                           </button>
                         ))}
                         {evs.length === 0 && <span className="hint">—</span>}
                       </div>
+                      {colPreview && (
+                        <div className="hint drop-preview" data-testid="drop-preview" style={{ marginTop: 2 }}>
+                          {colPreview.text}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -730,6 +807,9 @@ function MonthCell({
   onSelect,
   onMore,
   onEvent,
+  drop,
+  preview,
+  chipDrag,
 }: {
   cell: GridCell;
   events: CalEvent[];
@@ -737,6 +817,9 @@ function MonthCell({
   onSelect: () => void;
   onMore: () => void;
   onEvent: (e: CalEvent) => void;
+  drop: { onDragOver: (e: React.DragEvent) => void; onDragLeave: () => void; onDrop: (e: React.DragEvent) => void } | null;
+  preview: { text: string; tone: 'ok' | 'bad' | 'neutral' } | null;
+  chipDrag: (taskId: string, name: string) => { draggable: true; onDragStart: (e: React.DragEvent) => void; onDragEnd: () => void };
 }): JSX.Element {
   const shown = events.slice(0, MAX_PER_CELL);
   const hidden = events.length - shown.length;
@@ -748,12 +831,16 @@ function MonthCell({
         !cell.inMonth ? 'other' : '',
         selected ? 'selected' : '',
         events.length === 0 ? 'cal-empty-day' : '',
+        preview && preview.tone !== 'neutral' ? (preview.tone === 'ok' ? 'drop-ok' : 'drop-bad') : '',
       ].join(' ')}
       onClick={onSelect}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => e.key === 'Enter' && onSelect()}
       aria-label={`${cell.year}-${cell.month + 1}-${cell.day}, ${events.length} items`}
+      data-testid="cal-cell"
+      data-ts={cell.ts}
+      {...(drop ?? {})}
     >
       <div className="daynum">{cell.day}</div>
       <div className="events">
@@ -763,12 +850,18 @@ function MonthCell({
             className={`cal-event ${ev.kind === 'run' ? stateClass(ev.state) : ev.kind === 'human' ? 'human' : 'booking'}`}
             style={chipStyle(ev)}
             data-projected={ev.kind === 'booking' ? String(ev.projected === true) : undefined}
-            title={`${timeLabel(ev.at)} · ${ev.name}${ev.state ? ` — ${ev.state}` : ` — ${kindLabel(ev)}`}`}
-            aria-label={`${timeLabel(ev.at)} ${ev.name}${ev.state ? `, ${ev.state}` : `, ${kindLabel(ev)}`}`}
+            data-testid={ev.kind === 'booking' ? `booking-chip-${ev.taskId}` : undefined}
+            title={
+              ev.kind === 'booking'
+                ? `${timeLabel(ev.at)} · ${ev.name} — ${kindLabel(ev)}. Drag to move this job.`
+                : `${timeLabel(ev.at)} · ${ev.name}${ev.state ? ` — ${ev.state}` : ` — ${kindLabel(ev)}`}`
+            }
+                            aria-label={`${timeLabel(ev.at)} ${ev.name}${ev.state ? `, ${ev.state}` : ev.kind === 'booking' ? `, ${kindLabel(ev)}. Drag to move this job.` : `, ${kindLabel(ev)}`}`}
             onClick={(e) => {
               e.stopPropagation();
               onEvent(ev);
             }}
+            {...(ev.kind === 'booking' ? chipDrag(ev.taskId, ev.name) : {})}
           >
             {ev.name}
           </button>
@@ -779,6 +872,11 @@ function MonthCell({
           </button>
         )}
       </div>
+      {preview && (
+        <div className="hint drop-preview" data-testid="drop-preview" style={{ marginTop: 2 }}>
+          {preview.text}
+        </div>
+      )}
     </div>
   );
 }

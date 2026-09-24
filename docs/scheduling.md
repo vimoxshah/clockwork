@@ -188,3 +188,17 @@ Rules the parser holds, in order of surprise:
 - Everything parses in the schedule's timezone, never the machine's;
   the interpretation names the zone.
 - A failed parse touches nothing — the last good builder state stands.
+
+## Moving jobs on the calendar
+
+Booking chips drag onto another day to reschedule: one-offs keep their wall
+time on the new date, single-day weeklies move weekdays, monthlies move
+month-days (1st–28th), and unscheduled queue jobs land as 9:00 AM one-offs.
+The drop preview names the resulting schedule before release; refusing moves
+(daily/interval jobs, multi-day weeklies, cron, past days) say why instead of
+guessing. Most moves offer Undo — queue landings cannot (a queue row holds no
+previous schedule to restore), and Undo refuses when the job changed since the
+move rather than discarding your edit. Moves rewrite the whole series, never one
+occurrence. Keyboard users get the same moves through the task editor and the
+natural-language field — drag has no keyboard equivalent by nature, and touch
+screens are not a supported surface for rescheduling (same paths instead).

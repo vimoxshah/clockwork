@@ -952,6 +952,20 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     return view(row, s?.next_fire ?? null);
   });
 
+  /**
+   * Schedule read for drag/drop moves (P2). TaskViewT carries only nextFire,
+   * so a client that wants to rewrite a schedule needs kind + rule + zone +
+   * the version CAS in one authenticated read. No task fields leak beyond
+   * what GET /tasks already returns.
+   */
+  app.get('/tasks/:id/schedule', async (req, reply) => {
+    const row = tasks.get((req.params as any).id);
+    if (!row) return reply.code(404).send({ error: 'not_found' });
+    const s = tasks.scheduleFor(row.id);
+    if (!s) return reply.code(404).send({ error: 'no_schedule' });
+    return { kind: s.kind, rrule: s.rrule ?? null, cron: s.cron ?? null, runAt: s.run_at ?? null, tz: s.tz, version: row.version };
+  });
+
   app.patch('/tasks/:id', async (req, reply) => {
     const parsed = TaskPatch.safeParse(req.body);
     if (!parsed.success) {
