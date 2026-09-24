@@ -26,6 +26,7 @@ import {
   type IntervalMinutes, type Weekday,
 } from '../lib/schedule-rule';
 import { NextRunsPanel } from './NextRunsPanel';
+import NlScheduleField from './NlScheduleField';
 
 /**
  * The RRULE/cron picker lives here, not on the calendar (which only
@@ -911,6 +912,12 @@ export default function ComposerView({
               />
 
               <div className="mt-3 rounded-lg border border-border bg-bg p-3">
+                <NlScheduleField
+                  tz={form.tz}
+                  onApply={(applied) =>
+                    setForm((f) => (applied.kind === 'once' ? { ...f, kind: 'once', runAt: applied.runAt } : { ...f, ...applied }))
+                  }
+                />
                 {form.kind === 'once' && (
                   <>
                     <Label htmlFor="c-when">Run at</Label>

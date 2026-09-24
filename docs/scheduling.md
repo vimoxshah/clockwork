@@ -167,3 +167,24 @@ Clockwork arms a macOS power assertion before scheduled runs **when plugged
 in**. Closing the lid on battery defeats it — the OS wins, and the report says
 "slept through keep-awake". For true overnight jobs use an always-on machine.
 We market what is true.
+
+## Natural-language scheduling
+
+The composer's Schedule section takes plain text — "every Mon 2am",
+"weekdays at 9", "monthly on the 15th", "tomorrow 9am" — parses it live, and
+writes the result into the same builder the tabs use. The interpretation,
+its confidence, and every assumption ("Assumed 9:00 AM") print beside the
+field; the Next Runs panel previews exactly what Book-it will save.
+
+Rules the parser holds, in order of surprise:
+
+- Only composer shapes come out (daily/weekly/monthly/interval grids the
+  emitter already produces). "Every other Monday", "hourly", "every March"
+  and day-of-month 29–31 refuse with guidance instead of approximating.
+- A bare singular day ("Friday at 5pm") is a one-off, not a weekly rule —
+  recurrence needs every/each, a plural, or a list.
+- A bare 1–5 with no meridiem ("Friday at 5") refuses and asks AM or PM.
+  6–11 default to AM; both are stated on screen either way.
+- Everything parses in the schedule's timezone, never the machine's;
+  the interpretation names the zone.
+- A failed parse touches nothing — the last good builder state stands.
