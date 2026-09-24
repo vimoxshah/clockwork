@@ -175,7 +175,7 @@ export function requiresAuth(rawUrl: string): boolean {
   for (const url of spellings) {
     const needsAuth =
       /^\/(tasks|runs|approvals|profiles|search|widget|queue|onboarding|pause-all|resume|capacity)/.test(url) ||
-      /^\/(analytics|retention|audit|policies|capabilities|targets|byok|delivery-config|triggers|trigger-events|ics|usage)/.test(url) ||
+      /^\/(analytics|retention|audit|policies|capabilities|targets|byok|delivery-config|github|triggers|trigger-events|ics|usage)/.test(url) ||
       /^\/(license|support|auth)\//.test(url) || // S-review: control plane + diagnostics must not be anonymous
       /^\/(calendars|templates)\//.test(url) || // S-audit: ICS export leaks task data; template preview is control plane
       /^\/fs\//.test(url) || // /fs/browse discloses directory AND file names under $HOME — never anonymous
@@ -2793,6 +2793,92 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       const msg = e instanceof Error ? e.message : String(e);
       return reply.send({ ok: false, error: msg.slice(0, 200) });
     }
+  });
+
+  // ---- GitHub PAT for one-click PRs (P0, PAT-only by product decision) ----
+  //
+  // Custody follows the delivery credentials exactly: write-only through the
+  // API, 0600 file via writeDeliveryCreds, CLOCKWORK_DELIVER_GITHUB_PAT env
+  // bridge free, masked read-back, value never in any audit payload, log, or
+  // task row. The PAT is used only in an Authorization header and a transient
+  // git extraHeader — never persisted into git config, never runner-visible.
+  app.get('/github/status', async () => {
+    const creds = loadDeliveryCreds(deps.dataDir);
+    return { configured: !!creds.githubPat };
+  });
+
+  app.put('/github/pat', async (req, reply) => {
+    const PatSchema = z.object({ pat: z.union([z.string().min(10), z.null()]) });
+    const parsed = PatSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(422).send({ error: 'validation' });
+    writeDeliveryCreds(deps.dataDir, { githubPat: parsed.data.pat });
+    audit('github-pat.update', 'github-pat', undefined, {
+      githubPat: parsed.data.pat === null ? 'cleared' : 'set',
+    });
+    const creds = loadDeliveryCreds(deps.dataDir);
+    return { configured: !!creds.githubPat };
+  });
+
+  app.post('/github/validate', async (req, reply) => {
+    const creds = loadDeliveryCreds(deps.dataDir);
+    if (!creds.githubPat) return reply.send({ ok: false, error: 'no_pat', message: 'No GitHub PAT saved — paste one in Settings → GitHub first.' });
+    const { validatePat, scrub } = await import('./github-pr.js');
+    const r = await validatePat(creds.githubPat);
+    if (r.ok) {
+      audit('github-pat.validate', 'github-pat', undefined, { ok: 'true', login: r.login });
+      return { ok: true, login: r.login };
+    }
+    audit('github-pat.validate', 'github-pat', undefined, { ok: 'false', reason: r.reason });
+    return reply.send({ ok: false, error: r.reason, message: scrub(creds.githubPat, r.message).slice(0, 200) });
+  });
+
+  app.post('/runs/:id/open-pr', async (req, reply) => {
+    const runId = String((req.params as any).id);
+    const TitleSchema = z.object({ title: z.string().min(1).max(120).optional() });
+    const parsed = TitleSchema.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(422).send({ error: 'validation' });
+    const creds = loadDeliveryCreds(deps.dataDir);
+    if (!creds.githubPat) {
+      return reply.code(422).send({ error: 'no_pat', message: 'No GitHub PAT saved — paste one in Settings → GitHub first.' });
+    }
+    const found = runs.report(runId);
+    if (!found) return reply.code(404).send({ error: 'not_found' });
+    const run = found.run as { branch: string | null; worktree_path: string | null; jobspec_json: string | null };
+    const report = found.reportJson ? (JSON.parse(found.reportJson) as any) : null;
+    const jobspec = run.jobspec_json ? JSON.parse(run.jobspec_json) : {};
+    const branch = run.branch ?? report?.branch ?? null;
+    const { collectPrContext, openPr, scrub } = await import('./github-pr.js');
+    const ctx = collectPrContext({
+      repoPath: jobspec.repoPath ?? null,
+      worktreePath: run.worktree_path ?? report?.worktreeState?.path ?? null,
+      branch,
+      baseBranch: jobspec.baseBranch ?? null,
+    });
+    if (!ctx || !('owner' in ctx)) {
+      const f = ctx as { reason: string; message: string };
+      audit('run.open_pr', 'run', runId, { refused: f.reason });
+      return reply.code(422).send({ error: f.reason, message: f.message });
+    }
+    const r = await openPr(
+      ctx,
+      {
+        pat: creds.githubPat,
+        title: parsed.data.title,
+        summary: report?.summary ?? '',
+        taskName: report?.taskName ?? jobspec.taskName ?? runId,
+        runId,
+        costUsd: report?.costUsd ?? 0,
+        turns: report?.turns ?? 0,
+      },
+    );
+    if (!r.ok) {
+      const f = r as { reason: string; message: string };
+      audit('run.open_pr', 'run', runId, { refused: f.reason });
+      return reply.code(422).send({ error: f.reason, message: scrub(creds.githubPat, f.message).slice(0, 300) });
+    }
+    audit('run.open_pr', 'run', runId, { created: String(r.created), number: String(r.pr.number), url: r.pr.url });
+    broadcast({ type: 'run.pr_opened', runId, number: r.pr.number, url: r.pr.url, created: r.created, at: Date.now() });
+    return reply.code(r.created ? 201 : 200).send({ created: r.created, number: r.pr.number, url: r.pr.url });
   });
 
   // ---- cost & reliability analytics (ADR-029) ----

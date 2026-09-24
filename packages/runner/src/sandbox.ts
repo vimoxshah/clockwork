@@ -46,8 +46,11 @@ export const SANDBOX_PROFILE_VERSION = 2;
  * Deliberately NARROW. A blanket deny on ~/.clockwork would break every run:
  * worktrees live under ~/.clockwork/worktrees and journals under
  * ~/.clockwork/runs, so the agent must still read its own workspace. Only the
- * token and the database are denied — an agent has no legitimate reason to
- * read either.
+ * token, the database, and the delivery credential file are denied — an agent
+ * has no legitimate reason to read any of them. delivery-creds.json joined
+ * this list with one-click PRs (P0): it now holds a repo-write GitHub PAT
+ * beside the Telegram/SMTP secrets, and a run that could cat it could push
+ * to the user's repos.
  */
 const dataDir = process.env.CLOCKWORK_HOME ?? `${os.homedir()}/.clockwork`;
 export const CONTROL_PLANE_PATHS = [
@@ -55,6 +58,7 @@ export const CONTROL_PLANE_PATHS = [
   `${dataDir}/clockwork.sqlite`,
   `${dataDir}/clockwork.sqlite-wal`,
   `${dataDir}/clockwork.sqlite-shm`,
+  `${dataDir}/delivery-creds.json`,
 ];
 
 export const CREDENTIAL_PATHS = [

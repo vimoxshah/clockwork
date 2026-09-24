@@ -47,6 +47,7 @@ export const FEATURES: FeatureDef[] = [
   { key: 'policy_engine',       label: 'Policy engine',                category: 'governance', tiers: { free: { available: false }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'enforced' },
   { key: 'webhooks',            label: 'Webhook delivery',             category: 'integrations', tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'available' },
   { key: 'event_triggers',      label: 'Event-triggered agents',       category: 'integrations', tiers: { free: { available: true, limit: '2 triggers' }, pro: { available: true, limit: '50 triggers' }, team: { available: true }, enterprise: { available: true } }, status: 'available' },
+  { key: 'github_pr',           label: 'One-click PRs from reports',    category: 'integrations', tiers: { free: { available: true }, pro: { available: true }, team: { available: true }, enterprise: { available: true } }, status: 'available' },
   // Was `cloud_agents` (Clockwork-hosted execution, planned, team+). Removed:
   // hosted execution was dropped in iteration 3 because a hosted runner needs
   // the user's provider key, negating the keychain promise

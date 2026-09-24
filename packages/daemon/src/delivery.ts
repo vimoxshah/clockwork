@@ -33,6 +33,13 @@ export interface DeliveryConfigCred {
    */
   slackWebhookUrl?: string;
   /**
+   * GitHub PAT for one-click PRs (P0). Same custody as the bot token: 0600
+   * file / CLOCKWORK_DELIVER_GITHUB_PAT env, never in a task row, never in
+   * logs, never runner-visible. Used only in an Authorization header and a
+   * transient git extraHeader — never persisted into any git config.
+   */
+  githubPat?: string;
+  /**
    * WhatsApp/other personal gateways: unused by any adapter, by decision.
    * ADR-018 and `plan/02-architecture.md` §240 define a gateway as any HTTP
    * endpoint that accepts the signed Run Report payload, so a gateway is

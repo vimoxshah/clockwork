@@ -925,6 +925,13 @@ export const api = {
   // stored credential already names the destination.
   testSlack: () => req<{ ok: boolean; error?: string }>('POST', '/delivery-config/test-slack'),
   testSmtp: (to: string) => req<{ ok: boolean; error?: string }>('POST', '/delivery-config/test-smtp', { to }),
+
+  // ---- GitHub PAT for one-click PRs (P0, PAT-only) ----
+  githubStatus: () => req<{ configured: boolean }>('GET', '/github/status'),
+  saveGithubPat: (pat: string | null) => req<{ configured: boolean }>('PUT', '/github/pat', { pat }),
+  validateGithub: () => req<{ ok: boolean; login?: string; error?: string; message?: string }>('POST', '/github/validate'),
+  openPr: (runId: string, title?: string) =>
+    req<{ created: boolean; number: number; url: string }>('POST', `/runs/${runId}/open-pr`, title ? { title } : {}),
 };
 
 export interface EventStream {

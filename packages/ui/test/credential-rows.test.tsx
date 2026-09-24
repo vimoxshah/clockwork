@@ -59,17 +59,18 @@ describe('Settings › Notifications & delivery — credential rows', () => {
     expect(credRowCss).toContain('.act-clear { grid-area: clear; }');
   });
 
-  it('uses the row on all six credentials and leaves .tasklist-row to the Tasks list', () => {
-    expect(VIEW.match(/className="cred-row"/g) ?? []).toHaveLength(6);
+  it('uses the row on all seven credentials and leaves .tasklist-row to the Tasks list', () => {
+    // Seven since the GitHub PAT card (P0) joined Telegram/Slack/SMTP/etc.
+    expect(VIEW.match(/className="cred-row"/g) ?? []).toHaveLength(7);
     // The delivery card is the region between its heading and the next one.
     const card = VIEW.slice(VIEW.indexOf('Telegram bot token'), VIEW.indexOf('Send test email to'));
     expect(card, 'no credential row may still be a tasklist-row').not.toContain('tasklist-row');
   });
 
   it('tags every Save and Clear so they land in a column', () => {
-    expect(VIEW.match(/act-save/g) ?? []).toHaveLength(4);
-    expect(VIEW.match(/act-clear/g) ?? []).toHaveLength(4);
-    expect(VIEW.match(/act-test/g) ?? []).toHaveLength(3);
+    expect(VIEW.match(/act-save/g) ?? []).toHaveLength(5);
+    expect(VIEW.match(/act-clear/g) ?? []).toHaveLength(5);
+    expect(VIEW.match(/act-test/g) ?? []).toHaveLength(4);
   });
 
   it('marks the two test-only rows so they do not sit in an empty Save column', () => {

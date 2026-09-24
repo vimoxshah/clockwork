@@ -42,6 +42,10 @@ registerFeatureSurface({ key: 'quiet_hours', tab: 'settings', where: 'Settings �
 // T1-10: GET/PUT /retention (ADR-031) have been reachable since retention-audit.ts
 // shipped; only the screen was missing (README's Known limits named it API-only).
 registerFeatureSurface({ key: 'retention', tab: 'settings', where: 'Settings › Retention', anchorId: 'retention' });
+// P0: one-click PRs from reports. Daemon route POST /runs/:id/open-pr plus
+// the PAT custody in Settings → GitHub; the matrix ticks only because
+// features.ts carries the matching available/free key.
+registerFeatureSurface({ key: 'github_pr', tab: 'settings', where: 'Settings › GitHub', anchorId: 'github' });
 
 /**
  * T1-6 — "Check for updates" has no entry here on purpose.
@@ -297,6 +301,11 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
       <section className="settings-card settings-card--wide">
       <h3 className="section-title">Notifications &amp; delivery</h3>
       <DeliveryCard version={version} />
+      </section>
+
+      <section className="settings-card settings-card--wide">
+      <h3 className="section-title" id="github">GitHub</h3>
+      <GithubCard version={version} />
       </section>
 
       <section className="settings-card">
@@ -1257,6 +1266,128 @@ export function DeliveryCard({ version }: { version: number }): JSX.Element {
       {smtpMsg && (
         <div className={smtpOk ? 'ok-banner' : 'error-banner'} role={smtpOk ? undefined : 'alert'} data-testid="smtp-result">
           {smtpMsg}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * GitHub PAT for one-click PRs (P0, PAT-only by product decision).
+ *
+ * Same custody contract as every credential on this page: write-only field,
+ * 0600 file, never read back, never handed to a running agent. Validate calls
+ * the saved value against GET /user and shows only the login it answers with.
+ *
+ * Exported for the same reason DeliveryCard is — the UI test drives this card
+ * alone instead of mounting all of Settings.
+ */
+export function GithubCard({ version }: { version: number }): JSX.Element {
+  const st = useAsync(() => api.githubStatus(), [version]);
+  const [pat, setPat] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [validating, setValidating] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [login, setLogin] = useState<string | null>(null);
+  const configured = !!st.data?.configured;
+
+  const save = async (value: string | null): Promise<void> => {
+    setBusy(true);
+    setMsg(null);
+    setErr(null);
+    try {
+      await api.saveGithubPat(value);
+      setPat('');
+      setLogin(null);
+      st.reload();
+      setMsg(value === null ? 'GitHub PAT cleared — one-click PRs are unavailable until a new one is set.' : 'GitHub PAT saved.');
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not save the PAT.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clear = async (): Promise<void> => {
+    if (!confirm('Clear the GitHub PAT? One-click PRs stop working until a new one is set.')) return;
+    await save(null);
+  };
+
+  const validate = async (): Promise<void> => {
+    setValidating(true);
+    setMsg(null);
+    setErr(null);
+    try {
+      const r = await api.validateGithub();
+      if (r.ok) {
+        setLogin(r.login ?? null);
+        setMsg(r.login ? `PAT is valid — GitHub answers as ${r.login}.` : 'PAT is valid.');
+      } else {
+        setErr(r.message ?? r.error ?? 'GitHub did not accept the PAT.');
+      }
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not reach GitHub.');
+    } finally {
+      setValidating(false);
+    }
+  };
+
+  return (
+    <div>
+      <p className="hint" style={{ marginTop: 0 }}>
+        One-click PRs open a pull request from a run&apos;s branch straight from the Inbox.
+        The PAT is used only in an <span className="mono">Authorization</span> header and a transient
+        git push header — never stored in git config, never handed to a running agent, stored on
+        this Mac at file mode 0600. It needs <span className="mono">contents:write</span> on your repos.
+      </p>
+      <div className="cred-row">
+        <label className="f cred-label" htmlFor="gh-pat">GitHub personal access token</label>
+        <input
+          id="gh-pat"
+          className="cred-field"
+          type="password"
+          autoComplete="off"
+          value={pat}
+          onChange={(e) => setPat(e.target.value)}
+          placeholder={configured ? 'configured (paste a new one to replace)' : 'Paste a fine-grained PAT with contents:write'}
+          data-testid="github-pat-input"
+        />
+        <div className="hint cred-hint">
+          {configured ? 'Configured — the value is never shown again.' : 'Not configured — the Inbox Open PR button will refuse until one is set.'}
+        </div>
+        <div className="cred-actions">
+          <button
+            className="btn small primary act-save"
+            disabled={busy || !pat.trim()}
+            onClick={() => void save(pat.trim())}
+            data-testid="github-pat-save"
+          >
+            {busy ? 'Saving…' : 'Save'}
+          </button>
+          <button
+            className="btn small danger act-clear"
+            disabled={busy || !configured}
+            onClick={() => void clear()}
+          >
+            Clear
+          </button>
+          <button
+            className="btn small act-test"
+            disabled={busy || validating || !configured}
+            onClick={() => void validate()}
+            data-testid="github-validate"
+          >
+            {validating ? 'Checking…' : 'Validate'}
+          </button>
+        </div>
+      </div>
+      {login && <div className="ok-banner" data-testid="github-login">GitHub answers as {login}.</div>}
+      {msg && !login && <div className="ok-banner">{msg}</div>}
+      {err && <div className="error-banner" role="alert">{err}</div>}
+      {st.error && (
+        <div className="error-banner" role="alert" data-testid="github-status-error">
+          Couldn’t load GitHub status: {st.error} — saving still works; the configured hint may be stale.
         </div>
       )}
     </div>

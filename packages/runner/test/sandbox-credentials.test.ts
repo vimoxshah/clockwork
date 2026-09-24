@@ -46,6 +46,9 @@ const MUST_BE_DENIED = [
   '.clockwork/clockwork.sqlite',
   '.clockwork/clockwork.sqlite-wal',
   '.clockwork/clockwork.sqlite-shm',
+  // P0: delivery-creds.json now holds a repo-write GitHub PAT beside the
+  // Telegram/SMTP secrets — a run that could cat it could push to repos.
+  '.clockwork/delivery-creds.json',
   '.ssh', '.aws', '.gnupg', '.config/gcloud',
   'Library/Cookies', 'Library/Application Support/Google/Chrome',
   'Library/Application Support/Firefox',

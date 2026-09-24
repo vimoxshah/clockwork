@@ -427,11 +427,22 @@ export default function InboxView({ version }: { version: number }): JSX.Element
   };
 
   // Keyboard-only triage (Round 4C): j/k move, e expands transcript,
-  // s marks read, x closes. Ignored inside inputs so typing never triages.
+  // s marks read, x closes. Ignored inside inputs AND on focused controls:
+  // pressing j while Open PR is focused must not triage the list instead.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      if (
+        t &&
+        (t.tagName === 'INPUT' ||
+          t.tagName === 'TEXTAREA' ||
+          t.tagName === 'SELECT' ||
+          t.tagName === 'BUTTON' ||
+          t.tagName === 'A' ||
+          t.getAttribute?.('role') === 'button' ||
+          t.isContentEditable)
+      )
+        return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const idx = visibleRuns.findIndex((r) => r.id === selected);
       if (e.key === 'j') {
@@ -830,10 +841,10 @@ export function nextCommandsFor(
     });
     out.push({
       id: 'pr',
-      label: 'Open a pull request',
+      label: 'Open a pull request (manual commands)',
       command: `cd ${repoPath} && git push -u origin ${branch} && gh pr create --base ${spec.baseBranch} --head ${branch} --fill`,
       caveat:
-        'Read this one before running it. The run never pushed the branch, and “origin” is an assumption — Clockwork is not told this repository’s remotes.',
+        'The manual path — the Open PR button above does this for you. Read this one before running it. The run never pushed the branch, and “origin” is an assumption — Clockwork is not told this repository’s remotes.',
     });
   }
   return out;
@@ -924,6 +935,9 @@ function ReportActions({
           {c.caveat && <p className="hint">{c.caveat}</p>}
         </div>
       ))}
+      {report?.committedSomething === true && branch && spec.repoPath && (
+        <OpenPrAction runId={run.id} />
+      )}
       <div className="mt-2">
         <button
           className="btn small"
@@ -945,6 +959,134 @@ function ReportActions({
           <button className="btn small" onClick={() => setPendingRunId(bookedRunId)}>
             Open the new run
           </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Daemon refusal codes from POST /runs/:id/open-pr (github-pr.ts
+ * PrFailureReason) rendered as one-line actionable hints. The `req` helper
+ * surfaces only the `error` code on non-2xx, so the human sentence lives
+ * here; the daemon stays the source of truth for the CODE, and an unknown
+ * code falls back to the raw message rather than silence. Keep in sync with
+ * PrFailureReason — the UI test asserts every known code renders a hint.
+ */
+export const OPEN_PR_REASON_HINTS: Record<string, string> = {
+  no_pat: 'No GitHub PAT saved. Set one in Settings → GitHub first.',
+  no_remote: 'This repository has no origin remote to push to.',
+  not_github: 'The origin remote is not on github.com — Clockwork only opens PRs on GitHub.',
+  ssh_origin: 'The remote uses SSH, which the daemon cannot authenticate. Switch it to HTTPS or push manually, then retry.',
+  repo_invalid: 'This run has no usable repository — scratch tasks cannot open PRs.',
+  branch_missing: 'The run branch is gone (pruned or never recorded).',
+  worktree_missing: 'The worktree was pruned and the repo path is gone.',
+  empty_diff: 'The branch has no commits beyond its base — a PR would be empty.',
+  push_failed: 'The push failed. Check network access and remote permissions, then retry.',
+  auth_failed: 'GitHub rejected the push. The PAT may be expired — re-paste it in Settings → GitHub.',
+  network: 'Could not reach GitHub. Check network access and retry.',
+  api_error: 'GitHub refused the request. Retry, and check the repository still exists.',
+};
+
+/**
+ * One-click PR button (P0). Same gate as the branch commands above:
+ * committedSomething, a recorded branch, a repo. States: idle → creating →
+ * created/existing (number + open + copy-link) or the refusal hint above.
+ */
+export function OpenPrAction({ runId }: { runId: string }): JSX.Element {
+  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [result, setResult] = useState<{ created: boolean; number: number; url: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const open = async (): Promise<void> => {
+    setBusy(true);
+    setError(null);
+    setCopied(false);
+    try {
+      const r = await api.openPr(runId);
+      setResult(r);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+      setConfirming(false);
+    }
+  };
+
+  const copyLink = async (): Promise<void> => {
+    if (!result) return;
+    try {
+      await navigator.clipboard.writeText(result.url);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  // The URL arrives from the daemon, which built it from a GitHub API
+  // response — data, not code. The agent-content-escaping tripwire forbids
+  // dynamic href/src outright (a javascript: URL is the one XSS vector React
+  // does not escape away), so the anchor renders only for the exact shape a
+  // PR URL has; anything else is inert text. A compromised daemon answering
+  // with a weaponised URL gets no clickable link.
+  const prUrlOk = !!result && /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+\/?$/.test(result.url);
+
+  return (
+    <div className="report-action mt-2" data-testid="report-action-open-pr" aria-live="polite">
+      {!result && !confirming && (
+        <button
+          className="btn small primary"
+          data-testid="report-action-open-pr-button"
+          disabled={busy}
+          aria-busy={busy}
+          onClick={() => {
+            setConfirming(true);
+            setError(null);
+          }}
+        >
+          Open PR
+        </button>
+      )}
+      {!result && confirming && (
+        <div className="confirm-inline" data-testid="report-action-open-pr-confirm">
+          <p className="hint" style={{ margin: '0 0 8px' }}>
+            Push this run&apos;s branch to origin and open a pull request? Review the diff above first —
+            the pushed commits are exactly the agent&apos;s.
+          </p>
+          <button
+            className="btn small primary"
+            data-testid="report-action-open-pr-confirm-button"
+            disabled={busy}
+            aria-busy={busy}
+            onClick={() => void open()}
+          >
+            {busy ? 'Creating PR…' : 'Push & open PR'}
+          </button>{' '}
+          <button className="btn small" disabled={busy} onClick={() => setConfirming(false)}>
+            Cancel
+          </button>
+        </div>
+      )}
+      {result && (
+        <div className="ok-banner" data-testid="report-action-open-pr-ok">
+          {result.created ? `✓ PR #${result.number} created` : `PR #${result.number} already exists`} —{' '}
+          {prUrlOk ? (
+            <a href={result.url} target="_blank" rel="noreferrer">
+              Open PR
+            </a>
+          ) : (
+            <span>{result.url}</span>
+          )}{' '}
+          <button className="btn small" onClick={() => void copyLink()}>
+            {copied ? 'Copied' : 'Copy link'}
+          </button>
+        </div>
+      )}
+      {error && (
+        <div className="error-banner" role="alert" data-testid="report-action-open-pr-error">
+          Couldn’t open a PR: {OPEN_PR_REASON_HINTS[error] ?? `Unexpected response (${error}). Retry — and report it if it repeats.`}
         </div>
       )}
     </div>
