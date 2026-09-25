@@ -676,6 +676,22 @@ export const api = {
       'GET',
       `/tasks/${id}/schedule`,
     ),
+  // ---- chaining v2 DAG (P3): pipeline view-model + parent edges ----
+  pipeline: (id: string) =>
+    req<{
+      focus: string;
+      nodes: Array<{
+        taskId: string;
+        name: string;
+        enabled: boolean;
+        parents: Array<{ parentId: string; on: string; via: string }>;
+        latestRun: { id: string; state: string; costUsd: number; turns: number } | null;
+        derived: string;
+      }>;
+    }>('GET', `/tasks/${id}/pipeline`),
+  addParent: (id: string, parentId: string, on: string) =>
+    req<{ parentId: string; on: string }>('POST', `/tasks/${id}/parents`, { parentId, on }),
+  removeParent: (id: string, parentId: string) => req<{ removed: boolean }>('DELETE', `/tasks/${id}/parents/${parentId}`),
   deleteTask: (id: string) => req<{ deleted: boolean }>('DELETE', `/tasks/${id}`),
   runNow: (id: string) => req<{ runId: string }>('POST', `/tasks/${id}/run-now`),
   calendar: (from: number, to: number) =>

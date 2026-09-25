@@ -714,9 +714,14 @@ describe('ADR-041 records the enabled-flag hazard as the live route it is', () =
     expect(read('packages/daemon/src/repo.ts'), 'TaskRepo.patch no longer maps the `enabled` column').toMatch(
       /\['enabled', 'enabled'/,
     );
-    expect(read('packages/daemon/src/run-manager.ts'), 'the chain query no longer selects on enabled = 1').toContain(
-      'chain_after = ? AND deleted_at IS NULL AND enabled = 1',
-    );
+    // P3 moved successor selection into chainChildren (union of the column
+    // and edge rows) with the enabled filter applied one step later in
+    // fireChainedTasks — same property, new shape. Pin both halves so a
+    // future refactor that drops either trips here instead of shipping
+    // fire-on-disabled chains.
+    const rm = read('packages/daemon/src/run-manager.ts');
+    expect(rm, 'the firer no longer reads successors through the union helper').toContain('chainChildren(');
+    expect(rm, 'the firer no longer excludes disabled successors').toMatch(/Number\(row\.enabled\) === 1/);
     expect(read('packages/daemon/src/plan-execute.ts'), 'the execute half no longer carries chain_after').toContain(
       'chainAfter: planRow.id',
     );

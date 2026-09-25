@@ -1435,6 +1435,137 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     return { applied: true };
   });
 
+  // ---- chaining v2 DAG (P3) ----
+  //
+  // Edges live in chain_edges; the legacy chain_after column keeps working
+  // beside them (firing reads the union). Parents are managed here, one edge
+  // at a time, each validated against the union cycle rule before it lands.
+  app.post('/tasks/:id/parents', async (req, reply) => {
+    const id = String((req.params as any).id);
+    const row = tasks.get(id);
+    if (!row) return reply.code(404).send({ error: 'not_found' });
+    const parsed = z.object({ parentId: z.string().min(1), on: z.enum(['completed', 'any_terminal']).default('completed') }).safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(422).send({ error: 'validation' });
+    const { validateEdge } = await import('./templates.js');
+    // Validate + insert + RE-validate inside one transaction: two concurrent
+    // POSTs forming a 2-cycle would otherwise both pass validation (each
+    // sees a graph without the other's edge) and both land. The re-check
+    // runs after our own insert, so the loser sees the winner's row and
+    // rolls back with a 409 instead of closing the cycle. Thrown (not
+    // returned) so the transaction rolls back — an Error subclass, because
+    // the lint gate forbids literal throws and a bare return would commit.
+    class ChainRefused extends Error {
+      status = 409;
+      body: unknown;
+      constructor(body: unknown) {
+        super('chain_refused');
+        this.body = body;
+      }
+    }
+    try {
+      const tx = deps.db.transaction(() => {
+        const problem = validateEdge(deps.db, parsed.data.parentId, id, parsed.data.on);
+        if (problem) throw new ChainRefused({ error: 'chain_refused', message: problem });
+        deps.db
+          .prepare('INSERT INTO chain_edges (parent_task_id, child_task_id, on_state, created_at) VALUES (?,?,?,?)')
+          .run(parsed.data.parentId, id, parsed.data.on, Date.now());
+        const recheck = validateEdge(deps.db, parsed.data.parentId, id, parsed.data.on, { forRaceRecheck: true });
+        // A failure here can only be the race above (pre-existing rows were
+        // excluded by the first check, our own row is skipped by the mode) —
+        // report it as refused.
+        if (recheck) throw new ChainRefused({ error: 'chain_refused', message: recheck });
+      });
+      tx();
+    } catch (e: any) {
+      if (e instanceof ChainRefused) return reply.code(e.status).send(e.body);
+      throw e;
+    }
+    audit('chain_edge.add', 'task', id, { parent: parsed.data.parentId, on: parsed.data.on });
+    broadcast({ type: 'task.changed', taskId: id, at: Date.now() });
+    return reply.code(201).send({ parentId: parsed.data.parentId, on: parsed.data.on });
+  });
+
+  app.delete('/tasks/:id/parents/:parentId', async (req, reply) => {
+    const id = String((req.params as any).id);
+    const parentId = String((req.params as any).parentId);
+    if (!tasks.get(id)) return reply.code(404).send({ error: 'not_found' });
+    const r = deps.db.prepare('DELETE FROM chain_edges WHERE parent_task_id=? AND child_task_id=?').run(parentId, id);
+    if (r.changes === 0) return reply.code(404).send({ error: 'not_found' });
+    audit('chain_edge.remove', 'task', id, { parent: parentId });
+    broadcast({ type: 'task.changed', taskId: id, at: Date.now() });
+    return { removed: true };
+  });
+
+  /**
+   * Pipeline view-model for one task: ancestors + descendants through both
+   * chain mechanisms, each with its latest run and a derived display state.
+   * Bounded at 100 nodes — a pathological chain graph must not serialize the
+   * whole task table into one response.
+   *
+   * Derived states: succeeded | failed | skipped | running | waiting |
+   * blocked. `blocked` means no run yet with parents still pending;
+   * `waiting` means no run yet at all (roots) or parents still active.
+   */
+  app.get('/tasks/:id/pipeline', async (req, reply) => {
+    const id = String((req.params as any).id);
+    if (!tasks.get(id)) return reply.code(404).send({ error: 'not_found' });
+    const { chainParents, chainChildren } = await import('./templates.js');
+    const seen = new Map<string, { depth: number }>();
+    const queue: Array<{ taskId: string; depth: number }> = [{ taskId: id, depth: 0 }];
+    while (queue.length > 0 && seen.size < 100) {
+      const cur = queue.shift()!;
+      if (seen.has(cur.taskId)) continue;
+      seen.set(cur.taskId, { depth: cur.depth });
+      if (Math.abs(cur.depth) >= 6) continue;
+      for (const p of chainParents(deps.db, cur.taskId)) {
+        if (!seen.has(p.parentId)) queue.push({ taskId: p.parentId, depth: cur.depth - 1 });
+      }
+      for (const c of chainChildren(deps.db, cur.taskId)) {
+        if (!seen.has(c.childId)) queue.push({ taskId: c.childId, depth: cur.depth + 1 });
+      }
+    }
+    const ACTIVE = new Set(['queued', 'preparing', 'running', 'finalizing', 'waiting_approval']);
+    const nodes = [...seen.keys()].map((taskId) => {
+      const trow = tasks.get(taskId) as any;
+      if (!trow) return null;
+      const parents = chainParents(deps.db, taskId);
+      const run = deps.db
+        .prepare('SELECT id, state, cost_usd, turns, ended_at, started_at FROM runs WHERE task_id=? ORDER BY COALESCE(ended_at, scheduled_for) DESC LIMIT 1')
+        .get(taskId) as any;
+      let derived: string;
+      if (!run) {
+        // No run yet: waiting while any parent is still active, blocked when
+        // the parents settled without firing this child (disabled, gated off,
+        // or never scheduled), waiting for roots with no parents at all.
+        const parentStates = parents.map(
+          (p) =>
+            (deps.db.prepare('SELECT state FROM runs WHERE task_id=? ORDER BY COALESCE(ended_at, scheduled_for) DESC LIMIT 1').get(p.parentId) as any)
+              ?.state ?? null,
+        );
+        derived = parents.length > 0 && !parentStates.some((s) => s !== null && ACTIVE.has(s)) ? 'blocked' : 'waiting';
+      } else if (run.state === 'completed') {
+        derived = 'succeeded';
+      } else if (['failed', 'timed_out', 'budget_exceeded'].includes(run.state)) {
+        derived = 'failed';
+      } else if (['cancelled', 'missed'].includes(run.state)) {
+        derived = 'skipped';
+      } else if (run.state === 'waiting_approval') {
+        derived = 'waiting';
+      } else {
+        derived = 'running';
+      }
+      return {
+        taskId,
+        name: trow.name,
+        enabled: Number(trow.enabled) === 1,
+        parents: parents.map((p) => ({ parentId: p.parentId, on: p.on, via: p.via })),
+        latestRun: run ? { id: run.id, state: run.state, costUsd: run.cost_usd ?? 0, turns: run.turns ?? 0 } : null,
+        derived,
+      };
+    }).filter((n): n is NonNullable<typeof n> => n !== null);
+    return { focus: id, nodes };
+  });
+
   // ---- workforce: repo-jobs (F5) ----
   const { RepoJobs } = await import('./repo-jobs.js');
   const repoJobs = new RepoJobs(deps.db);

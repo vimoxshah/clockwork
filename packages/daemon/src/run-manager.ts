@@ -1014,10 +1014,24 @@ export class RunManager {
   }
 
   /**
-   * Chain firing (S-70/S-71, goal #28): any task with chain_after = completedTaskId
-   * gets enqueued when the upstream run hits its trigger state. The chained run's
-   * prompt is materialized through renderChainPrompt so {{previous.report}} /
-   * {{previous.artifacts}} carry the upstream output forward.
+   * Chain firing (S-70/S-71, goal #28; P3 DAG): successors of the completed
+   * task fire when their gate is satisfied. Two mechanisms, deliberately
+   * different semantics:
+   *
+   * - legacy `chain_after` column: fires on THIS upstream's trigger state
+   *   alone (unchanged shipped behavior — a fan-in through the column fires
+   *   on the first completing parent, not when all are ready).
+   * - `chain_edges` rows: the child fires only when ALL its parents (edges
+   *   plus a legacy parent, if any) satisfy their edge conditions, and only
+   *   when the child has no active run. A retried parent completing again
+   *   re-fires an idle child with the fresh output — that is new output, not
+   *   a duplicate.
+   *
+   * Prompts materialize {{previous.*}} (the completing run, legacy) and
+   * {{runs.<taskId>.*}} (every parent's latest run, explicit). A {{runs.*}}
+   * reference to a non-parent, or to a parent with no runs yet, refuses the
+   * firing with a named reason instead of rendering "(missing)" into an
+   * agent's instructions.
    */
   private async fireChainedTasks(
     runId: string,
@@ -1025,68 +1039,177 @@ export class RunManager {
     terminalState: string,
     now: number,
   ): Promise<void> {
-    const successors = this.deps.db
-      .prepare('SELECT * FROM tasks WHERE chain_after = ? AND deleted_at IS NULL AND enabled = 1')
-      .all(upstreamSpec.taskId) as unknown as Array<Record<string, unknown>>;
-    if (successors.length === 0) return;
-
+    const { renderChainPrompt, upstreamRefs, chainChildren, chainParents, normalizeChainOn, pathExists } = await import('./templates.js');
+    // budget_exceeded counts as a usable finish everywhere chains run: the
+    // run produced output (summary, transcript, possibly commits) before the
+    // cap stopped it, so downstream reads it like a completion. Failed,
+    // timed_out and cancelled carry no such promise and never fire
+    // completed-gated children.
     const triggerOk = terminalState === 'completed' || terminalState === 'budget_exceeded';
     const anyTerminal = ['completed', 'failed', 'timed_out', 'cancelled', 'budget_exceeded'].includes(terminalState);
+    const gateOk = (on: string): boolean => (on === 'any_terminal' ? anyTerminal : triggerOk);
 
-    for (const succ of successors) {
-      const chainOn = String(succ.chain_on ?? 'completed');
-      const shouldFire = chainOn === 'any_terminal' ? anyTerminal : triggerOk;
-      if (!shouldFire) {
-        this.recordEvent(now, runId, 'chain_skipped', {
-          successor: String(succ.id),
-          reason: `upstream ended '${terminalState}', chain_on='${chainOn}'`,
-        });
-        continue;
-      }
-
-      const prevRun = this.deps.db
+    const latestReport = (taskId: string): { report_json: string | null } | undefined =>
+      this.deps.db
         .prepare(
           `SELECT report_json FROM runs WHERE task_id=? ORDER BY COALESCE(ended_at, scheduled_for) DESC LIMIT 1`,
         )
-        .get(upstreamSpec.taskId) as unknown as { report_json: string | null } | undefined;
+        .get(taskId) as unknown as { report_json: string | null } | undefined;
 
-      const { renderChainPrompt, pathExists } = await import('./templates.js');
-      const rawPrompt = String(succ.prompt ?? '');
-      // Only render the template if the successor actually uses placeholders;
-      // otherwise the user's own full prompt stands alone.
-      const materializedPrompt = rawPrompt.includes('{{previous')
-        ? renderChainPrompt(rawPrompt, prevRun)
-        : rawPrompt;
+    const latestState = (taskId: string): string | null => {
+      const r = this.deps.db
+        .prepare(`SELECT state FROM runs WHERE task_id=? ORDER BY COALESCE(ended_at, scheduled_for) DESC LIMIT 1`)
+        .get(taskId) as unknown as { state: string } | undefined;
+      return r?.state ?? null;
+    };
 
-      // Repo preflight for the successor (fail loudly, never half-fire).
-      const repoPath = (succ.repo_path as string | null) ?? '';
-      if (repoPath && !pathExists(repoPath)) {
-        this.failRun(
-          runId,
-          'chain_preflight',
-          `Successor "${succ.name}" repo missing: ${repoPath}`,
-          now,
-        );
+    const childActive = (taskId: string): boolean =>
+      !!(this.deps.db
+        .prepare(`SELECT id FROM runs WHERE task_id=? AND state IN ('queued','preparing','running','finalizing','waiting_approval') LIMIT 1`)
+        .get(taskId) as unknown as { id: string } | undefined);
+
+    // Dedupe: a child reachable through both mechanisms fires once, through
+    // the edge path (all-parents semantics) when it has edge parents.
+    const seen = new Set<string>();
+    const successors = chainChildren(this.deps.db, upstreamSpec.taskId).filter((s) => {
+      const row = this.deps.db.prepare('SELECT enabled FROM tasks WHERE id=?').get(s.childId) as any;
+      return row && Number(row.enabled) === 1;
+    });
+    if (successors.length === 0) return;
+
+    for (const succ of successors) {
+      if (seen.has(succ.childId)) continue;
+      seen.add(succ.childId);
+      const taskRow = this.deps.db.prepare('SELECT * FROM tasks WHERE id=?').get(succ.childId) as unknown as Record<string, unknown>;
+      if (!taskRow) continue;
+      const rawPrompt = String(taskRow.prompt ?? '');
+
+      if (succ.via === 'column') {
+        // Legacy path, byte-for-byte the old semantics (including the
+        // 'success'-as-completed normalization, now in one place).
+        if (!gateOk(normalizeChainOn((taskRow as any).chain_on ?? 'completed'))) {
+          this.recordEvent(now, runId, 'chain_skipped', {
+            successor: succ.childId,
+            reason: `upstream ended '${terminalState}', chain_on='${(taskRow as any).chain_on ?? 'completed'}'`,
+          });
+          continue;
+        }
+        const materializedPrompt = rawPrompt.includes('{{previous')
+          ? renderChainPrompt(rawPrompt, latestReport(upstreamSpec.taskId))
+          : rawPrompt;
+        this.enqueueChainedRun(taskRow, materializedPrompt, runId, upstreamSpec, terminalState, now, pathExists);
         continue;
       }
 
-      const spec = this.buildChainedSpec(succ as unknown as Record<string, unknown>, runId, materializedPrompt, now);
-      // Carry the upstream event context (if any) so {{event.*}} still resolves
-      // in chained successors fired by a trigger.
-      const upEv = (upstreamSpec as unknown as { event?: unknown }).event;
-      if (upEv) (spec as unknown as { event?: unknown }).event = upEv;
-      this.deps.db
-        .prepare(
-          `INSERT INTO runs (id, task_id, jobspec_json, state, state_changed_at, scheduled_for) VALUES (?, ?, ?, 'queued', ?, ?)`,
-        )
-        .run(spec.runId, succ.id, JSON.stringify(spec), now, now);
-      this.recordEvent(now, spec.runId, 'state_changed', {
-        to: 'queued',
-        via: 'chain',
-        upstreamRunId: runId,
-        upstreamState: terminalState,
-      });
+      // Edge path: every parent must satisfy its own edge condition.
+      const parents = chainParents(this.deps.db, succ.childId);
+      const parentStates = new Map(parents.map((p) => [
+        p.parentId,
+        p.parentId === upstreamSpec.taskId ? terminalState : latestState(p.parentId),
+      ] as const));
+      const gateHit = (on: string, st: string | null): boolean =>
+        st !== null && (on === 'any_terminal'
+          ? ['completed', 'failed', 'timed_out', 'cancelled', 'budget_exceeded'].includes(st)
+          : st === 'completed' || st === 'budget_exceeded');
+      const unready = parents.filter((p) => !gateHit(p.on, parentStates.get(p.parentId) ?? null));
+      if (unready.length > 0) {
+        const waiting = unready.filter((p) => parentStates.get(p.parentId) === null);
+        this.recordEvent(now, runId, waiting.length > 0 ? 'chain_waiting' : 'chain_skipped', {
+          successor: succ.childId,
+          reason:
+            waiting.length > 0
+              ? `waiting on ${waiting.map((p) => p.parentId).join(',')} — no runs yet`
+              : `gate failed for ${unready.map((p) => p.parentId).join(',')}`,
+        });
+        continue;
+      }
+      if (childActive(succ.childId)) {
+        // No transaction around this check: none is needed. Past the single
+        // `await import` at the top of this function, the per-successor path
+        // (check → render → insert, all synchronous better-sqlite3) runs to
+        // completion without yielding, so two parents finalizing "together"
+        // still execute sequentially — the second sees the first's queued row.
+        // True parallelism would need threads, which this process has none of.
+        this.recordEvent(now, runId, 'chain_skipped', {
+          successor: succ.childId,
+          reason: 'child already has an active run — not double-firing',
+        });
+        continue;
+      }
+      // Validate {{runs.*}} references before execution: unknown ids and
+      // parents with no runs yet refuse loudly here, never as agent input.
+      const refs = upstreamRefs(rawPrompt);
+      const parentIds = new Set(parents.map((p) => p.parentId));
+      const badRef = refs.find((id) => !parentIds.has(id));
+      if (badRef) {
+        this.recordEvent(now, runId, 'chain_skipped', {
+          successor: succ.childId,
+          reason: `references unknown upstream task '${badRef}' — not a parent of this task`,
+        });
+        continue;
+      }
+      const upstreamByTask = new Map<string, { report_json: string | null } | undefined>();
+      const missing: string[] = [];
+      for (const p of parents) {
+        const rep = latestReport(p.parentId);
+        if (!rep) missing.push(p.parentId);
+        upstreamByTask.set(p.parentId, rep);
+      }
+      const missingReferenced = missing.filter((id) => refs.includes(id));
+      if (missingReferenced.length > 0) {
+        this.recordEvent(now, runId, 'chain_skipped', {
+          successor: succ.childId,
+          reason: `references tasks with no runs yet: ${missingReferenced.join(',')}`,
+        });
+        continue;
+      }
+      const materializedPrompt =
+        rawPrompt.includes('{{previous') || rawPrompt.includes('{{runs.')
+          ? renderChainPrompt(rawPrompt, latestReport(upstreamSpec.taskId), 12_000, upstreamByTask)
+          : rawPrompt;
+      this.enqueueChainedRun(taskRow, materializedPrompt, runId, upstreamSpec, terminalState, now, pathExists);
     }
+  }
+
+  /** Shared tail of both firing paths: preflight, insert, event. */
+  private enqueueChainedRun(
+    taskRow: Record<string, unknown>,
+    materializedPrompt: string,
+    runId: string,
+    upstreamSpec: JobSpec,
+    terminalState: string,
+    now: number,
+    pathExists: (p: string) => boolean,
+  ): void {
+    // Repo preflight for the successor (fail loudly, never half-fire). This
+    // records an event on the UPSTREAM run and notifies — failRun() would be
+    // a no-op here because the upstream run is already terminal, which used
+    // to drop the successor silently.
+    const repoPath = (taskRow.repo_path as string | null) ?? '';
+    if (repoPath && !pathExists(repoPath)) {
+      this.recordEvent(now, runId, 'chain_skipped', {
+        successor: String(taskRow.id),
+        reason: `successor repo missing: ${repoPath}`,
+      });
+      this.deps.notify('chain_preflight', 'Chained task not fired', `Successor "${taskRow.name}" repo missing: ${repoPath}`);
+      return;
+    }
+    const spec = this.buildChainedSpec(taskRow, runId, materializedPrompt, now);
+    // Carry the upstream event context (if any) so {{event.*}} still resolves
+    // in chained successors fired by a trigger.
+    const upEv = (upstreamSpec as unknown as { event?: unknown }).event;
+    if (upEv) (spec as unknown as { event?: unknown }).event = upEv;
+    this.deps.db
+      .prepare(
+        `INSERT INTO runs (id, task_id, jobspec_json, state, state_changed_at, scheduled_for) VALUES (?, ?, ?, 'queued', ?, ?)`,
+      )
+      .run(spec.runId, taskRow.id, JSON.stringify(spec), now, now);
+    this.recordEvent(now, spec.runId, 'state_changed', {
+      to: 'queued',
+      via: 'chain',
+      upstreamRunId: runId,
+      upstreamState: terminalState,
+    });
   }
 
   /** Build a JobSpec for a chain-triggered task (reuses scheduler's builder). */

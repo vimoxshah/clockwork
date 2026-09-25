@@ -28,6 +28,14 @@ describe('agent chains', () => {
       id TEXT PRIMARY KEY, task_id TEXT, state TEXT, report_json TEXT,
       scheduled_for INTEGER, started_at INTEGER, ended_at INTEGER
     )`);
+    // P3: the union readers (chainParents/chainChildren) query this table
+    // unconditionally — a hand schema without it no longer represents a real
+    // database. Mirrors 0013_chain_edges.sql.
+    db.exec(`CREATE TABLE chain_edges (
+      parent_task_id TEXT NOT NULL, child_task_id TEXT NOT NULL,
+      on_state TEXT NOT NULL DEFAULT 'completed', created_at INTEGER NOT NULL,
+      PRIMARY KEY (parent_task_id, child_task_id)
+    )`);
   });
 
   const addTask = (id: string, opts: { chainAfter?: string; chainOn?: string; enabled?: number; repoPath?: string } = {}): void => {

@@ -199,17 +199,131 @@ export function validateChain(db: DB, taskId: string, chainAfter: string | null)
   if (existingChild) {
     return `task "${chainAfter}" already has a chained successor (${(existingChild as any).id}); a task can have only one`;
   }
-  // walk up from chainAfter; cycle => reject
-  let cur = chainAfter;
-  const seen = new Set<string>([taskId]);
-  for (let i = 0; i < 1000; i++) {
-    if (seen.has(cur)) return 'chain cycle detected';
-    seen.add(cur);
-    const row = db.prepare('SELECT chain_after FROM tasks WHERE id=?').get(cur) as any;
-    if (!row) return 'predecessor task not found or deleted';
-    if (!row.chain_after) break;
-    cur = row.chain_after;
+  // Union walk from chainAfter: follow ALL parent links (column + edges).
+  // HOLE1 was here — the old walk saw only chain_after, so an edge A→B plus
+  // PATCH B.chain_after=A admitted a cycle neither check refused. Reaching
+  // taskId through any mixture of links is a cycle. The depth cap refuses
+  // rather than passes: a chain too deep to verify is not verified.
+  {
+    // Seed EMPTY: pre-seeding taskId would mark the very node we are looking
+    // for as already visited, and the pop-time check would never fire — every
+    // real cycle would pass as acyclic.
+    const seenU = new Set<string>();
+    const stack = [chainAfter];
+    for (let i = 0; i < 10000 && stack.length > 0; i++) {
+      const c = stack.pop()!;
+      if (c === taskId) return 'chain cycle detected';
+      if (seenU.has(c)) continue;
+      seenU.add(c);
+      const r = db.prepare('SELECT chain_after FROM tasks WHERE id=?').get(c) as any;
+      if (!r) return 'predecessor task not found or deleted';
+      for (const p of chainParents(db, c)) {
+        if (!seenU.has(p.parentId)) stack.push(p.parentId);
+      }
+    }
+    if (stack.length > 0) return 'chain graph too deep to verify — refusing rather than passing';
   }
+  return null;
+}
+
+export type ChainEdgeOn = 'completed' | 'any_terminal';
+
+/** Normalize the chain_on vocabulary drift: legacy rows carry 'success'
+ *  (the pre-zod default); the firing rule treats it as 'completed'. One
+ *  place, so the route, the firer and the viz can never disagree. */
+export function normalizeChainOn(v: unknown): ChainEdgeOn {
+  return v === 'any_terminal' ? 'any_terminal' : 'completed';
+}
+
+/** Parents of a task through BOTH mechanisms: legacy column + edge rows. */
+export function chainParents(db: DB, childId: string): Array<{ parentId: string; on: ChainEdgeOn; via: 'column' | 'edge' }> {
+  const out: Array<{ parentId: string; on: ChainEdgeOn; via: 'column' | 'edge' }> = [];
+  const seen = new Set<string>();
+  const alive = (id: string): boolean =>
+    !!(db.prepare('SELECT id FROM tasks WHERE id=? AND deleted_at IS NULL').get(id) as any);
+  // Deletes are soft (deleted_at), so edge rows outlive their tasks unless
+  // filtered here — an unfiltered deleted parent would block fan-in forever
+  // and pollute the pipeline graph with a task that no longer exists.
+  const col = db.prepare('SELECT chain_after, chain_on FROM tasks WHERE id=? AND deleted_at IS NULL').get(childId) as any;
+  if (col?.chain_after && alive(col.chain_after)) {
+    seen.add(col.chain_after);
+    out.push({ parentId: col.chain_after, on: normalizeChainOn(col.chain_on), via: 'column' });
+  }
+  const rows = db.prepare('SELECT parent_task_id, on_state FROM chain_edges WHERE child_task_id=?').all(childId) as any[];
+  for (const r of rows) {
+    if (seen.has(r.parent_task_id) || !alive(r.parent_task_id)) continue;
+    seen.add(r.parent_task_id);
+    out.push({ parentId: r.parent_task_id, on: normalizeChainOn(r.on_state), via: 'edge' });
+  }
+  return out;
+}
+
+/** Children of a task through BOTH mechanisms. */
+export function chainChildren(db: DB, parentId: string): Array<{ childId: string; on: ChainEdgeOn; via: 'column' | 'edge' }> {
+  const out: Array<{ childId: string; on: ChainEdgeOn; via: 'column' | 'edge' }> = [];
+  const seen = new Set<string>();
+  const cols = db.prepare('SELECT id, chain_on FROM tasks WHERE chain_after=? AND deleted_at IS NULL').all(parentId) as any[];
+  for (const c of cols) {
+    seen.add(c.id);
+    out.push({ childId: c.id, on: normalizeChainOn(c.chain_on), via: 'column' });
+  }
+  const rows = db
+    .prepare(
+      `SELECT e.child_task_id, e.on_state FROM chain_edges e
+       JOIN tasks t ON t.id = e.child_task_id AND t.deleted_at IS NULL
+       WHERE e.parent_task_id = ?`,
+    )
+    .all(parentId) as any[];
+  for (const r of rows) {
+    if (seen.has(r.child_task_id)) continue;
+    seen.add(r.child_task_id);
+    out.push({ childId: r.child_task_id, on: normalizeChainOn(r.on_state), via: 'edge' });
+  }
+  return out;
+}
+
+/**
+ * P3: validate one DAG edge. The union graph (chain_after links + edge rows)
+ * must stay acyclic: the edge parent→child is refused when child can already
+ * reach parent. Linear validateChain above is unchanged for the column.
+ *
+ * `forRaceRecheck` runs the SAME checks minus the duplicate probes: after
+ * our own INSERT the row exists by construction, so a dup hit would be our
+ * own reflection. Only the cycle walk can still fail — which is exactly the
+ * concurrent-writer case the recheck exists for.
+ */
+export function validateEdge(db: DB, parentId: string, childId: string, on: unknown, opts?: { forRaceRecheck?: boolean }): string | null {
+  if (parentId === childId) return 'a task cannot depend on itself';
+  if (on !== 'completed' && on !== 'any_terminal') return "on must be 'completed' or 'any_terminal'";
+  const alive = (id: string): boolean =>
+    !!(db.prepare('SELECT id FROM tasks WHERE id=? AND deleted_at IS NULL').get(id) as any);
+  if (!alive(parentId)) return 'parent task not found or deleted';
+  if (!alive(childId)) return 'child task not found or deleted';
+  const dup = !opts?.forRaceRecheck
+    ? (db.prepare('SELECT 1 FROM chain_edges WHERE parent_task_id=? AND child_task_id=?').get(parentId, childId) as any)
+    : null;
+  if (dup) return 'that dependency already exists';
+  const col = !opts?.forRaceRecheck
+    ? (db.prepare('SELECT chain_after FROM tasks WHERE id=?').get(childId) as any)
+    : null;
+  if (col?.chain_after === parentId) return 'that dependency already exists as the chained successor';
+  // Reachability downstream from the child through the union graph: adding
+  // parent→child closes a cycle exactly when the parent is already reachable
+  // from the child (child → … → parent). Walking parents here would answer
+  // the wrong question and admit every real cycle.
+  const seen = new Set<string>();
+  const stack = [childId];
+  for (let i = 0; i < 10000 && stack.length > 0; i++) {
+    const cur = stack.pop()!;
+    if (cur === parentId) return 'that dependency would close a chain cycle';
+    if (seen.has(cur)) continue;
+    seen.add(cur);
+    for (const c of chainChildren(db, cur)) {
+      if (!seen.has(c.childId)) stack.push(c.childId);
+    }
+  }
+  // Fail closed like validateChain: exhaustion is unverified, not acyclic.
+  if (stack.length > 0) return 'chain graph too deep to verify — refusing rather than passing';
   return null;
 }
 
@@ -218,28 +332,86 @@ export function renderChainPrompt(
   promptTemplate: string,
   previousRun: { report_json: string | null } | undefined,
   budgetChars = 12_000,
+  upstreamByTask?: Map<string, { report_json: string | null } | undefined>,
 ): string {
-  if (!promptTemplate.includes('{{previous')) return promptTemplate;
-  let block = '(no previous run output available)';
-  if (previousRun?.report_json) {
-    try {
-      const r = JSON.parse(previousRun.report_json);
-      block = r.summary ?? '';
-      const artifacts = r.artifacts ?? [];
-      if (artifacts.length) block += `\nArtifacts: ${artifacts.join(', ')}`;
-      if (block.length > budgetChars) {
-        block = `${block.slice(0, budgetChars)}… [truncated to fit context budget]`;
-      }
-    } catch {}
-  }
-  return promptTemplate.replace(/\{\{previous\.report\}\}/g, block).replace(/\{\{previous\.artifacts\}\}/g, () => {
-    try {
-      const r = previousRun?.report_json ? JSON.parse(previousRun.report_json) : { artifacts: [] };
-      return (r.artifacts ?? []).join(', ') || '(none)';
-    } catch {
-      return '(none)';
+  let out = promptTemplate;
+  if (out.includes('{{previous')) {
+    let block = '(no previous run output available)';
+    if (previousRun?.report_json) {
+      try {
+        const r = JSON.parse(previousRun.report_json);
+        block = r.summary ?? '';
+        const artifacts = r.artifacts ?? [];
+        if (artifacts.length) block += `\nArtifacts: ${artifacts.join(', ')}`;
+        if (block.length > budgetChars) {
+          block = `${block.slice(0, budgetChars)}… [truncated to fit context budget]`;
+        }
+      } catch {}
     }
-  });
+    out = out.replace(/\{\{previous\.report\}\}/g, block).replace(/\{\{previous\.artifacts\}\}/g, () => {
+      try {
+        const r = previousRun?.report_json ? JSON.parse(previousRun.report_json) : { artifacts: [] };
+        return (r.artifacts ?? []).join(', ') || '(none)';
+      } catch {
+        return '(none)';
+      }
+    });
+  }
+  // P3: explicit upstream binding {{runs.<taskId>.report}} /
+  // {{runs.<taskId>.artifacts}}. Each id resolves against the firing-time
+  // snapshot the caller passes — the LATEST run of that parent task, so a
+  // retried parent re-binds instead of replaying stale output (the ambiguity
+  // audit risk in latest-run-per-task lookups). Unknown ids and parents with
+  // no runs yet render as named-missing, never empty: the caller refuses the
+  // firing when a REQUIRED reference is missing (see fireChainedTasks).
+  if (upstreamByTask && /\{\{runs\./.test(out)) {
+    // Shared budget across ALL {{runs.*}} bindings (HOLE8 was N×12k: a
+    // 50-parent fan-in would inject ~600k chars). Each binding truncates
+    // against the remainder, so the total stays bounded whatever the fan-in.
+    let remaining = 24_000;
+    const take = (s: string): string => {
+      if (remaining <= 0) return '… [context budget exhausted — earlier parents took it]';
+      const piece = s.length > remaining ? `${s.slice(0, remaining)}… [truncated to fit context budget]` : s;
+      remaining -= piece.length;
+      return piece;
+    };
+    const summarize = (reportJson: string | null | undefined): string => {
+      if (!reportJson) return '';
+      try {
+        const r = JSON.parse(reportJson);
+        let b = r.summary ?? '';
+        const artifacts = r.artifacts ?? [];
+        if (artifacts.length) b += `\nArtifacts: ${artifacts.join(', ')}`;
+        if (b.length > budgetChars) b = `${b.slice(0, budgetChars)}… [truncated to fit context budget]`;
+        return take(b);
+      } catch {
+        return '';
+      }
+    };
+    out = out.replace(/\{\{runs\.([A-Za-z0-9_-]+)\.report\}\}/g, (_m, id: string) => {
+      if (!upstreamByTask.has(id)) return `(unknown upstream task ${id})`;
+      const s = summarize(upstreamByTask.get(id)?.report_json);
+      return s || `(task ${id} has no runs yet)`;
+    });
+    out = out.replace(/\{\{runs\.([A-Za-z0-9_-]+)\.artifacts\}\}/g, (_m, id: string) => {
+      if (!upstreamByTask.has(id)) return `(unknown upstream task ${id})`;
+      try {
+        const r = upstreamByTask.get(id)?.report_json ? JSON.parse(upstreamByTask.get(id)!.report_json!) : { artifacts: [] };
+        const list = (r.artifacts ?? []).join(', ') || `(task ${id} has no artifacts yet)`;
+        return take(list);
+      } catch {
+        return `(task ${id} has no artifacts yet)`;
+      }
+    });
+  }
+  return out;
+}
+
+/** Task ids referenced via {{runs.<id>.*}} — validated before execution. */
+export function upstreamRefs(prompt: string): string[] {
+  const ids = new Set<string>();
+  for (const m of prompt.matchAll(/\{\{runs\.([A-Za-z0-9_-]+)\.(report|artifacts)\}\}/g)) ids.add(m[1]!);
+  return [...ids];
 }
 
 /**
