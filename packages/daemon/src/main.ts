@@ -22,6 +22,8 @@ import { Notifier } from './notifier.js';
 import { readPrefs, MAX_RRULE_COUNT } from './api.js';
 import { loadDeliveryCreds } from './delivery.js';
 import { TelegramApprovalsPoller } from './telegram-approvals.js';
+import { startWorkerSweep } from './workers.js';
+import { startWorkerAgent } from './worker-agent.js';
 import { guardSchedule, type GuardReason } from './schedule-guard.js';
 import { newId } from '@clockwork/shared';
 
@@ -570,6 +572,16 @@ export async function main(argv: string[] = process.argv): Promise<number> {
   // Retention (ADR-031): the window and cap the user sets in Settings only
   // mean something if something runs them. Nothing did.
   const retention = startRetentionSweep({ sweeper: new RetentionAudit(db) });
+  // Workers (P4): silence is noticed on the heartbeat cadence, not whenever
+  // someone opens Settings. Offline workers' claimed runs fail as
+  // worker_lost — never reported complete.
+  const workerSweep = startWorkerSweep({
+    db,
+    notify: (kind, title, body) => {
+      void notifier.send(title, body);
+      journal.record(kind as any, `${title}: ${body}`);
+    },
+  });
   // The other half of the stale-daemon trap: this process cannot upgrade
   // itself, so it says when the build under it has moved on.
   const driftWatch = startBuildDriftWatch({ runningVersion: DAEMON_VERSION });
@@ -589,10 +601,30 @@ export async function main(argv: string[] = process.argv): Promise<number> {
     : null;
   telegramPoller?.start();
 
+  // Worker agent (P4): strictly opt-in via environment. A daemon with no
+  // worker env never polls anyone — primary behavior is unchanged, and a
+  // worker daemon still runs its own scheduler for its own tasks.
+  const workerPrimary = process.env.CLOCKWORK_WORKER_PRIMARY ?? '';
+  const workerToken = process.env.CLOCKWORK_WORKER_TOKEN ?? '';
+  const workerAgent =
+    workerPrimary && workerToken
+      ? startWorkerAgent({
+          db,
+          dataDir,
+          primaryUrl: workerPrimary,
+          token: workerToken,
+          pump: () => runManager.pump(),
+          log: (msg) => process.stderr.write(`[worker-agent] ${msg}\n`),
+        })
+      : null;
+  if (workerAgent) process.stdout.write(`worker-agent: polling ${workerPrimary}\n`);
+
   const shutdown = (): void => {
     keepAwake.releaseAll(); // never leave a caffeinate child holding the Mac awake
     scheduler.stop();
     retention.stop();
+    workerSweep.stop();
+    workerAgent?.stop();
     driftWatch.stop();
     void Promise.resolve(telegramPoller?.stop()).finally(() => {
       lock.release();

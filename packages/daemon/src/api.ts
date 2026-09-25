@@ -49,6 +49,7 @@ import { OfficeHours, isKnownZone } from './office-hours.js';
 import { Sentinels } from './sentinel.js';
 import { isGitRepo } from '@clockwork/runner';
 import { HandoffMemory } from './handoff.js';
+import { resolveWorkerPin, noteWorkerFallback } from './workers.js';
 import { Acceptance } from './acceptance.js';
 import { proposedEventsFor, toIcs, icsFilenameFor } from './proposed-events.js';
 import { proofOfWorkHtml, proofFilenameFor } from './proof-of-work.js';
@@ -173,9 +174,19 @@ export function requiresAuth(rawUrl: string): boolean {
     return true; // malformed percent-escape — fail closed, never open
   }
   for (const url of spellings) {
+    // P4 worker protocol: heartbeat/pull/complete/decline/me authenticate by
+    // worker bearer token inside their handlers (authWorker), NOT by the user
+    // bearer — the worker never holds the user's token. Everything else under
+    // /workers/* (registry, pairing, approve, revoke) takes user auth.
+    const workerProtocol =
+      /^\/workers\/[^/]+\/(heartbeat|next-job)$/.test(url) ||
+      /^\/workers\/[^/]+\/runs\/[^/]+\/(complete|decline)$/.test(url) ||
+      url === '/workers/me' ||
+      url === '/workers/pairing/claim';
+    if (workerProtocol) continue;
     const needsAuth =
       /^\/(tasks|runs|approvals|profiles|search|widget|queue|onboarding|pause-all|resume|capacity)/.test(url) ||
-      /^\/(analytics|retention|audit|policies|capabilities|targets|byok|delivery-config|github|triggers|trigger-events|ics|usage)/.test(url) ||
+      /^\/(analytics|retention|audit|policies|capabilities|targets|byok|delivery-config|github|workers|triggers|trigger-events|ics|usage)/.test(url) ||
       /^\/(license|support|auth)\//.test(url) || // S-review: control plane + diagnostics must not be anonymous
       /^\/(calendars|templates)\//.test(url) || // S-audit: ICS export leaks task data; template preview is control plane
       /^\/fs\//.test(url) || // /fs/browse discloses directory AND file names under $HOME — never anonymous
@@ -917,6 +928,13 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
         if (cerr.includes('cycle') || cerr.includes('successor')) return reply.code(422).send({ error: cerr });
       }
     }
+    // P4: unknown worker pins refuse at save — a typo must not strand a task
+    // waiting on a worker that will never exist.
+    if (parsed.data.workerPin) {
+      const { assertPinOk } = await import('./workers.js');
+      const pinErr = assertPinOk(deps.db, parsed.data.workerPin);
+      if (pinErr) return reply.code(422).send({ error: 'unknown_worker', message: pinErr });
+    }
     // Policy gate (goal #38): reject policy-violating tasks at creation.
     const pv = evaluatePolicy(parsed.data.engine, parsed.data.byokId, parsed.data.budget.maxUsd);
     if (pv) {
@@ -976,6 +994,12 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       const { validateChain } = await import('./templates.js');
       const err = validateChain(deps.db, (req.params as any).id, (req.body as any).chainAfter ?? null);
       if (err) return reply.code(422).send({ error: err });
+    }
+    // P4: unknown worker pins refuse at save, same rule as creation.
+    if ('workerPin' in (req.body as any) && (req.body as any).workerPin) {
+      const { assertPinOk } = await import('./workers.js');
+      const pinErr = assertPinOk(deps.db, (req.body as any).workerPin);
+      if (pinErr) return reply.code(422).send({ error: 'unknown_worker', message: pinErr });
     }
     let nextFire: number | null | undefined;
     if (parsed.data.schedule) {
@@ -1419,7 +1443,186 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     return { templates: loadBundledTemplates(bundledTemplatesDir) };
   });
 
-  /** S-75: apply with variable fill + validation. */
+  // ---- multi-machine workers (P4) ----
+  //
+  // Registry + pairing ceremony take the USER bearer (requiresAuth covers
+  // /workers/* except the protocol paths below). The protocol paths take the
+  // WORKER bearer (x-clockwork-worker, authWorker) — the worker never holds
+  // the user's token, and the user's token never authenticates as a worker.
+  app.get('/workers', async () => {
+    const { listWorkers } = await import('./workers.js');
+    return { workers: listWorkers(deps.db, Date.now()) };
+  });
+
+  app.post('/workers/pairing/init', async (req, reply) => {
+    const parsed = z
+      .object({ name: z.string().min(1).max(80), platform: z.string().max(120).optional(), capabilities: z.string().max(2000).optional(), pubkeyHex: z.string().min(1) })
+      .safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(422).send({ error: 'validation' });
+    const { initPairing } = await import('./workers.js');
+    const r = initPairing(deps.db, { ...parsed.data, now: Date.now() });
+    if (!r.ok) return reply.code(422).send({ error: r.reason, message: r.message });
+    audit('worker.pair_init', 'worker', r.workerId, { name: parsed.data.name });
+    return reply.code(201).send(r);
+  });
+
+  // Self-authenticating (nonce + signature) — no bearer of either kind.
+  app.post('/workers/pairing/claim', async (req, reply) => {
+    const parsed = z
+      .object({ nonce: z.string().min(1), pubkeyHex: z.string().min(1), signatureHex: z.string().min(1) })
+      .safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(422).send({ error: 'validation' });
+    const { claimPairing } = await import('./workers.js');
+    const r = claimPairing(deps.db, { ...parsed.data, now: Date.now() });
+    if (!r.ok) return reply.code(422).send({ error: r.reason, message: r.message });
+    audit('worker.claim', 'worker', r.workerId, {});
+    broadcast({ type: 'workers.changed', at: Date.now() });
+    return r;
+  });
+
+  app.post('/workers/:id/approve', async (req, reply) => {
+    const id = String((req.params as any).id);
+    const { approveWorker } = await import('./workers.js');
+    const r = approveWorker(deps.db, id);
+    if (!r.ok) return reply.code(422).send({ error: r.reason, message: r.message });
+    audit('worker.approve', 'worker', id, {});
+    broadcast({ type: 'workers.changed', at: Date.now() });
+    // The single plaintext appearance of the token. The UI shows it once for
+    // copying into the worker's configuration; it is never logged or stored.
+    return r;
+  });
+
+  app.post('/workers/:id/revoke', async (req, reply) => {
+    const id = String((req.params as any).id);
+    const { revokeWorker } = await import('./workers.js');
+    const r = revokeWorker(deps.db, id, Date.now());
+    if (!r.ok) return reply.code(404).send({ error: r.reason, message: r.message });
+    audit('worker.revoke', 'worker', id, { unassigned: String(r.unassigned), lost: String(r.lost) });
+    broadcast({ type: 'workers.changed', at: Date.now() });
+    return r;
+  });
+
+  app.delete('/workers/:id', async (req, reply) => {
+    const id = String((req.params as any).id);
+    const { removeWorker } = await import('./workers.js');
+    const r = removeWorker(deps.db, id);
+    if (!r.ok) return reply.code(404).send({ error: r.reason, message: r.message });
+    audit('worker.remove', 'worker', id, {});
+    broadcast({ type: 'workers.changed', at: Date.now() });
+    return r;
+  });
+
+  app.get('/workers/me', async (req, reply) => {
+    const { authWorkerByToken, isWorkerOnline } = await import('./workers.js');
+    const row = authWorkerByToken(deps.db, req.headers['x-clockwork-worker'] as string | undefined);
+    if (!row) return reply.code(401).send({ error: 'unauthorized' });
+    const safe = { ...row } as Record<string, unknown>;
+    delete safe.token_hash; // never leaves the daemon; the token shows once at approve
+    return { ...safe, onlineComputed: isWorkerOnline(row, Date.now()) };
+  });
+
+  app.post('/workers/:id/heartbeat', async (req, reply) => {
+    const id = String((req.params as any).id);
+    const { authWorkerByToken } = await import('./workers.js');
+    const row = authWorkerByToken(deps.db, req.headers['x-clockwork-worker'] as string | undefined);
+    // Uniform 401 whether the id is unknown or the token is wrong: the two
+    // must not be distinguishable to a prober, and a legitimate worker
+    // always presents the matching pair.
+    if (!row || row.id !== id) return reply.code(401).send({ error: 'unauthorized' });
+    const parsed = z.object({ platform: z.string().max(120).optional(), capabilities: z.string().max(2000).optional() }).safeParse(req.body ?? {});
+    const now = Date.now();
+    deps.db
+      .prepare('UPDATE workers SET last_heartbeat=?, online=1, platform=COALESCE(?, platform), capabilities=COALESCE(?, capabilities) WHERE id=?')
+      .run(now, parsed.success ? (parsed.data.platform ?? null) : null, parsed.success ? (parsed.data.capabilities ?? null) : null, id);
+    return { ok: true };
+  });
+
+  app.get('/workers/:id/next-job', async (req, reply) => {
+    const id = String((req.params as any).id);
+    const { authWorkerByToken } = await import('./workers.js');
+    const row = authWorkerByToken(deps.db, req.headers['x-clockwork-worker'] as string | undefined);
+    if (!row || row.id !== id) return reply.code(401).send({ error: 'unauthorized' });
+    // Atomic claim: exactly one puller wins the row, inside one synchronous
+    // transaction. The winner is decided by the conditional UPDATE's change
+    // count — never by re-reading a timestamp two racers can share.
+    const now = Date.now();
+    const claimed = deps.db.transaction(() => {
+      const cand = deps.db
+        .prepare(`SELECT id, jobspec_json FROM runs WHERE worker_id=? AND state='queued' AND worker_claimed_at IS NULL ORDER BY scheduled_for ASC LIMIT 1`)
+        .get(id) as { id: string; jobspec_json: string } | undefined;
+      if (!cand) return null;
+      const up = deps.db.prepare('UPDATE runs SET worker_claimed_at=? WHERE id=? AND worker_claimed_at IS NULL').run(now, cand.id);
+      if (up.changes !== 1) return null;
+      return cand;
+    })();
+    if (!claimed) return reply.code(204).send({ run: null });
+    deps.db.prepare('UPDATE workers SET last_heartbeat=?, online=1 WHERE id=?').run(now, id);
+    audit('worker.pull', 'run', claimed.id, { worker: id });
+    return { run: { id: claimed.id, jobspec: JSON.parse(claimed.jobspec_json) } };
+  });
+
+  app.post('/workers/:id/runs/:runId/complete', async (req, reply) => {
+    const id = String((req.params as any).id);
+    const runId = String((req.params as any).runId);
+    const { authWorkerByToken } = await import('./workers.js');
+    const row = authWorkerByToken(deps.db, req.headers['x-clockwork-worker'] as string | undefined);
+    if (!row || row.id !== id) return reply.code(401).send({ error: 'unauthorized' });
+    const parsed = z
+      .object({
+        state: z.enum(['completed', 'failed', 'timed_out', 'cancelled', 'budget_exceeded']),
+        report_json: z.string().max(2_000_000),
+        cost_usd: z.number().nonnegative(),
+        turns: z.number().int().nonnegative(),
+      })
+      .safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(422).send({ error: 'validation' });
+    const run = deps.db.prepare('SELECT * FROM runs WHERE id=?').get(runId) as any;
+    // Only the assigned worker, only a claimed-but-unreported row, only once.
+    // Anything else is 409, never a silent overwrite of settled history.
+    if (!run || run.worker_id !== id || run.worker_claimed_at == null || run.state !== 'queued') {
+      return reply.code(409).send({ error: 'not_claimed', message: 'This run is not claimed by this worker, or already settled.' });
+    }
+    const now = Date.now();
+    deps.db
+      .prepare(`UPDATE runs SET state=?, report_json=?, cost_usd=?, turns=?, ended_at=? WHERE id=?`)
+      .run(parsed.data.state, parsed.data.report_json, parsed.data.cost_usd, parsed.data.turns, now, runId);
+    deps.db
+      .prepare('INSERT INTO events (at, run_id, kind, data_json) VALUES (?, ?, ?, ?)')
+      .run(now, runId, 'state_changed', JSON.stringify({ to: parsed.data.state, via: 'worker', worker: id }));
+    audit('worker.complete', 'run', runId, { worker: id, state: parsed.data.state });
+    broadcast({ type: 'run.state_changed', runId, state: parsed.data.state, at: now });
+    return { ok: true };
+  });
+
+  app.post('/workers/:id/runs/:runId/decline', async (req, reply) => {
+    const id = String((req.params as any).id);
+    const runId = String((req.params as any).runId);
+    const { authWorkerByToken } = await import('./workers.js');
+    const row = authWorkerByToken(deps.db, req.headers['x-clockwork-worker'] as string | undefined);
+    if (!row || row.id !== id) return reply.code(401).send({ error: 'unauthorized' });
+    const parsed = z.object({ reason: z.string().min(1).max(500) }).safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(422).send({ error: 'validation' });
+    const run = deps.db.prepare('SELECT * FROM runs WHERE id=?').get(runId) as any;
+    // Declining is for jobs this worker PULLED (claimed) but cannot do. An
+    // unpulled queued row is not theirs to fail — without the claimed check
+    // a worker could fail future rows it never touched.
+    if (!run || run.worker_id !== id || run.worker_claimed_at == null || run.state !== 'queued') {
+      return reply.code(409).send({ error: 'not_claimed', message: 'This run was not pulled by this worker.' });
+    }
+    // Declining fails LOUDLY (worker_declined + notify): the worker cannot do
+    // it and said why — silently requeueing locally could run repo work on a
+    // machine the pin was explicitly avoiding.
+    const now = Date.now();
+    deps.db
+      .prepare(`UPDATE runs SET state='failed', outcome_reason='worker_declined', ended_at=? WHERE id=?`)
+      .run(now, runId);
+    deps.db
+      .prepare('INSERT INTO events (at, run_id, kind, data_json) VALUES (?, ?, ?, ?)')
+      .run(now, runId, 'state_changed', JSON.stringify({ to: 'failed', reason: 'worker_declined', detail: parsed.data.reason.slice(0, 200) }));
+    audit('worker.decline', 'run', runId, { worker: id });
+    broadcast({ type: 'run.state_changed', runId, state: 'failed', at: now });
+    return { ok: true };
+  });
   app.post('/tasks/:id/apply-template-vars', async (req, reply) => {
     const row = tasks.get((req.params as any).id);
     if (!row) return reply.code(404).send({ error: 'not_found' });
@@ -3838,9 +4041,10 @@ export function enqueueRunNow(
   const now = Date.now();
   const spec = jobSpecForTask(db, taskRow, now, dataDir);
   db.prepare(
-    `INSERT INTO runs (id, task_id, jobspec_json, state, state_changed_at, scheduled_for) VALUES (?, ?, ?, 'queued', ?, ?)`,
-  ).run(spec.runId, taskRow.id, JSON.stringify(spec), now, now);
+    `INSERT INTO runs (id, task_id, jobspec_json, state, state_changed_at, scheduled_for, worker_id) VALUES (?, ?, ?, 'queued', ?, ?, ?)`,
+  ).run(spec.runId, taskRow.id, JSON.stringify(spec), now, now, (spec as any).workerId ?? null);
   db.prepare('INSERT INTO events (at, run_id, kind, data_json) VALUES (?, ?, ?, ?)').run(now, spec.runId, 'state_changed', JSON.stringify({ to: 'queued', via: 'run-now' }));
+  noteWorkerFallback(db, spec.runId, taskRow, (spec as any).workerId ?? null, now);
   return spec.runId;
 }
 
@@ -3881,6 +4085,10 @@ function jobSpecForTask(db: DB, taskRow: any, now: number, dataDir: string) {
     occurrenceAt: null,
     scheduledFor: now,
     createdAt: now,
+    // P4: same stamping as buildJobSpec — run-now/webhook/plan paths must
+    // route identically to the scheduler tick, or pins would work on a
+    // schedule and vanish on Run now.
+    workerId: resolveWorkerPin(db, taskRow, now).workerId,
   };
 }
 
@@ -3910,6 +4118,8 @@ function view(row: any, nextFire: number | null = null): unknown {
     byokId: row.byok_id ?? null,
     chainAfter: row.chain_after ?? null,
     chainOn: row.chain_on ?? null,
+    workerPin: row.worker_pin ?? null,
+    workerRequired: Boolean(row.worker_required),
     budget: { maxUsd: row.budget_usd, maxTurns: row.max_turns, timeoutSec: row.timeout_sec },
     missedPolicy: row.missed_policy,
     missedWindowSec: row.missed_window_sec,

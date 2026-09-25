@@ -39,6 +39,7 @@ import type { Clock } from './clock.js';
 import type { ChildToDaemon } from './runner-protocol.js';
 import { ByokStore, keychainGet } from './byok.js';
 import { buildJobSpec } from './scheduler.js';
+import { noteWorkerFallback } from './workers.js';
 // `formatApprovalText` is still needed here for the OS notification body —
 // deps.notify() takes a string, not a payload — but no channel adapter is
 // reached from this module any more: delivery-dispatch.ts owns the fan-out
@@ -232,9 +233,13 @@ export class RunManager {
         const active = this.countActive();
         let slots = Math.max(0, this.maxParallel - active);
         while (slots > 0) {
+          // P4: rows carrying worker_id belong to a worker's pull protocol,
+          // never to local execution — not in slots, not in the mutex wait,
+          // not counted. A revoked/unpaired pin NULLs the column (workers.ts)
+          // and the row becomes locally runnable again on the next pump.
           const next = this.deps.db
             .prepare(
-              `SELECT * FROM runs WHERE state='queued' ORDER BY scheduled_for ASC`,
+              `SELECT * FROM runs WHERE state='queued' AND worker_id IS NULL ORDER BY scheduled_for ASC`,
             )
             .all()
             .slice(0, slots) as unknown as RunRow[];
@@ -1201,15 +1206,16 @@ export class RunManager {
     if (upEv) (spec as unknown as { event?: unknown }).event = upEv;
     this.deps.db
       .prepare(
-        `INSERT INTO runs (id, task_id, jobspec_json, state, state_changed_at, scheduled_for) VALUES (?, ?, ?, 'queued', ?, ?)`,
+        `INSERT INTO runs (id, task_id, jobspec_json, state, state_changed_at, scheduled_for, worker_id) VALUES (?, ?, ?, 'queued', ?, ?, ?)`,
       )
-      .run(spec.runId, taskRow.id, JSON.stringify(spec), now, now);
+      .run(spec.runId, taskRow.id, JSON.stringify(spec), now, now, (spec as any).workerId ?? null);
     this.recordEvent(now, spec.runId, 'state_changed', {
       to: 'queued',
       via: 'chain',
       upstreamRunId: runId,
       upstreamState: terminalState,
     });
+    noteWorkerFallback(this.deps.db, spec.runId, taskRow as any, (spec as any).workerId ?? null, now);
   }
 
   /** Build a JobSpec for a chain-triggered task (reuses scheduler's builder). */

@@ -14,6 +14,8 @@ import type { Clock } from './clock.js';
 import { occurrencesBetween, nextOccurrenceAfter, type ScheduleLike } from './recurrence.js';
 import { newId, slugify, branchFor, type JobSpec } from '@clockwork/shared';
 import { shiftForApproval } from './office-hours.js';
+import { resolveWorkerPin } from './workers.js';
+import { noteWorkerFallback } from './workers.js';
 
 export const GRACE_MS = 120_000; // NFR-1: missed-run detection within 120s of wake
 
@@ -52,6 +54,8 @@ interface TaskRow {
   enabled: number;
   version: number;
   deleted_at: number | null;
+  worker_pin: string | null;
+  worker_required: number;
 }
 
 interface ScheduleRow {
@@ -271,13 +275,14 @@ export class Scheduler {
     const spec = buildJobSpec(runId, task, now, occurrenceAt, this.deps.db, this.deps.dataDir);
     this.deps.db
       .prepare(
-        `INSERT INTO runs (id, task_id, occurrence_at, schedule_id, jobspec_json, state, state_changed_at, scheduled_for)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO runs (id, task_id, occurrence_at, schedule_id, jobspec_json, state, state_changed_at, scheduled_for, worker_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(runId, task.id, occurrenceAt, sched.id, JSON.stringify(spec), state, now, occurrenceAt);
+      .run(runId, task.id, occurrenceAt, sched.id, JSON.stringify(spec), state, now, occurrenceAt, spec.workerId ?? null);
     this.deps.db
       .prepare('INSERT INTO events (at, run_id, kind, data_json) VALUES (?, ?, ?, ?)')
       .run(now, runId, 'state_changed', JSON.stringify({ to: state }));
+    noteWorkerFallback(this.deps.db, runId, task, spec.workerId, now);
   }
 }
 
@@ -339,6 +344,11 @@ export function buildJobSpec(
     occurrenceAt,
     scheduledFor: occurrenceAt,
     createdAt: now,
+    // P4: stamp the routing decision into the frozen spec. resolveWorkerPin
+    // reads the live workers table (online/offline right now) — see workers.ts
+    // for the wait-vs-fallback rules. The runs.worker_id column mirrors this
+    // for queries; the pump routes on the column, never re-derives.
+    workerId: resolveWorkerPin(db, task as unknown as { worker_pin?: string | null; worker_required?: number | null }, now).workerId,
   };
 }
 

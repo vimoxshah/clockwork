@@ -29,6 +29,8 @@ export interface TaskRow {
   chain_after: string | null;
   chain_on: string | null;
   template_id: string | null;
+  worker_pin: string | null; // P4: worker id or null = run locally
+  worker_required: number; // P4: 1 = wait for the worker, 0 = fall back local
   enabled: number;
   version: number;
   deleted_at: number | null;
@@ -69,11 +71,11 @@ export class TaskRepo {
     const tx = this.db.transaction(() => {
       this.db
         .prepare(
-          `INSERT INTO tasks (id, name, prompt, profile_id, repo_path, model, engine, byok_id, chain_after, chain_on, permission_mode,
+          `INSERT INTO tasks (id, name, prompt, profile_id, repo_path, model, engine, byok_id, chain_after, chain_on, worker_pin, worker_required, permission_mode,
             budget_usd, max_turns, timeout_sec, base_branch, context_json, delivery_json,
             missed_policy, missed_window_sec, overlap_policy, retry_on_transient, enabled, version,
             created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)`,
         )
         .run(
           id,
@@ -86,6 +88,8 @@ export class TaskRepo {
           input.byokId ?? null,
           input.chainAfter ?? null,
           input.chainOn ?? null,
+          (input as any).workerPin ?? null,
+          (input as any).workerRequired ? 1 : 0,
           input.permissionMode,
           input.budget.maxUsd,
           input.budget.maxTurns,
@@ -155,6 +159,8 @@ export class TaskRepo {
         ['byokId', 'byok_id', (v) => v],
         ['chainAfter', 'chain_after', (v) => v],
         ['chainOn', 'chain_on', (v) => v],
+        ['workerPin', 'worker_pin', (v) => v],
+        ['workerRequired', 'worker_required', (v) => (v ? 1 : 0)],
       ];
       for (const [k, col, cast] of map) {
         if (input[k] !== undefined) {

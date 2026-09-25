@@ -339,6 +339,9 @@ export const TaskCreate = z.object({
   chainAfter: z.string().optional(),
   /** Chain trigger: 'completed' (default) or 'any_terminal' (completed or failed) */
   chainOn: z.enum(['completed', 'any_terminal']).optional(),
+  /** P4: pin to a worker (null = local); unknown pins are refused at save */
+  workerPin: z.string().nullable().optional(),
+  workerRequired: z.boolean().optional(),
   context: ContextAttachments.default({ files: [] }),
   delivery: DeliveryConfig.default({ osNotify: true }),
 });
@@ -350,6 +353,9 @@ export const TaskPatch = z.object({
   /** Agent chains (goal #28) — nullable to allow unchaining */
   chainAfter: z.string().nullable().optional(),
   chainOn: z.enum(['completed', 'any_terminal']).optional(),
+  /** P4 worker routing pin — nullable to unpin; required waits, preferred falls back local */
+  workerPin: z.string().nullable().optional(),
+  workerRequired: z.boolean().optional(),
   name: z.string().min(1).max(120).optional(),
   prompt: z.string().min(1).max(32_000).optional(),
   profileId: z.string().nullable().optional(),
@@ -406,5 +412,8 @@ export const JobSpec = z.object({
   occurrenceAt: z.number().nullable(),
   scheduledFor: z.number(),
   createdAt: z.number(),
+  /** P4: worker this run is assigned to (null = local). Informational for the
+   *  worker; the runs.worker_id column is what the pump routes on. */
+  workerId: z.string().nullable().optional(),
 });
 export type JobSpec = z.infer<typeof JobSpec>;

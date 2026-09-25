@@ -3,7 +3,7 @@
  * launchd LaunchAgent: login-session scoped — starts at login, restarts on
  * crash. No logout survival claims (FR-20).
  */
-import { writeFileSync, mkdirSync, existsSync, readFileSync, unlinkSync } from 'node:fs';
+import { writeFileSync, mkdirSync, existsSync, readFileSync, unlinkSync, chmodSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { homedir } from 'node:os';
@@ -260,7 +260,20 @@ if (cmd === 'install') {
     const bad = findings.filter((f) => !f.ok).length;
     console.log(bad === 0 ? '\nall checks passed' : `\n${bad} check(s) need attention`);
   });
+} else if (cmd === 'worker-key') {
+  // P4 pairing input: the worker's ed25519 identity. Prints the DER-hex
+  // public key for the operator to paste into the primary's pair flow, and
+  // stores the private key 0600 beside it. The private key NEVER prints.
+  const { generateKeyPairSync } = await import('node:crypto');
+  const dataDir = process.env.CLOCKWORK_HOME ?? `${homedir()}/.clockwork`;
+  mkdirSync(dataDir, { recursive: true });
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+  const pubHex = publicKey.export({ format: 'der', type: 'spki' }).toString('hex');
+  const privPath = path.join(dataDir, 'worker-key');
+  writeFileSync(privPath, privateKey.export({ format: 'der', type: 'pkcs8' }).toString('hex'), { mode: 0o600 });
+  chmodSync(privPath, 0o600);
+  console.log(`public key (paste into Settings › Workers → Pair new worker):\n${pubHex}\nprivate key saved (never printed): ${privPath}`);
 } else if (cmd) {
-  console.error('usage: clockworkd <install|uninstall|doctor> [daemon-entry]');
+  console.error('usage: clockworkd <install|uninstall|doctor|worker-key> [daemon-entry]');
   process.exit(2);
 }

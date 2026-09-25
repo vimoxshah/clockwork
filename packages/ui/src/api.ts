@@ -108,6 +108,8 @@ export interface TaskViewT {
   byokId?: string | null;
   chainAfter?: string | null;
   chainOn?: string | null;
+  workerPin?: string | null;
+  workerRequired?: boolean;
   repoPath: string | null;
   permissionMode: string;
   budget: { maxUsd: number; maxTurns: number; timeoutSec: number };
@@ -958,6 +960,26 @@ export const api = {
   validateGithub: () => req<{ ok: boolean; login?: string; error?: string; message?: string }>('POST', '/github/validate'),
   openPr: (runId: string, title?: string) =>
     req<{ created: boolean; number: number; url: string }>('POST', `/runs/${runId}/open-pr`, title ? { title } : {}),
+
+  // ---- multi-machine workers (P4) ----
+  workers: () =>
+    req<{
+      workers: Array<{
+        id: string;
+        name: string;
+        platform: string | null;
+        status: string;
+        online: number;
+        last_heartbeat: number | null;
+        created_at: number;
+        onlineComputed: boolean;
+      }>;
+    }>('GET', '/workers'),
+  pairInit: (body: { name: string; platform?: string; pubkeyHex: string }) =>
+    req<{ workerId: string; nonce: string; expiresAt: number }>('POST', '/workers/pairing/init', body),
+  approveWorker: (id: string) => req<{ token: string }>('POST', `/workers/${id}/approve`, {}),
+  revokeWorker: (id: string) => req<{ unassigned: number; lost: number }>('POST', `/workers/${id}/revoke`, {}),
+  removeWorker: (id: string) => req<{ ok: boolean; unassigned: number; lost: number }>('DELETE', `/workers/${id}`),
 };
 
 export interface EventStream {

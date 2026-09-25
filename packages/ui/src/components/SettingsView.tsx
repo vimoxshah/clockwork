@@ -9,6 +9,7 @@ import { SHORTCUTS } from './CommandPalette';
 import { Switch } from './ui/switch';
 import { Badge } from './ui/card';
 import { ByokCard } from './ByokCard';
+import { WorkersCard } from './WorkersCard';
 import { LicenseCard } from './LicenseCard';
 import { UpgradeHint } from './UpgradeHint';
 import { OfficeHoursCard } from './OfficeHoursCard';
@@ -306,6 +307,11 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
       <section className="settings-card settings-card--wide">
       <h3 className="section-title" id="github">GitHub</h3>
       <GithubCard version={version} />
+      </section>
+
+      <section className="settings-card settings-card--wide">
+      <h3 className="section-title" id="workers">Workers</h3>
+      <WorkersCard version={version} />
       </section>
 
       <section className="settings-card">
