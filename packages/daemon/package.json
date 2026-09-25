@@ -6,10 +6,11 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "clockworkd": "./dist/cli.js"
+    "clockworkd": "./dist/cli.js",
+    "clockwork": "./dist/clockwork-cli.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && chmod +x ./dist/clockwork-cli.js",
     "test": "vitest run",
     "dev": "tsx watch src/main.ts"
   },
