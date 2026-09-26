@@ -223,6 +223,8 @@ export function WorkersCard({ version }: { version: number }): JSX.Element {
           data-testid="worker-name-input"
         />
         <input
+          id="worker-pubkey"
+          aria-label="Worker public key (DER hex)"
           className="cred-field"
           type="text"
           autoComplete="off"
