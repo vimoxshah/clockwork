@@ -581,6 +581,13 @@ export async function main(argv: string[] = process.argv): Promise<number> {
       void notifier.send(title, body);
       journal.record(kind as any, `${title}: ${body}`);
     },
+    // Sweep-settled losses fire downstream like any terminal state, so an
+    // any_terminal-gated child of a lost run still runs.
+    onTerminal: (runId, jobspec, state) => {
+      void runManager.fireDownstream(runId, jobspec as any, state).catch((e: unknown) => {
+        process.stderr.write(`[workers] downstream firing failed: ${(e as Error).message}\n`);
+      }).finally(() => runManager.pump());
+    },
   });
   // The other half of the stale-daemon trap: this process cannot upgrade
   // itself, so it says when the build under it has moved on.

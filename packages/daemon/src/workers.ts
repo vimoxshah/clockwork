@@ -253,12 +253,13 @@ export function sweepWorkers(
   db: DB,
   now: number,
   notify: (kind: string, title: string, body: string) => void,
+  onTerminal?: (runId: string, jobspec: unknown, state: string) => void,
 ): { offlined: string[]; lost: number } {
   const stale = db.prepare(`SELECT * FROM workers WHERE status='paired' AND online=1 AND (last_heartbeat IS NULL OR last_heartbeat < ?)`).all(now - HEARTBEAT_TIMEOUT_MS) as WorkerRow[];
   let lost = 0;
   for (const w of stale) {
     db.prepare('UPDATE workers SET online=0 WHERE id=?').run(w.id);
-    const rows = db.prepare(`SELECT id, task_id FROM runs WHERE worker_id=? AND state='queued' AND worker_claimed_at IS NOT NULL`).all(w.id) as any[];
+    const rows = db.prepare(`SELECT id, jobspec_json FROM runs WHERE worker_id=? AND state='queued' AND worker_claimed_at IS NOT NULL`).all(w.id) as any[];
     for (const r of rows) {
       db.prepare(`UPDATE runs SET state='failed', outcome_reason='worker_lost', ended_at=? WHERE id=?`).run(now, r.id);
       db.prepare('INSERT INTO events (at, run_id, kind, data_json) VALUES (?, ?, ?, ?)').run(
@@ -268,6 +269,13 @@ export function sweepWorkers(
         JSON.stringify({ to: 'failed', reason: 'worker_lost', worker: w.id }),
       );
       lost++;
+      // Terminal is terminal: any_terminal-gated children of the lost run
+      // still fire. Failures here must not break the sweep loop.
+      if (onTerminal) {
+        try {
+          onTerminal(r.id, JSON.parse(r.jobspec_json), 'failed');
+        } catch {}
+      }
     }
   }
   if (stale.length > 0) {
@@ -311,14 +319,14 @@ export interface WorkerSweepOptions {
  * startup run (a machine that slept through the cadence still notices on
  * wake), timer with unref, housekeeping never takes the daemon down.
  */
-export function startWorkerSweep(options: WorkerSweepOptions): { stop(): void } {
+export function startWorkerSweep(options: WorkerSweepOptions & { onTerminal?: (runId: string, jobspec: unknown, state: string) => void }): { stop(): void } {
   function defaultLog(m: string): void {
     process.stderr.write(`${m}\n`);
   }
-  const { db, notify, intervalMs = HEARTBEAT_TIMEOUT_MS, log = defaultLog } = options;
+  const { db, notify, intervalMs = HEARTBEAT_TIMEOUT_MS, log = defaultLog, onTerminal } = options;
   const run = (): void => {
     try {
-      const r = sweepWorkers(db, Date.now(), notify);
+      const r = sweepWorkers(db, Date.now(), notify, onTerminal);
       if (r.offlined.length > 0) log(`[workers] ${r.offlined.length} went silent, ${r.lost} claimed run(s) marked worker_lost`);
     } catch (err) {
       log(`[workers] sweep failed: ${(err as Error).message}`);

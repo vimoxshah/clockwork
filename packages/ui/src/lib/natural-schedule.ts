@@ -342,7 +342,7 @@ export function parseNaturalSchedule(input: NlInput): NlResult {
     const defH = nightly ? 21 : 9;
     const { hour, minute, warnings: timeWarnings } = timeOr(timeHit?.start ?? null, timeCertain, defH, 0);
     const warnings = [...timeWarnings, ...residueWarnings(chronoText, found)];
-    const label = scopeNote ? `Every ${scopeNote}` : nightly && !timeCertain ? 'Nightly' : 'Every day';
+    const label = scopeNote === 'weekdays' ? 'Weekdays' : scopeNote === 'weekends' ? 'Weekends' : nightly && !timeCertain ? 'Nightly' : 'Every day';
     return {
       kind: 'rrule',
       rrule: days.length ? composeWeeklyRule(days, hour, minute) : composeDailyRule(hour, minute),

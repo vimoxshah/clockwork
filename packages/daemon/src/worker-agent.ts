@@ -46,11 +46,16 @@ async function primaryFetch(opts: WorkerAgentOptions, path: string, init?: Reque
 }
 
 /**
- * Rewrite primary machine paths for this worker. Branch names travel
- * unchanged (branchFor is run-id-derived, identical both sides); worktree
- * and scratch dirs are rebuilt under THIS dataDir. Callers must still
- * verify repoPath exists here — adaptation is paths, not repositories.
+ * The worker ledger is its own: pulled tasks do not exist here, and
+ * runs.task_id is a foreign key. A stub row carries the pulled definition so
+ * local history, inbox and reports read normally. It never schedules (no
+ * schedules row) and never chains (no edges) — it is a record, not a task.
  */
+export function ensureWorkerTaskRow(db: DB, spec: Record<string, any>, now: number): void {
+  db.prepare(
+    `INSERT OR IGNORE INTO tasks (id, name, prompt, created_at, updated_at) VALUES (?,?,?,?,?)`,
+  ).run(spec.taskId, String(spec.taskName ?? spec.taskId), String(spec.prompt ?? ''), now, now);
+}
 export function adaptSpecForWorker(spec: Record<string, any>, dataDir: string): Record<string, any> {
   const slug = String(spec.taskSlug ?? 'job');
   const runId = String(spec.runId);
@@ -187,6 +192,7 @@ export function startWorkerAgent(options: WorkerAgentOptions): { stop(): void } 
       // executed). The reverse order would strand an executing row nobody
       // reports — strictly worse.
       writeActive(run.id);
+      ensureWorkerTaskRow(db, adapted, now);
       db.prepare(
         `INSERT OR IGNORE INTO runs (id, task_id, jobspec_json, state, state_changed_at, scheduled_for) VALUES (?, ?, ?, 'queued', ?, ?)`,
       ).run(run.id, adapted.taskId, JSON.stringify(adapted), now, now);

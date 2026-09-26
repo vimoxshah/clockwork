@@ -27,6 +27,7 @@ import {
   listWorkers,
   HEARTBEAT_TIMEOUT_MS,
 } from '../src/workers.js';
+import { ensureWorkerTaskRow } from '../src/worker-agent.js';
 import { RunManager } from '../src/run-manager.js';
 import { Scheduler } from '../src/scheduler.js';
 import { FakeClock } from '../src/clock.js';
@@ -212,6 +213,32 @@ describe('silence sweep', () => {
       expect((db.prepare('SELECT state FROM runs WHERE id=?').get('r-2') as any).state).toBe('queued');
       expect(notes).toHaveLength(1);
       expect(listWorkers(db, now).find((x) => x.id === w.id)?.onlineComputed).toBe(false);
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('worker ledger stubs', () => {
+  it('ensureWorkerTaskRow satisfies the FK without scheduling anything', () => {
+    const { db, dir } = freshDb();
+    try {
+      const now = Date.now();
+      ensureWorkerTaskRow(db, { taskId: 'pulled', taskName: 'P', prompt: 'do' }, now);
+      db.prepare(`INSERT INTO runs (id, task_id, jobspec_json, state, state_changed_at, scheduled_for) VALUES (?,?,?,?,?,?)`).run(
+        'r1',
+        'pulled',
+        '{}',
+        'queued',
+        now,
+        now,
+      );
+      expect((db.prepare('SELECT COUNT(*) c FROM schedules WHERE task_id=?').get('pulled') as any).c).toBe(0);
+      expect((db.prepare('SELECT COUNT(*) c FROM chain_edges WHERE parent_task_id=? OR child_task_id=?').get('pulled', 'pulled') as any).c).toBe(0);
+      // Idempotent re-pull.
+      ensureWorkerTaskRow(db, { taskId: 'pulled', taskName: 'P2', prompt: 'do2' }, now);
+      expect((db.prepare('SELECT name FROM tasks WHERE id=?').get('pulled') as any).name).toBe('P');
     } finally {
       db.close();
       rmSync(dir, { recursive: true, force: true });
@@ -455,6 +482,28 @@ describe('protocol routes', () => {
     expect((db.prepare('SELECT worker_id FROM runs WHERE id=?').get('r-rm-q') as any).worker_id).toBeNull();
     expect((db.prepare('SELECT state FROM runs WHERE id=?').get('r-rm-c') as any).state).toBe('failed');
     expect((await app.inject({ method: 'GET', url: '/workers/me', headers: { 'x-clockwork-worker': w3.token } })).statusCode).toBe(401);
+  });
+
+  it('worker-reported completion fires downstream like local finalize', async () => {
+    const now = Date.now();
+    for (const [id, prompt] of [['wp', 'scan it'], ['wc', 'fix it: {{runs.wp.report}}']] as const) {
+      db.prepare(`INSERT INTO tasks (id, name, prompt, created_at, updated_at) VALUES (?,?,?, ?,?)`).run(id, id, prompt, now, now);
+    }
+    db.prepare('INSERT INTO chain_edges (parent_task_id, child_task_id, on_state, created_at) VALUES (?,?,?,?)').run('wp', 'wc', 'completed', now);
+    db.prepare(
+      `INSERT INTO runs (id, task_id, jobspec_json, state, state_changed_at, scheduled_for, worker_id, worker_claimed_at) VALUES (?,?,?,'queued',?,?,?,?)`,
+    ).run('run-wp', 'wp', JSON.stringify({ taskId: 'wp' }), now, now, w.id, now);
+    const done = await app.inject(
+      wauth(w.id, w.token, {
+        method: 'POST',
+        url: '/workers/:id/runs/run-wp/complete',
+        payload: { state: 'completed', report_json: JSON.stringify({ summary: 'WORKER-SAYS-HI', artifacts: [] }), cost_usd: 0.2, turns: 3 },
+      }),
+    );
+    expect(done.json()).toEqual({ ok: true });
+    const kids = db.prepare(`SELECT * FROM runs WHERE task_id='wc' AND state='queued'`).all() as any[];
+    expect(kids).toHaveLength(1);
+    expect(JSON.parse(kids[0].jobspec_json).prompt).toContain('WORKER-SAYS-HI');
   });
 
   it('removeWorker cleans up; authWorkerByToken resolves', async () => {

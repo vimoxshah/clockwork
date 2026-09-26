@@ -1038,6 +1038,17 @@ export class RunManager {
    * firing with a named reason instead of rendering "(missing)" into an
    * agent's instructions.
    */
+  /**
+   * Fire downstream chains for a run that reached terminal state OUTSIDE
+   * finalize() — worker-reported completions and sweep-marked losses. Local
+   * finalize calls fireChainedTasks directly; these paths settle rows
+   * without it, and without this call a worker-finished scan would never
+   * start its fix. Same gates, same events, same idempotency.
+   */
+  public async fireDownstream(runId: string, spec: JobSpec, terminalState: string): Promise<void> {
+    await this.fireChainedTasks(runId, spec, terminalState, this.deps.clock.now());
+  }
+
   private async fireChainedTasks(
     runId: string,
     upstreamSpec: JobSpec,

@@ -1693,6 +1693,18 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       .run(now, runId, 'state_changed', JSON.stringify({ to: parsed.data.state, via: 'worker', worker: id }));
     audit('worker.complete', 'run', runId, { worker: id, state: parsed.data.state });
     broadcast({ type: 'run.state_changed', runId, state: parsed.data.state, at: now });
+    // Worker-settled rows fire downstream exactly like locally finalized
+    // ones — otherwise a worker-finished scan would never start its fix.
+    try {
+      await deps.runManager.fireDownstream(runId, JSON.parse(run.jobspec_json), parsed.data.state);
+    } catch (e) {
+      deps.db
+        .prepare('INSERT INTO events (at, run_id, kind, data_json) VALUES (?, ?, ?, ?)')
+        .run(Date.now(), runId, 'chain_error', JSON.stringify({ error: String(e).slice(0, 200) }));
+    }
+    // finalize() pumps after firing for local runs; this route bypasses
+    // finalize, so pump here or chained rows wait for the next unrelated stir.
+    deps.runManager.pump();
     return { ok: true };
   });
 
