@@ -8,6 +8,42 @@ is a red build here, not a marketing choice.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] — 2026-09-26
+
+### Added
+
+- **One-click PRs from reports** (PAT-only, no `gh` CLI): push plus GitHub
+  REST create with duplicate detection, empty/SSH/non-GitHub refusals, and
+  an inline confirm. PAT lives 0600, never in git config, logs, or the
+  sandbox (delivery-creds.json joined the deny list with it).
+- **Natural-language scheduling** in the composer ("every Mon 2am",
+  "weekdays at 9"): live interpretation with confidence and named
+  assumptions, daemon-backed next-runs preview, explicit Apply into the same
+  builder state. Composer shapes only; ambiguity refuses with guidance.
+- **Drag/drop calendar rescheduling** with pre-release preview, Undo (which
+  refuses over intervening edits), and loud refusals where a move is
+  meaningless. Same validated PATCH path as the composer.
+- **DAG pipelines** beside linear chains: fan-out/fan-in edges with
+  all-parents gates, `{{runs.<id>}}` explicit binding under a shared context
+  budget, waiting/skipped events, and a Tasks › Pipelines view with parent
+  management. Linear semantics unchanged.
+- **Multi-machine workers**: ed25519 pairing ceremony (init/claim/approve),
+  bearer tokens, heartbeat with silence sweep (`worker_lost`, never silent
+  completion), required-vs-preferred pins, atomic pull/complete/decline
+  protocol, crash-resuming worker agent, Settings › Workers.
+- **`clockwork` terminal CLI**: status/runs/show/tasks/queue/agents/
+  approvals/approve/run/open/workers/pack, human tables plus `--json` with
+  stable exit codes.
+- **Signed template packs** (`clockwork.pack.v1`, TOFU trust, whole-pack red
+  gate, disabled arrival, no-downgrade versions, honest uninstall), with
+  `clockwork pack` commands and a Tasks › Packs section.
+
+### Fixed
+
+- Worker-reported completions now fire downstream chains and pump (they
+  previously settled silently with successors never starting).
+- Sandbox deny list covers the worker private key and pack trust pins.
+
 ## [0.13.0] — 2026-09-23
 
 ### Added
