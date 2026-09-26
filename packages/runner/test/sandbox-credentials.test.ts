@@ -49,6 +49,14 @@ const MUST_BE_DENIED = [
   // P0: delivery-creds.json now holds a repo-write GitHub PAT beside the
   // Telegram/SMTP secrets — a run that could cat it could push to repos.
   '.clockwork/delivery-creds.json',
+  // P4: the worker's ed25519 private key. Same shape of escape as the
+  // api-token one iteration 13 verified: read the key, impersonate the
+  // worker, pull jobs as it.
+  '.clockwork/worker-key',
+  // P6: pack trust pins are public keys, but the FILE decides what the next
+  // install trusts — a run that could write it could bless its own pack and
+  // wait for a human to install "already trusted" malware.
+  '.clockwork/trusted-pack-keys.json',
   '.ssh', '.aws', '.gnupg', '.config/gcloud',
   'Library/Cookies', 'Library/Application Support/Google/Chrome',
   'Library/Application Support/Firefox',

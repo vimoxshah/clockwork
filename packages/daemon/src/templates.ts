@@ -108,6 +108,45 @@ export function collapseImportPermissionMode(mode: unknown): 'plan' | 'acceptEdi
 }
 
 /**
+ * The exact TaskCreate a template import builds (P6 shares it for packs):
+ * IMPORT_GRANT budgets, queue/no-schedule until reviewed, collapsed
+ * permission mode, user re-picks repo/profile at apply. One builder so a
+ * pack can never grant what a file cannot — extracted verbatim from the
+ * `/templates/import` route, which now calls this.
+ */
+export function buildImportTaskInput(tpl: { name?: unknown; prompt?: unknown; permissionMode?: unknown }): {
+  name: string;
+  prompt: string;
+  profileId: undefined;
+  repoPath: undefined;
+  permissionMode: 'plan' | 'acceptEdits';
+  budget: { maxUsd: number; maxTurns: number; timeoutSec: number };
+  schedule: { kind: 'queue'; tz: string };
+  missedPolicy: string;
+  missedWindowSec: number;
+  overlapPolicy: string;
+  retryOnTransient: boolean;
+  context: { files: never[] };
+  delivery: { osNotify: boolean };
+} {
+  return {
+    name: String((tpl as any).name ?? 'Imported template').slice(0, 120),
+    prompt: String((tpl as any).prompt ?? ''),
+    profileId: undefined,
+    repoPath: undefined, // S-75: user re-picks at apply
+    permissionMode: collapseImportPermissionMode((tpl as any).permissionMode),
+    budget: { ...IMPORT_GRANT.budget },
+    schedule: { ...IMPORT_GRANT.schedule }, // imported = not scheduled until reviewed
+    missedPolicy: IMPORT_GRANT.missedPolicy,
+    missedWindowSec: 21_600,
+    overlapPolicy: IMPORT_GRANT.overlapPolicy,
+    retryOnTransient: false,
+    context: { files: [] },
+    delivery: { ...IMPORT_GRANT.delivery },
+  };
+}
+
+/**
  * T4-8: build a shareable template from a task row. The prompt is masked
  * with the same `maskSecrets` proof-of-work.ts uses for run reports — an
  * exported file is something the user hands to someone else, same posture:

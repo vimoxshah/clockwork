@@ -1317,8 +1317,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     loadBundledTemplates,
     exportTaskTemplate,
     templateExportFilenameFor,
-    collapseImportPermissionMode,
-    IMPORT_GRANT,
+    buildImportTaskInput,
   } = await import('./templates.js');
   // T4-8: resolved the same package/skill-pack-relative-to-compiled-source
   // convention `makeSkillResolver(...)` gets from main.ts:467 — api.ts sits
@@ -1389,29 +1388,132 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     if (preview.flags.some((f) => f.level === 'red')) {
       return reply.code(422).send({ error: 'template rejected by security preview', flags: preview.flags });
     }
-    const created = tasks.create(
-      {
-        name: String(tpl.name ?? 'Imported template').slice(0, 120),
-        prompt: String(tpl.prompt ?? ''),
-        profileId: undefined,
-        repoPath: undefined, // S-75: user re-picks at apply
-        permissionMode: collapseImportPermissionMode(tpl.permissionMode),
-        budget: { ...IMPORT_GRANT.budget },
-        schedule: { ...IMPORT_GRANT.schedule }, // imported = not scheduled until reviewed
-        missedPolicy: IMPORT_GRANT.missedPolicy,
-        missedWindowSec: 21_600,
-        overlapPolicy: IMPORT_GRANT.overlapPolicy,
-        retryOnTransient: false,
-        context: { files: [] },
-        delivery: { ...IMPORT_GRANT.delivery },
-      },
-      null,
-      null,
-    );
+    const created = tasks.create(buildImportTaskInput(tpl) as any, null, null);
     // S-74: arrives DISABLED regardless of payload intent
     deps.db.prepare('UPDATE tasks SET enabled=0 WHERE id=?').run(created.id);
     broadcast({ type: 'task.changed', taskId: created.id, at: Date.now() });
     return reply.code(201).send({ task: view(created), flags: preview.flags });
+  });
+
+  // ---- template packs (P6) ----
+  //
+  // A pack is a signed bundle of templates installed through the SAME import
+  // path as single files (same preview, same red-flag refusal, same disabled
+  // arrival, same IMPORT_GRANT budgets) — a pack cannot grant what a file
+  // cannot. Trust is TOFU over ed25519 with no central registry; versions
+  // never replace in place (old tasks stay until the user removes them).
+  app.post('/packs/preview', async (req, reply) => {
+    const { verifyPack, loadTrustedKeys, resolvePackSource } = await import('./packs.js');
+    const src = await resolvePackSource((req.body ?? {}) as { pack?: unknown; url?: unknown }, deps.dataDir);
+    if (!src.ok) return reply.code(422).send({ error: src.reason, message: src.message });
+    const v = verifyPack(src.pack, loadTrustedKeys(deps.dataDir), deps.version);
+    const templates = (src.pack.templates as any[]).map((t) => ({
+      name: typeof t?.name === 'string' ? t.name : '(unnamed)',
+      schemaOk: t?.schema === 'clockwork.template.v1',
+      preview: t?.schema === 'clockwork.template.v1' ? securityPreview(t) : null,
+    }));
+    const reds = templates.flatMap((t) => (t.preview?.flags ?? []).filter((f: any) => f.level === 'red').map((f: any) => `${t.name}: ${f.text}`));
+    return {
+      manifest: src.pack.manifest,
+      verified: v.ok ? { ok: true, keyId: v.keyId } : { ok: false, reason: v.reason, message: v.message, keyId: (v as any).keyId ?? null },
+      templates,
+      blocked: reds.length > 0,
+      blockedReasons: reds,
+    };
+  });
+
+  app.post('/packs/install', async (req, reply) => {
+    const body = (req.body ?? {}) as { pack?: unknown; url?: string; trustKey?: boolean; force?: boolean };
+    const { verifyPack, loadTrustedKeys, pinTrustedKey, resolvePackSource, cmpPackVersions, assertTemplateShape } = await import('./packs.js');
+    const src = await resolvePackSource(body, deps.dataDir);
+    if (!src.ok) return reply.code(422).send({ error: src.reason, message: src.message });
+    const pack = src.pack;
+    let v = verifyPack(pack, loadTrustedKeys(deps.dataDir), deps.version);
+    if (!v.ok && v.reason === 'unknown_key' && body.trustKey === true && v.keyId && (v as any).pubkeyHex) {
+      // Explicit first-trust: the caller saw the fingerprint (preview shows
+      // it) and consented. Pinned now, verified below like any known key.
+      // Concurrent first-trusts are benign: pins are keyed by keyId, which
+      // hashes the key itself, so two writers pin byte-identical rows.
+      pinTrustedKey(deps.dataDir, v.keyId, (v as any).pubkeyHex, String(pack.manifest.publisher ?? ''));
+      v = verifyPack(pack, loadTrustedKeys(deps.dataDir), deps.version);
+    }
+    if (!v.ok) return reply.code(422).send({ error: v.reason, message: v.message });
+    const existing = deps.db.prepare('SELECT version FROM installed_packs WHERE name=?').get(pack.manifest.name) as any;
+    if (existing) {
+      const cmp = cmpPackVersions(pack.manifest.version, String(existing.version));
+      if (cmp === null) return reply.code(422).send({ error: 'bad_version', message: 'Installed version is not x.y.z — remove the pack record and retry.' });
+      if (cmp < 0) return reply.code(409).send({ error: 'downgrade_refused', message: `Installed ${existing.version} is newer than ${pack.manifest.version} — packs never downgrade.` });
+      if (cmp === 0 && body.force !== true) {
+        return reply.code(409).send({ error: 'already_installed', message: `Pack ${pack.manifest.name} ${pack.manifest.version} is already installed — pass force to install it again.` });
+      }
+    }
+    // Whole-pack red gate BEFORE creating anything: one red template refuses
+    // the install, never a partial pack. Malformed entries refuse as a bad
+    // pack (not a 500): the URL/JSON path hands us arbitrary attacker JSON.
+    const malformed = (pack.templates as any[]).findIndex((t) => !assertTemplateShape(t));
+    if (malformed >= 0) {
+      return reply.code(422).send({ error: 'bad_shape', message: `Template #${malformed + 1} is not a template object.` });
+    }
+    const previews = (pack.templates as any[]).map((t) => ({ name: typeof t?.name === 'string' ? t.name : '(unnamed)', preview: securityPreview(t) }));
+    const reds = previews.flatMap((t) => t.preview.flags.filter((f) => f.level === 'red').map((f) => `${t.name}: ${f.text}`));
+    if (reds.length > 0) return reply.code(422).send({ error: 'template_rejected', message: 'One or more templates failed the security preview — nothing was installed.', reasons: reds });
+    const created: Array<{ taskId: string; name: string }> = [];
+    const tx = deps.db.transaction(() => {
+      // Pack row first: installed_pack_tasks references it, and the FK means
+      // the mapping insert below would fail the other way around.
+      deps.db
+        .prepare('INSERT INTO installed_packs (name, version, publisher, source, key_id, installed_at) VALUES (?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET version=excluded.version, publisher=excluded.publisher, source=excluded.source, key_id=excluded.key_id, installed_at=excluded.installed_at')
+        .run(pack.manifest.name, pack.manifest.version, String(pack.manifest.publisher ?? ''), typeof body.url === 'string' ? body.url : null, v.ok ? v.keyId : null, Date.now());
+      for (const t of pack.templates as any[]) {
+        const row = tasks.create(buildImportTaskInput(t) as any, null, null);
+        deps.db.prepare('UPDATE tasks SET enabled=0 WHERE id=?').run(row.id);
+        deps.db.prepare('INSERT OR IGNORE INTO installed_pack_tasks (pack_name, task_id) VALUES (?,?)').run(pack.manifest.name, row.id);
+        created.push({ taskId: row.id, name: row.name });
+      }
+    });
+    tx();
+    audit('pack.install', 'pack', pack.manifest.name, { version: pack.manifest.version, tasks: String(created.length) });
+    broadcast({ type: 'task.changed', taskId: created[0]?.taskId ?? '', at: Date.now() });
+    return reply.code(201).send({ installed: pack.manifest.name, version: pack.manifest.version, tasks: created });
+  });
+
+  app.get('/packs/installed', async () => {
+    const rows = deps.db.prepare('SELECT name, version, publisher, source, installed_at FROM installed_packs ORDER BY name').all() as any[];
+    return {
+      packs: rows.map((r) => ({
+        ...r,
+        tasks: (deps.db.prepare('SELECT COUNT(*) c FROM installed_pack_tasks WHERE pack_name=?').get(r.name) as any).c,
+      })),
+    };
+  });
+
+  app.delete('/packs/:name', async (req, reply) => {
+    const name = String((req.params as any).name);
+    const row = deps.db.prepare('SELECT * FROM installed_packs WHERE name=?').get(name) as any;
+    if (!row) return reply.code(404).send({ error: 'not_found' });
+    // Honest uninstall: only tasks still disabled AND never run go. Anything
+    // the user enabled or ran is theirs now and stays — reported as kept, so
+    // "uninstall removed my work" can never be the surprise.
+    const ids = deps.db.prepare('SELECT task_id FROM installed_pack_tasks WHERE pack_name=?').all(name) as any[];
+    let removed = 0;
+    const kept: string[] = [];
+    const tx = deps.db.transaction(() => {
+      for (const { task_id: tid } of ids) {
+        const t = deps.db.prepare('SELECT enabled FROM tasks WHERE id=? AND deleted_at IS NULL').get(tid) as any;
+        const ran = deps.db.prepare('SELECT id FROM runs WHERE task_id=? LIMIT 1').get(tid) as any;
+        if (t && Number(t.enabled) === 0 && !ran) {
+          deps.db.prepare('UPDATE tasks SET deleted_at=? WHERE id=?').run(Date.now(), tid);
+          removed++;
+        } else if (t) {
+          kept.push(tid);
+        }
+      }
+      deps.db.prepare('DELETE FROM installed_packs WHERE name=?').run(name);
+    });
+    tx();
+    audit('pack.uninstall', 'pack', name, { removed: String(removed), kept: String(kept.length) });
+    broadcast({ type: 'task.changed', taskId: '', at: Date.now() });
+    return { removed, kept };
   });
 
   /**

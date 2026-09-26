@@ -980,6 +980,13 @@ export const api = {
   approveWorker: (id: string) => req<{ token: string }>('POST', `/workers/${id}/approve`, {}),
   revokeWorker: (id: string) => req<{ unassigned: number; lost: number }>('POST', `/workers/${id}/revoke`, {}),
   removeWorker: (id: string) => req<{ ok: boolean; unassigned: number; lost: number }>('DELETE', `/workers/${id}`),
+
+  // ---- template packs (P6) ----
+  packsInstalled: () => req<{ packs: Array<{ name: string; version: string; publisher: string; tasks: number }> }>('GET', '/packs/installed'),
+  packsPreview: (body: { pack?: unknown; url?: string }) => req<any>('POST', '/packs/preview', body),
+  packsInstall: (body: { pack?: unknown; url?: string; trustKey?: boolean; force?: boolean }) =>
+    req<{ installed: string; version: string; tasks: Array<{ taskId: string; name: string }> }>('POST', '/packs/install', body),
+  packsUninstall: (name: string) => req<{ removed: number; kept: string[] }>('DELETE', `/packs/${name}`),
 };
 
 export interface EventStream {

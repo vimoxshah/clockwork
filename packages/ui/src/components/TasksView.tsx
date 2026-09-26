@@ -34,6 +34,7 @@ import { SENTINEL_SURFACE } from './SentinelsSection';
 import RepoJobsSection from './RepoJobsSection';
 import { REPO_JOBS_SURFACE } from './RepoJobsSection';
 import { PipelinesSection } from './TaskPipeline';
+import { PacksSection } from './PacksSection';
 import { openInbox, openRunInInbox } from './workforce-common';
 import { registerFeatureSurface } from './featureSurfaces';
 import { chipFor, stateLabel } from '../lib/runState';
@@ -53,7 +54,7 @@ export const AGENT_CHAINS_SURFACE = registerFeatureSurface({
 
 type StatusFilter = 'all' | 'active' | 'paused';
 type SortKey = 'name' | 'recent';
-type Section = 'tasks' | 'pairs' | 'sentinels' | 'repo' | 'pipelines';
+type Section = 'tasks' | 'pairs' | 'sentinels' | 'repo' | 'pipelines' | 'packs';
 
 /** Section key → the anchor its feature surface registered, for the always-rendered switch buttons. */
 const SECTION_ANCHOR: Partial<Record<Section, string>> = {
@@ -72,6 +73,7 @@ const SECTIONS: Array<{ key: Section; label: string }> = [
   { key: 'sentinels', label: 'sentinels' },
   { key: 'repo', label: 'repo jobs' },
   { key: 'pipelines', label: 'pipelines' },
+  { key: 'packs', label: 'packs' },
 ];
 
 /** Which half of a plan-then-execute pair a task row is, if any. */
@@ -462,6 +464,7 @@ export default function TasksView({ version }: { version: number }): JSX.Element
       {section === 'pipelines' && (
         <PipelinesSection version={version} tasks={tasks.data ?? []} />
       )}
+      {section === 'packs' && <PacksSection version={version} />}
 
       {section === 'tasks' && (
         <>

@@ -252,4 +252,42 @@ describe('failures and auth', () => {
     });
     expect(bad).toEqual([]);
   });
+
+  it('pack preview/install/list route through with files staying local', async () => {
+    const preview = { manifest: { name: 'np', version: '1.0.0', publisher: 't' }, verified: { ok: true, keyId: 'k' }, templates: [{ name: 'a' }], blocked: false, blockedReasons: [] };
+    const s1 = stub({ 'POST /packs/preview': { status: 200, json: preview } });
+    // Unknown subcommand is usage, not a daemon call.
+    expect(await runCommand(['pack', 'frobnicate', 'x'], s1.t)).toBe(EXIT_USAGE);
+    expect(await runCommand(['pack', 'preview'], s1.t)).toBe(EXIT_USAGE);
+  });
+
+  it('pack list renders installed packs', async () => {
+    const s = stub({ 'GET /packs/installed': { status: 200, json: { packs: [{ name: 'np', version: '1.0.0', tasks: 2 }] } } });
+    expect(await runCommand(['pack', 'list'], s.t)).toBe(EXIT_OK);
+    expect(s.out.join('\n')).toContain('np');
+    expect(s.out.join('\n')).toContain('1.0.0');
+  });
+
+  it('pack sign canonical bytes match the daemon verifier', async () => {
+    // A keypair in temp files; sign a pack doc; the daemon's verifyPack must
+    // accept the produced signature — publisher tooling and verifier agree.
+    const { generateKeyPairSync } = await import('node:crypto');
+    const { verifyPack } = await import('../src/packs.js');
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'cw-packsign-'));
+    try {
+      const { privateKey } = generateKeyPairSync('ed25519');
+      const privHex = privateKey.export({ format: 'der', type: 'pkcs8' }).toString('hex');
+      const doc = { schema: 'clockwork.pack.v1', manifest: { name: 'n', version: '1.0.0', publisher: 'p' }, templates: [{ schema: 'clockwork.template.v1', name: 't' }] };
+      writeFileSync(path.join(dir, 'pack.json'), JSON.stringify(doc));
+      writeFileSync(path.join(dir, 'key.hex'), privHex);
+      const s = stub({});
+      expect(await runCommand(['pack', 'sign', '--json', path.join(dir, 'pack.json'), '--key', path.join(dir, 'key.hex')], s.t)).toBe(EXIT_OK);
+      const printed = JSON.parse(s.out.join(''));
+      const pack = { ...doc, signatures: [{ keyId: printed.keyId, pubkeyHex: printed.pubkeyHex, signature: printed.signature }] };
+      const trusted = new Map([[printed.keyId, { pubkeyHex: printed.pubkeyHex, publisher: 'p', trustedAt: 1 }]]);
+      expect(verifyPack(pack as any, trusted as any, '0.13.0')).toEqual({ ok: true, keyId: printed.keyId });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

@@ -45,6 +45,16 @@ export function baseUrl(port?: number): string {
   return `http://127.0.0.1:${p}`;
 }
 
+/** Canonical JSON — MUST byte-match packs.ts stableStringify, or publisher
+ *  signatures never verify. Duplicated (not imported) because this file is
+ *  also the standalone story: keep the two in sync, tested below. */
+function stableStringify(v: unknown): string {
+  if (v === null || typeof v !== 'object') return JSON.stringify(v) ?? 'null';
+  if (Array.isArray(v)) return `[${v.map(stableStringify).join(',')}]`;
+  const keys = Object.keys(v as Record<string, unknown>).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify((v as Record<string, unknown>)[k])}`).join(',')}}`;
+}
+
 function fmtTime(ms: number | null | undefined): string {
   if (ms == null) return '—';
   return new Date(ms).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -76,6 +86,12 @@ Commands:
   run <task-id>          queue a run now
   open <run-id>          print the branch checkout (text only — never launches anything)
   workers                paired workers: name, status, heartbeat
+  pack preview <file|url>   show a pack's manifest, signature state, per-template preview
+  pack install <file|url> [--trust-key] [--force]
+                         install a pack (disabled tasks, same grants as files)
+  pack list              installed packs with versions
+  pack sign <pack.json> --key <privkey-hex-file>
+                         publisher-side: sign canonical pack bytes with ed25519
 
 Exit codes: 0 ok · 1 usage/validation · 2 daemon unreachable or not logged in ·
 3 not found · 4 refused (gate, conflict) or daemon error (HTTP 5xx, named in
@@ -255,6 +271,86 @@ export async function runCommand(argv: string[], t: CliTransport, port?: number)
       if (status !== 200) return fail(status, w, 'workers');
       const rows = ((w as any)?.workers ?? []).map((x: any) => [String(x.name).slice(0, 28), x.status === 'paired' ? (x.onlineComputed ? 'online' : 'silent') : String(x.status)]);
       return emit(w, rows.length ? table([['WORKER', 'STATE'], ...rows]) : 'no workers paired — Settings › Workers');
+    }
+    case 'pack': {
+      const sub = rest2[0];
+      const target = rest2[1];
+      if (sub !== 'preview' && sub !== 'install' && sub !== 'list' && sub !== 'sign') {
+        t.err('usage: clockwork pack <preview|install|list|sign> …\n\n' + HELP);
+        return EXIT_USAGE;
+      }
+      if (sub === 'list') {
+        const { status, json: l } = await call('GET', '/packs/installed');
+        if (status !== 200) return fail(status, l, 'packs');
+        const rows = ((l as any)?.packs ?? []).map((p: any) => [String(p.name).slice(0, 30), String(p.version), `${(p as any).tasks ?? 0} tasks`]);
+        return emit(l, rows.length ? table([['PACK', 'VERSION', ''], ...rows]) : 'no packs installed');
+      }
+      if (sub === 'sign') {
+        // Publisher-side and fully local: reads the pack file and a
+        // private-key hex file, prints the signature JSON to paste into the
+        // pack's signatures[]. The key file is never sent anywhere.
+        const ki = rest2.indexOf('--key');
+        const keyFile = ki >= 0 ? rest2[ki + 1] : undefined;
+        if (!target || !keyFile) {
+          t.err('usage: clockwork pack sign <pack.json> --key <privkey-hex-file>');
+          return EXIT_USAGE;
+        }
+        try {
+          const { readFileSync: readFs } = await import('node:fs');
+          const { createPrivateKey, createPublicKey, sign: cryptoSign } = await import('node:crypto');
+          const pack = JSON.parse(readFs(target, 'utf8'));
+          const priv = createPrivateKey({ key: Buffer.from(String(readFs(keyFile, 'utf8')).trim(), 'hex'), format: 'der', type: 'pkcs8' });
+          const pub = createPublicKey(priv);
+          const pubHex = pub.export({ format: 'der', type: 'spki' }).toString('hex');
+          const canon = stableStringify({ manifest: pack.manifest, templates: pack.templates });
+          const sig = cryptoSign(null, Buffer.from(canon, 'utf8'), priv).toString('hex');
+          const { createHash } = await import('node:crypto');
+          const keyId = createHash('sha256').update(pubHex.toLowerCase(), 'utf8').digest('hex').slice(0, 16);
+          return emit({ keyId, pubkeyHex: pubHex, signature: sig }, `keyId: ${keyId}\nadd this object to the pack's signatures[] — then verify with: clockwork pack preview <file>`);
+        } catch (e) {
+          t.err(`error: cannot sign: ${e instanceof Error ? e.message : String(e)}`);
+          return EXIT_USAGE;
+        }
+      }
+      if (!target) {
+        t.err(`usage: clockwork pack ${sub} <file|url>${sub === 'install' ? ' [--trust-key] [--force]' : ''}`);
+        return EXIT_USAGE;
+      }
+      // Files stay local (read here, POSTed as JSON); URLs are fetched by the
+      // daemon over https only. Either way the preview/install contract —
+      // verify, red-gate, disabled arrival — runs daemon-side.
+      let body: Record<string, unknown>;
+      if (/^https:\/\//i.test(target)) {
+        body = { url: target };
+      } else {
+        try {
+          const { readFileSync: readFs } = await import('node:fs');
+          body = { pack: JSON.parse(readFs(target, 'utf8')) };
+        } catch (e) {
+          t.err(`error: cannot read pack file: ${e instanceof Error ? e.message : String(e)}`);
+          return EXIT_USAGE;
+        }
+      }
+      if (sub === 'preview') {
+        const { status, json: p } = await call('POST', '/packs/preview', body);
+        if (status !== 200) return fail(status, p, 'pack preview');
+        const v = (p as any).verified;
+        const lines = [
+          `${(p as any).manifest.name} ${(p as any).manifest.version} — ${(p as any).manifest.publisher ?? 'unknown publisher'}`,
+          v?.ok ? `✓ signed by trusted key ${v.keyId}` : `! signature: ${(v as any)?.message ?? 'unverified'}`,
+          ...((p as any).templates ?? []).map((x: any) => `  - ${x.name}${x.schemaOk ? '' : ' (BAD SCHEMA)'}`),
+          ...((p as any).blockedReasons ?? []).map((r: string) => `  BLOCKED: ${r}`),
+        ];
+        return emit(p, lines.join('\n'));
+      }
+      const { status, json: r } = await call('POST', '/packs/install', {
+        ...body,
+        ...(rest2.includes('--trust-key') ? { trustKey: true } : {}),
+        ...(rest2.includes('--force') ? { force: true } : {}),
+      });
+      if (status !== 200 && status !== 201) return fail(status, r, 'pack install');
+      const tasks = ((r as any)?.tasks ?? []).map((x: any) => `  - ${x.name}`).join('\n');
+      return emit(r, `✓ Installed ${(r as any)?.installed} ${(r as any)?.version} — ${((r as any)?.tasks ?? []).length} task(s), disabled until reviewed:\n${tasks}`);
     }
     default: {
       t.err(`unknown command: ${cmd}\n\n${HELP}`);

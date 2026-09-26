@@ -59,6 +59,12 @@ export const CONTROL_PLANE_PATHS = [
   `${dataDir}/clockwork.sqlite-wal`,
   `${dataDir}/clockwork.sqlite-shm`,
   `${dataDir}/delivery-creds.json`,
+  `${dataDir}/worker-key`,
+  // P6: pack trust pins are public keys, but the FILE decides what the next
+  // install trusts — a run that could write it could bless its own pack and
+  // wait for a human to install "already trusted" malware. Nothing in a run
+  // legitimately reads trust pins, so the whole path is denied like the rest.
+  `${dataDir}/trusted-pack-keys.json`,
 ];
 
 export const CREDENTIAL_PATHS = [
