@@ -44,6 +44,13 @@ export function WorkersCard({ version }: { version: number }): JSX.Element {
   const [pinTask, setPinTask] = useState('');
   const [pinWorker, setPinWorker] = useState('');
   const [pinRequired, setPinRequired] = useState(true);
+  const joinQ = useAsync(() => api.workerStatus(), [version]);
+  const [joinUrl, setJoinUrl] = useState('');
+  const [joinToken, setJoinToken] = useState('');
+  const [joinBusy, setJoinBusy] = useState(false);
+  const [joinMsg, setJoinMsg] = useState<string | null>(null);
+  const [joinErr, setJoinErr] = useState<string | null>(null);
+  const [miniPubkey, setMiniPubkey] = useState<string | null>(null);
 
   const reload = (): void => ws.reload();
 
@@ -106,6 +113,55 @@ export function WorkersCard({ version }: { version: number }): JSX.Element {
       () => api.patchTask(pinTask, { workerPin: pinWorker || null, workerRequired: pinRequired, version: tasks.find((t) => t.id === pinTask)?.version }),
       pinWorker ? 'Pinned.' : 'Unpinned — runs locally again.',
     );
+  };
+
+  const join = async (): Promise<void> => {
+    setJoinBusy(true);
+    setJoinMsg(null);
+    setJoinErr(null);
+    try {
+      const r = await api.joinWorker({ primaryUrl: joinUrl.trim(), token: joinToken.trim() });
+      setJoinUrl('');
+      setJoinToken('');
+      setJoinMsg(`Joined ${r.primaryHost} — this daemon now pulls jobs. No restart needed.`);
+      joinQ.reload();
+    } catch (e) {
+      setJoinErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setJoinBusy(false);
+    }
+  };
+
+  const leave = async (): Promise<void> => {
+    if (!confirm('Leave the primary? This daemon stops pulling jobs. Jobs it already pulled finish and report first.')) return;
+    setJoinBusy(true);
+    setJoinMsg(null);
+    setJoinErr(null);
+    try {
+      await api.leaveWorker();
+      setJoinMsg('Left — this daemon pulls nothing now.');
+      joinQ.reload();
+    } catch (e) {
+      setJoinErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setJoinBusy(false);
+    }
+  };
+
+  const keygen = async (): Promise<void> => {
+    if (!confirm('Mint a new worker identity? The old key dies — the primary must re-pair this machine.')) return;
+    setJoinBusy(true);
+    setJoinMsg(null);
+    setJoinErr(null);
+    try {
+      const r = await api.workerKeygen();
+      setMiniPubkey(r.publicKeyHex);
+      setJoinMsg('New identity minted. Paste the public key into the primary’s pair flow.');
+    } catch (e) {
+      setJoinErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setJoinBusy(false);
+    }
   };
 
   const workers: WorkerT[] = ws.data?.workers ?? [];
@@ -317,6 +373,77 @@ export function WorkersCard({ version }: { version: number }): JSX.Element {
           {err}
         </div>
       )}
+      <div className="cred-row">
+        <label className="f cred-label" htmlFor="worker-join-url">
+          Join another daemon
+        </label>
+        {joinQ.data?.joined ? (
+          <p className="hint" style={{ margin: '0 0 6px' }} data-testid="worker-join-status">
+            Joined to <strong className="mono">{joinQ.data.primaryHost ?? 'unknown host'}</strong>
+            {joinQ.data.via === 'env' ? ' via environment (Join below would be shadowed — unset the env to switch)' : ' via this app'}.
+            This daemon pulls jobs from there; its own tasks still run here.
+          </p>
+        ) : (
+          <p className="hint" style={{ margin: '0 0 6px' }} data-testid="worker-join-status">
+            This daemon pulls from nobody. Paste the primary’s URL and the bearer token its Approve step
+            showed once — the Mini side of the ceremony above, no terminal needed.
+          </p>
+        )}
+        <input
+          id="worker-join-url"
+          className="cred-field"
+          type="url"
+          autoComplete="off"
+          spellCheck={false}
+          value={joinUrl}
+          onChange={(e) => setJoinUrl(e.target.value)}
+          placeholder="https://mini-lan:8787 or http://100.x.y.z:8787"
+          data-testid="worker-join-url"
+        />
+        <input
+          id="worker-join-token"
+          aria-label="Primary bearer token"
+          className="cred-field"
+          type="password"
+          autoComplete="off"
+          spellCheck={false}
+          value={joinToken}
+          onChange={(e) => setJoinToken(e.target.value)}
+          placeholder="Bearer token from the primary’s Approve step"
+          data-testid="worker-join-token"
+          style={{ marginTop: 6 }}
+        />
+        <div className="hint cred-hint">Saved to worker.json (0600) — never shown again, never logged. Takes effect without a restart.</div>
+        <div className="cred-actions">
+          <button className="btn small primary" disabled={joinBusy || !joinUrl.trim() || joinToken.trim().length < 16} onClick={() => void join()} data-testid="worker-join-button">
+            {joinBusy ? 'Joining…' : joinQ.data?.joined ? 'Re-join' : 'Join'}
+          </button>
+          {joinQ.data?.joined && joinQ.data?.via === 'file' && (
+            <button className="btn small danger" disabled={joinBusy} onClick={() => void leave()} data-testid="worker-leave-button">
+              Leave
+            </button>
+          )}
+          <button className="btn small" disabled={joinBusy} onClick={() => void keygen()} data-testid="worker-keygen-button" title="Mint this machine's ed25519 identity (the terminal clockworkd worker-key, in-app)">
+            Mint identity
+          </button>
+        </div>
+        {miniPubkey && (
+          <div className="ok-banner" data-testid="worker-mini-pubkey" role="status">
+            This machine’s public key (paste into the primary’s pair flow):
+            <div>
+              <code className="mono" style={{ userSelect: 'all' }}>
+                {miniPubkey}
+              </code>
+            </div>
+          </div>
+        )}
+        {joinMsg && <div className="ok-banner">{joinMsg}</div>}
+        {joinErr && (
+          <div className="error-banner" role="alert">
+            {joinErr}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

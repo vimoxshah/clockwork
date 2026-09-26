@@ -57,6 +57,7 @@ import { timesheet, setHumanHourlyRate } from './timesheets.js';
 import { scorecard, scorecards, reviewPromptFor } from './performance.js';
 import {
   loadDeliveryCreds,
+  resolveGithubWebhookSecret,
   writeDeliveryCreds,
   maskBotToken,
   maskSlackWebhookUrl,
@@ -186,7 +187,7 @@ export function requiresAuth(rawUrl: string): boolean {
     if (workerProtocol) continue;
     const needsAuth =
       /^\/(tasks|runs|approvals|profiles|search|widget|queue|onboarding|pause-all|resume|capacity)/.test(url) ||
-      /^\/(analytics|retention|audit|policies|capabilities|targets|byok|delivery-config|github|workers|triggers|trigger-events|ics|usage)/.test(url) ||
+      /^\/(analytics|retention|audit|policies|capabilities|targets|byok|delivery-config|github|workers|worker|triggers|trigger-events|ics|usage)/.test(url) ||
       /^\/(license|support|auth)\//.test(url) || // S-review: control plane + diagnostics must not be anonymous
       /^\/(calendars|templates)\//.test(url) || // S-audit: ICS export leaks task data; template preview is control plane
       /^\/fs\//.test(url) || // /fs/browse discloses directory AND file names under $HOME — never anonymous
@@ -1222,11 +1223,13 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       const sig = req.headers['x-hub-signature-256'] as string | undefined;
       if (src === 'github') {
         // S-audit fix (fail closed): GitHub signatures can only be verified
-        // against a plaintext secret via CLOCKWORK_GITHUB_WEBHOOK_SECRET.
-        // With no secret configured there is NO verification path — a request
-        // carrying any self-asserted header previously passed both checks and
-        // fired the task. Now: reject regardless of header presence.
-        const envSecret = process.env.CLOCKWORK_GITHUB_WEBHOOK_SECRET;
+        // against a plaintext secret — CLOCKWORK_GITHUB_WEBHOOK_SECRET first,
+        // the 0600 delivery-creds file second (Settings can write files, not
+        // launchd env). With neither configured there is NO verification
+        // path — a request carrying any self-asserted header previously
+        // passed both checks and fired the task. Now: reject regardless of
+        // header presence.
+        const envSecret = resolveGithubWebhookSecret(deps.dataDir);
         if (!envSecret) {
           return respond(503, { error: 'github trigger has no verification secret configured' }, false, 'server_not_configured');
         }
@@ -1612,6 +1615,69 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     audit('worker.remove', 'worker', id, {});
     broadcast({ type: 'workers.changed', at: Date.now() });
     return r;
+  });
+
+  // ---- this daemon as a worker: Join / Leave / status / keygen ----
+  //
+  // The Mini side of pairing. Settings cannot write process environments, so
+  // Join persists { primaryUrl, token } to worker.json (0600); the always-on
+  // agent re-reads it every poll, env first. No route here ever returns the
+  // token — status reports the primary host and which source won.
+  app.get('/worker/status', async () => {
+    const { resolveWorkerCreds } = await import('./worker-agent.js');
+    const creds = resolveWorkerCreds(deps.dataDir);
+    if (!creds) return { joined: false, primaryHost: null, via: null };
+    let primaryHost: string | null = null;
+    try {
+      primaryHost = new URL(creds.primaryUrl).host;
+    } catch {
+      primaryHost = null;
+    }
+    const via = process.env.CLOCKWORK_WORKER_PRIMARY || process.env.CLOCKWORK_WORKER_TOKEN ? 'env' : 'file';
+    return { joined: true, primaryHost, via };
+  });
+
+  app.post('/worker/join', async (req, reply) => {
+    const parsed = z
+      .object({ primaryUrl: z.string().min(1).max(500), token: z.string().min(16).max(500) })
+      .safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(422).send({ error: 'validation' });
+    let host: string;
+    try {
+      const u = new URL(parsed.data.primaryUrl);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('bad protocol');
+      host = u.host;
+    } catch {
+      return reply.code(422).send({ error: 'primaryUrl must be an http(s) URL' });
+    }
+    const { writeWorkerJoin } = await import('./worker-agent.js');
+    writeWorkerJoin(deps.dataDir, { primaryUrl: parsed.data.primaryUrl, token: parsed.data.token });
+    audit('worker.join', 'worker', undefined, { primaryHost: host });
+    broadcast({ type: 'worker.changed', at: Date.now() });
+    return { ok: true, primaryHost: host };
+  });
+
+  app.post('/worker/leave', async () => {
+    const { clearWorkerJoin } = await import('./worker-agent.js');
+    clearWorkerJoin(deps.dataDir);
+    audit('worker.leave', 'worker', undefined, {});
+    broadcast({ type: 'worker.changed', at: Date.now() });
+    return { ok: true };
+  });
+
+  app.post('/worker/keygen', async () => {
+    // App-visible twin of `clockworkd worker-key`: mints the Mini's ed25519
+    // identity, stores the private key 0600, returns the DER-hex public key
+    // to paste into the primary's pair flow. The private key NEVER leaves.
+    const { generateKeyPairSync } = await import('node:crypto');
+    const { writeFileSync, chmodSync } = await import('node:fs');
+    const { default: path } = await import('node:path');
+    const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+    const privPath = path.join(deps.dataDir, 'worker-key');
+    writeFileSync(privPath, privateKey.export({ format: 'der', type: 'pkcs8' }).toString('hex'), { mode: 0o600 });
+    chmodSync(privPath, 0o600);
+    audit('worker.keygen', 'worker', undefined, {});
+    return { publicKeyHex: publicKey.export({ format: 'der', type: 'spki' }).toString('hex') };
   });
 
   app.get('/workers/me', async (req, reply) => {
@@ -3186,6 +3252,9 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
         ])
         .optional(),
       smtpFrom: z.union([z.string().email(), z.null()]).optional(),
+      // GitHub webhook verification secret: same 0600 custody, settable from
+      // the app (the launchd env var is not). Env wins at verify time.
+      githubWebhookSecret: z.union([z.string().min(8), z.null()]).optional(),
     });
     const parsed = DeliveryCredsSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(422).send({ error: 'validation' });
@@ -3199,6 +3268,7 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
       slackWebhookUrl: credState('slackWebhookUrl'),
       smtpUrl: credState('smtpUrl'),
       smtpFrom: credState('smtpFrom'),
+      githubWebhookSecret: credState('githubWebhookSecret'),
     });
     return readDeliveryConfigStatus(deps.dataDir);
   });
@@ -4270,6 +4340,7 @@ export function readDeliveryConfigStatus(dataDir: string): {
   webhook: { configured: boolean };
   slack: { configured: boolean; webhookUrlMasked: string | null };
   smtp: { configured: boolean; endpointMasked: string | null; from: string | null };
+  githubWebhook: { configured: boolean };
 } {
   const creds = loadDeliveryCreds(dataDir);
   return {
@@ -4288,5 +4359,6 @@ export function readDeliveryConfigStatus(dataDir: string): {
       endpointMasked: creds.smtpUrl ? maskSmtpUrl(creds.smtpUrl) : null,
       from: creds.smtpFrom ?? null,
     },
+    githubWebhook: { configured: Boolean(resolveGithubWebhookSecret(dataDir)) },
   };
 }

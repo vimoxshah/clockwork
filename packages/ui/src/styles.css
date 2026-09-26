@@ -603,6 +603,35 @@ label.f { display: block; color: var(--muted); font-size: 12px; margin: 12px 0 4
 /* The page heading is not a card; it introduces all of them. */
 .settings-page > h2 { grid-column: 1 / -1; }
 
+/* Settings tab layout (the revamp): a sticky nav beside one visible group,
+   instead of twenty cards in one scroll. The group keeps the card grid, so
+   cards still flow in columns within the active tab. Narrow windows stack
+   the nav on top as a horizontal scroll row. */
+.settings-layout { display: grid; grid-column: 1 / -1; grid-template-columns: 11rem minmax(0, 1fr); gap: 16px; align-items: start; }
+.settings-nav {
+  display: flex; flex-direction: column; gap: 2px; position: sticky; top: 12px;
+  max-height: calc(100vh - 120px); overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px;
+}
+.settings-nav button {
+  border: none; background: transparent; color: var(--muted); text-align: left;
+  padding: 7px 10px; cursor: pointer; font-size: 12.5px; border-radius: 6px; white-space: nowrap;
+  flex-shrink: 0;
+}
+.settings-nav button:hover { background: var(--surface-hover); color: var(--fg); }
+.settings-nav button.on { background: var(--surface-active); color: var(--fg); font-weight: 500; }
+.settings-group {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 26rem), 1fr));
+  gap: 16px; align-items: start; grid-auto-flow: row dense; min-width: 0;
+}
+/* NOTE: .settings-group intentionally repeats .settings-page's track rules
+   instead of sharing a selector — the two grids diverge on width/max-width
+   and a shared rule would couple them invisibly. Change both together. */
+@media (max-width: 720px) {
+  .settings-layout { grid-template-columns: minmax(0, 1fr); }
+  .settings-nav { position: static; flex-direction: row; overflow-x: auto; }
+}
+
 .settings-card { min-width: 0; }
 .settings-card > .section-title:first-child { margin-top: 0; }
 

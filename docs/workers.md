@@ -7,16 +7,20 @@ two daemons talk over your own tunnel (Tailscale, WireGuard, or plain LAN).
 
 ## Pairing a worker (three human-visible steps)
 
-1. On the worker, run `clockworkd worker-key`. It prints the worker's ed25519
-   public key (DER hex) and stores the private key 0600 beside it. The private
-   key never prints.
+1. On the worker, get its ed25519 public key: **Settings › Workers → Join
+   another daemon → Mint identity**, or run `clockworkd worker-key` in a
+   terminal. Either way the private key is stored 0600 on the worker and
+   never prints, never leaves.
 2. On the primary, **Settings › Workers → Pair new worker**: name it, paste
    the pubkey. The primary shows a **nonce** (10 minutes, single use) — hand
    it to the worker (paste it into the worker's environment or config).
 3. The worker claims with its signature. The primary records the identity but
    issues nothing yet. **Approve** on the primary — only then does it return
-   the bearer token, exactly once, for the worker's configuration
-   (`CLOCKWORK_WORKER_TOKEN`, primary URL in `CLOCKWORK_WORKER_PRIMARY`).
+   the bearer token, exactly once. Paste it into the worker's **Settings ›
+   Workers → Join another daemon** form beside the primary URL (saved 0600
+   to `worker.json`, live without a restart), or set `CLOCKWORK_WORKER_TOKEN`
+   / `CLOCKWORK_WORKER_PRIMARY` in its environment — env wins when both
+   exist.
 
 A valid signature alone never earns a token. Approval waits for a verified
 claim; claiming waits for an operator-started pairing.

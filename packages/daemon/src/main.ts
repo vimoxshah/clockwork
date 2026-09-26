@@ -608,23 +608,17 @@ export async function main(argv: string[] = process.argv): Promise<number> {
     : null;
   telegramPoller?.start();
 
-  // Worker agent (P4): strictly opt-in via environment. A daemon with no
-  // worker env never polls anyone — primary behavior is unchanged, and a
-  // worker daemon still runs its own scheduler for its own tasks.
-  const workerPrimary = process.env.CLOCKWORK_WORKER_PRIMARY ?? '';
-  const workerToken = process.env.CLOCKWORK_WORKER_TOKEN ?? '';
-  const workerAgent =
-    workerPrimary && workerToken
-      ? startWorkerAgent({
-          db,
-          dataDir,
-          primaryUrl: workerPrimary,
-          token: workerToken,
-          pump: () => runManager.pump(),
-          log: (msg) => process.stderr.write(`[worker-agent] ${msg}\n`),
-        })
-      : null;
-  if (workerAgent) process.stdout.write(`worker-agent: polling ${workerPrimary}\n`);
+  // Worker agent (P4): always running, idle until joined. Credentials resolve
+  // per poll — env first, then the worker.json the app's Join flow writes —
+  // so Join/Leave and token rotations take effect without a daemon restart.
+  // An unjoined daemon never polls anyone; primary behavior is unchanged, and
+  // a worker daemon still runs its own scheduler for its own tasks.
+  const workerAgent = startWorkerAgent({
+    db,
+    dataDir,
+    pump: () => runManager.pump(),
+    log: (msg) => process.stderr.write(`[worker-agent] ${msg}\n`),
+  });
 
   const shutdown = (): void => {
     keepAwake.releaseAll(); // never leave a caffeinate child holding the Mac awake

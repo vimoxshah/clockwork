@@ -81,6 +81,20 @@ export function featureSurfaces(): FeatureSurface[] {
 }
 
 /**
+ * Settings is tabbed (one group visible at a time), so a "Show me" link must
+ * activate the anchor's GROUP before scrolling — the element does not exist
+ * until its group renders. SettingsView registers its activator here (no
+ * import back: this module must not depend on any screen). A set, not a
+ * slot: HMR or a test re-import re-registers, and the newest registration
+ * wins by iteration order rather than orphaning anyone.
+ */
+const settingsAnchorActivators = new Set<(anchorId: string) => void>();
+
+export function onSettingsAnchorRequest(fn: (anchorId: string) => void): void {
+  settingsAnchorActivators.add(fn);
+}
+
+/**
  * Take the user to a surface.
  *
  * Not an `<a href="#office-hours">`: `App.tsx`'s `tabFromHash()` reads the
@@ -93,6 +107,13 @@ export function revealFeatureSurface(surface: FeatureSurface): void {
   const wanted = `#/${surface.tab}`;
   const sameTab = window.location.hash === wanted;
   if (!sameTab) window.location.hash = wanted;
+  // Settings owns its scroll: activating the group and waiting for render
+  // needs retries a fire-and-forget scroll cannot do. Non-settings tabs keep
+  // the direct scroll below.
+  if (surface.tab === 'settings' && settingsAnchorActivators.size > 0) {
+    settingsAnchorActivators.forEach((fn) => fn(surface.anchorId));
+    return;
+  }
   const scroll = (): void => {
     const el = document.getElementById(surface.anchorId);
     // jsdom has no layout, so scrollIntoView is not always defined there.

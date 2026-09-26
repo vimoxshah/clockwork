@@ -597,6 +597,7 @@ export interface DeliveryConfigT {
    */
   slack?: { configured: boolean; webhookUrlMasked: string | null };
   smtp?: { configured: boolean; endpointMasked: string | null; from: string | null };
+  githubWebhook?: { configured: boolean };
 }
 
 /**
@@ -946,6 +947,7 @@ export const api = {
     slackWebhookUrl?: string | null;
     smtpUrl?: string | null;
     smtpFrom?: string | null;
+    githubWebhookSecret?: string | null;
   }) => req<DeliveryConfigT>('PUT', '/delivery-config', body),
   testTelegram: (chatId: string) =>
     req<{ ok: boolean; error?: string }>('POST', '/delivery-config/test-telegram', { chatId }),
@@ -980,6 +982,15 @@ export const api = {
   approveWorker: (id: string) => req<{ token: string }>('POST', `/workers/${id}/approve`, {}),
   revokeWorker: (id: string) => req<{ unassigned: number; lost: number }>('POST', `/workers/${id}/revoke`, {}),
   removeWorker: (id: string) => req<{ ok: boolean; unassigned: number; lost: number }>('DELETE', `/workers/${id}`),
+  // This daemon as a worker: the Mini side of pairing. Status never carries
+  // the token — only the primary host and which source (env or the file the
+  // Join form writes) the agent is polling with.
+  workerStatus: () =>
+    req<{ joined: boolean; primaryHost: string | null; via: 'env' | 'file' | null }>('GET', '/worker/status'),
+  joinWorker: (body: { primaryUrl: string; token: string }) =>
+    req<{ ok: boolean; primaryHost: string }>('POST', '/worker/join', body),
+  leaveWorker: () => req<{ ok: boolean }>('POST', '/worker/leave', {}),
+  workerKeygen: () => req<{ publicKeyHex: string }>('POST', '/worker/keygen', {}),
 
   // ---- template packs (P6) ----
   packsInstalled: () => req<{ packs: Array<{ name: string; version: string; publisher: string; tasks: number }> }>('GET', '/packs/installed'),

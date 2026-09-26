@@ -19,7 +19,7 @@ import { Select, SelectValue, SelectTrigger, SelectContent, SelectItem } from '.
 import { api, getToken } from '../api';
 import { useAsync } from '../useAsync';
 import { FolderBrowserDialog } from './FolderBrowserDialog';
-import { registerFeatureSurface } from './featureSurfaces';
+import { registerFeatureSurface, onSettingsAnchorRequest } from './featureSurfaces';
 
 /**
  * The capabilities THIS FILE mounts, declared next to the mounts themselves so
@@ -249,6 +249,42 @@ export function UpdateCheckCard(): JSX.Element {
   );
 }
 
+/**
+ * Settings groups (the revamp): one group visible at a time behind a sidebar,
+ * instead of twenty cards in one scroll. Anchors (`id` on each h3) and the
+ * featureSurfaces `where` paths are unchanged, so capability-matrix "Show me"
+ * links and the LicenseCard keep working — they now also activate the group.
+ */
+export type SettingsGroupKey = 'general' | 'providers' | 'notifications' | 'integrations' | 'scheduling' | 'governance' | 'workers';
+
+export const SETTINGS_GROUPS: Array<{ key: SettingsGroupKey; label: string }> = [
+  { key: 'general', label: 'General' },
+  { key: 'providers', label: 'Providers & execution' },
+  { key: 'notifications', label: 'Notifications' },
+  { key: 'integrations', label: 'Integrations' },
+  { key: 'scheduling', label: 'Scheduling' },
+  { key: 'governance', label: 'Governance' },
+  { key: 'workers', label: 'Workers' },
+];
+
+const GROUP_FOR_ANCHOR: Record<string, SettingsGroupKey> = {
+  'byok-providers': 'providers',
+  'cli-engines': 'providers',
+  'event-triggers': 'integrations',
+  github: 'integrations',
+  'office-hours': 'scheduling',
+  'quiet-hours': 'scheduling',
+  retention: 'governance',
+  'earned-autonomy': 'governance',
+  workers: 'workers',
+  'check-for-updates': 'general',
+};
+
+const anchorListeners = new Set<(anchorId: string) => void>();
+onSettingsAnchorRequest((anchorId: string) => {
+  anchorListeners.forEach((fn) => fn(anchorId));
+});
+
 export default function SettingsView({ version }: { version: number }): JSX.Element {
   const { pref, setPref } = useTheme();
   const health = useAsync(() => api.health(), [version]);
@@ -257,6 +293,32 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
   const [err, setErr] = useState<string | null>(null);
 
   const paused = health.data?.paused ?? false;
+
+  // One group visible at a time. Anchor requests (capability-matrix "Show
+  // me" links) switch the group first — the target element does not exist
+  // until its group renders — then scroll with retries, because a single
+  // fixed delay races slow renders and fails silent.
+  const [group, setGroup] = useState<SettingsGroupKey>('general');
+  useEffect(() => {
+    const onAnchor = (anchorId: string): void => {
+      const g = GROUP_FOR_ANCHOR[anchorId];
+      if (g) setGroup(g);
+      let tries = 0;
+      const tick = (): void => {
+        const el = document.getElementById(anchorId);
+        if (el && typeof el.scrollIntoView === 'function') {
+          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          return;
+        }
+        if (++tries < 5) setTimeout(tick, 60);
+      };
+      setTimeout(tick, 0);
+    };
+    anchorListeners.add(onAnchor);
+    return () => {
+      anchorListeners.delete(onAnchor);
+    };
+  }, []);
 
   const togglePause = async (): Promise<void> => {
     setBusy(true);
@@ -276,6 +338,50 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
     <div className="settings-page">
       <h2 style={{ marginTop: 0 }}>Settings</h2>
 
+      <div className="settings-layout">
+        <nav className="settings-nav" aria-label="Settings sections" role="tablist" aria-orientation="vertical">
+          {SETTINGS_GROUPS.map((g, i) => (
+            <button
+              key={g.key}
+              role="tab"
+              id={`settings-tab-${g.key}`}
+              aria-selected={group === g.key}
+              aria-controls={`settings-panel-${g.key}`}
+              tabIndex={group === g.key ? 0 : -1}
+              className={group === g.key ? 'on' : ''}
+              data-testid={`settings-nav-${g.key}`}
+              onClick={() => setGroup(g.key)}
+              onKeyDown={(e) => {
+                // WAI-APG tabs: arrows move between tabs, Home/End jump.
+                // Roving tabindex (above) keeps one tab stop for the row.
+                let next: number | null = null;
+                if (e.key === 'ArrowDown' || e.key === 'ArrowRight') next = (i + 1) % SETTINGS_GROUPS.length;
+                else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') next = (i - 1 + SETTINGS_GROUPS.length) % SETTINGS_GROUPS.length;
+                else if (e.key === 'Home') next = 0;
+                else if (e.key === 'End') next = SETTINGS_GROUPS.length - 1;
+                if (next !== null) {
+                  e.preventDefault();
+                  const target = SETTINGS_GROUPS[next]!;
+                  setGroup(target.key);
+                  // Focus follows selection so screen-reader context moves
+                  // with the visible panel — next frame, after it renders.
+                  setTimeout(() => document.getElementById(`settings-tab-${target.key}`)?.focus(), 0);
+                }
+              }}
+            >
+              {g.label}
+            </button>
+          ))}
+        </nav>
+        <div
+          className="settings-group"
+          role="tabpanel"
+          id={`settings-panel-${group}`}
+          aria-labelledby={`settings-tab-${group}`}
+          data-testid={`settings-group-${group}`}
+        >
+
+      {group === 'general' && (
       <section className="settings-card">
       <h3 className="section-title">Appearance</h3>
       <div className="tasklist-row">
@@ -298,22 +404,30 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
         </div>
       </div>
       </section>
+      )}
 
+      {group === 'notifications' && (
       <section className="settings-card settings-card--wide">
       <h3 className="section-title">Notifications &amp; delivery</h3>
       <DeliveryCard version={version} />
       </section>
+      )}
 
+      {group === 'integrations' && (
       <section className="settings-card settings-card--wide">
       <h3 className="section-title" id="github">GitHub</h3>
       <GithubCard version={version} />
       </section>
+      )}
 
+      {group === 'workers' && (
       <section className="settings-card settings-card--wide">
       <h3 className="section-title" id="workers">Workers</h3>
       <WorkersCard version={version} />
       </section>
+      )}
 
+      {group === 'scheduling' && (
       <section className="settings-card">
       <h3 className="section-title">Scheduling</h3>
       {health.error && <div className="error-banner">Couldn’t load daemon state: {health.error}</div>}
@@ -349,37 +463,51 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
         </div>
       )}
       </section>
+      )}
 
+      {group === 'scheduling' && (
       <section className="settings-card settings-card--wide">
       <h3 className="section-title" id="office-hours">Office hours</h3>
       <OfficeHoursCard version={version} />
       </section>
+      )}
 
+      {group === 'scheduling' && (
       <section className="settings-card settings-card--wide">
       <h3 className="section-title" id="quiet-hours">Quiet hours</h3>
       <QuietHoursCard version={version} />
       </section>
+      )}
 
+      {group === 'governance' && (
       <section className="settings-card settings-card--wide">
       <h3 className="section-title" id="retention">Retention</h3>
       <RetentionCard version={version} />
       </section>
+      )}
 
+      {group === 'governance' && (
       <section className="settings-card">
       <h3 className="section-title" id="earned-autonomy">Earned autonomy</h3>
       <AutonomyCard version={version} />
       </section>
+      )}
 
+      {group === 'general' && (
       <section className="settings-card">
       <h3 className="section-title">Usage &amp; limits</h3>
       <UsageCard version={version} />
       </section>
+      )}
 
+      {group === 'integrations' && (
       <section className="settings-card">
       <h3 className="section-title">Calendars</h3>
       <IcsCard version={version} />
       </section>
+      )}
 
+      {group === 'general' && (
       <section className="settings-card">
           <h3 className="section-title">Keyboard shortcuts</h3>
           <div className="tasklist-row" style={{ display: 'block' }}>
@@ -395,7 +523,9 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
             <p className="hint" style={{ marginTop: 8 }}>Press ⌘K anywhere to search commands.</p>
           </div>
       </section>
+      )}
 
+      {group === 'general' && (
       <section className="settings-card">
       <h3 className="section-title">Security</h3>
       <div className="tasklist-row">
@@ -427,7 +557,9 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
         </button>
       </div>
       </section>
+      )}
 
+      {group === 'general' && (
       <section className="settings-card">
       <h3 className="section-title">Support</h3>
       <div className="tasklist-row">
@@ -460,32 +592,44 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
         </button>
       </div>
       </section>
+      )}
 
+      {group === 'general' && (
       <section className="settings-card">
       <h3 className="section-title" id="check-for-updates">Check for updates</h3>
       <UpdateCheckCard />
       </section>
+      )}
 
+      {group === 'general' && (
       <section className="settings-card">
       <h3 className="section-title">Plan &amp; license</h3>
       <LicenseCard version={version} />
       </section>
+      )}
 
+      {group === 'providers' && (
       <section className="settings-card settings-card--wide">
       <h3 className="section-title" id="byok-providers">API providers (BYOK)</h3>
       <ByokCard version={version} />
       </section>
+      )}
 
+      {group === 'providers' && (
       <section className="settings-card settings-card--wide">
       <h3 className="section-title" id="cli-engines">CLI engines</h3>
       <ProvidersCard version={version} />
       </section>
+      )}
 
+      {group === 'integrations' && (
       <section className="settings-card settings-card--wide">
       <h3 className="section-title" id="event-triggers">Event triggers</h3>
       <TriggersCard version={version} />
       </section>
+      )}
 
+      {group === 'providers' && (
       <section className="settings-card">
       <h3 className="section-title">Execution</h3>
       <p className="hint">
@@ -494,6 +638,9 @@ export default function SettingsView({ version }: { version: number }): JSX.Elem
         SSH keys unreadable, and hard budget bounds.
       </p>
       </section>
+      )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -1815,6 +1962,7 @@ function ProvidersCard({ version }: { version: number }): JSX.Element {
 function TriggersCard({ version }: { version: number }): JSX.Element {
   const triggers = useAsync(() => api.triggers(), [version]);
   const tasks = useAsync(() => api.tasks(), [version]);
+  const cfg = useAsync(() => api.deliveryConfig(), [version]);
   const [name, setName] = useState('');
   const [source, setSource] = useState<'webhook' | 'github'>('webhook');
   const [taskId, setTaskId] = useState('');
@@ -1823,6 +1971,24 @@ function TriggersCard({ version }: { version: number }): JSX.Element {
   const [err, setErr] = useState<string | null>(null);
   const [gate, setGate] = useState<{ feature?: string; requiresPlan?: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [ghSecret, setGhSecret] = useState('');
+  const [ghBusy, setGhBusy] = useState(false);
+  const [ghMsg, setGhMsg] = useState<string | null>(null);
+
+  const saveGhSecret = async (clear: boolean): Promise<void> => {
+    setGhBusy(true);
+    setGhMsg(null);
+    try {
+      await api.saveDeliveryConfig({ githubWebhookSecret: clear ? null : ghSecret.trim() || null });
+      setGhSecret('');
+      cfg.reload();
+      setGhMsg(clear ? 'GitHub verification secret cleared.' : 'GitHub verification secret saved.');
+    } catch (e) {
+      setGhMsg(String((e as Error).message ?? e));
+    } finally {
+      setGhBusy(false);
+    }
+  };
 
   const create = async (): Promise<void> => {
     setBusy(true);
@@ -1853,6 +2019,42 @@ function TriggersCard({ version }: { version: number }): JSX.Element {
 
   return (
     <div>
+      <div className="row3" style={{ alignItems: 'end', marginBottom: 12 }}>
+        <div>
+          <label className="f" htmlFor="trg-gh-secret">GitHub verification secret</label>
+          <input
+            id="trg-gh-secret"
+            type="password"
+            value={ghSecret}
+            placeholder={cfg.data?.githubWebhook?.configured ? 'configured — enter a new value to rotate' : 'min 8 chars'}
+            onChange={(e) => setGhSecret(e.target.value)}
+            data-testid="trigger-github-secret"
+          />
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button
+            className="btn"
+            disabled={ghBusy || ghSecret.trim().length < 8}
+            onClick={() => void saveGhSecret(false)}
+            data-testid="trigger-github-secret-save"
+          >
+            {ghBusy ? 'Saving…' : 'Save secret'}
+          </button>
+          {cfg.data?.githubWebhook?.configured && (
+            <button className="btn danger" disabled={ghBusy} onClick={() => void saveGhSecret(true)}>
+              Clear
+            </button>
+          )}
+        </div>
+        <p className="hint" style={{ margin: 0 }}>
+          {cfg.data?.githubWebhook?.configured
+            ? 'A secret is configured — GitHub triggers verify signatures.'
+            : 'No secret configured — GitHub triggers refuse to fire until one is set.'}{' '}
+          Stored in the 0600 delivery-creds file; the{' '}
+          <span className="mono">CLOCKWORK_GITHUB_WEBHOOK_SECRET</span> env var wins when both exist.
+        </p>
+      </div>
+      {ghMsg && <div className="ok-banner">{ghMsg}</div>}
       {gate && (
         <div style={{ marginBottom: 10 }}>
           <UpgradeHint
@@ -1900,7 +2102,8 @@ function TriggersCard({ version }: { version: number }): JSX.Element {
           {source === 'github'
             ? (
               <p className="hint" style={{ margin: 0 }}>
-                GitHub verifies via <span className="mono">CLOCKWORK_GITHUB_WEBHOOK_SECRET</span>.
+                GitHub verifies via the secret saved above
+                (or <span className="mono">CLOCKWORK_GITHUB_WEBHOOK_SECRET</span>).
               </p>
             )
             : (

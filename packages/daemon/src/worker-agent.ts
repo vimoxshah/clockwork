@@ -1,9 +1,10 @@
 /**
  * Worker agent (P4): the loop that makes THIS daemon a worker of another.
  *
- * Enabled only by environment — CLOCKWORK_WORKER_PRIMARY (primary base URL)
- * plus CLOCKWORK_WORKER_TOKEN (the bearer issued at approve). Nothing here
- * runs on a primary; a daemon with no worker env never polls anyone.
+ * Enabled by environment (CLOCKWORK_WORKER_PRIMARY plus CLOCKWORK_WORKER_TOKEN,
+ * the bearer issued at approve) or by the app's Join flow, which persists the
+ * same pair to worker.json. Env wins; the file re-reads every poll. Nothing
+ * here runs until one of the two is present — an unjoined daemon only idles.
  *
  * Each poll: heartbeat → next-job → accept or decline → on accept, adapt the
  * jobspec's machine paths to THIS dataDir, insert the SAME run id locally so
@@ -18,18 +19,65 @@
  *   terminal state is posted. A crash between finalize and POST leaves the
  *   primary row claimed; the primary's silence sweep marks it worker_lost.
  */
-import { existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, rmSync, chmodSync } from 'node:fs';
 import path from 'node:path';
 import type { DB } from './db.js';
 
 export interface WorkerAgentOptions {
   db: DB;
   dataDir: string;
-  primaryUrl: string;
-  token: string;
+  /** Boot-time overrides; the live resolution is env first, worker.json second. */
+  primaryUrl?: string;
+  token?: string;
   pump: () => void;
   intervalMs?: number;
   log?: (message: string) => void;
+}
+
+/**
+ * App-settable join state. Settings cannot write process environments, so a
+ * Mini joined from its own UI persists `{ primaryUrl, token }` here (0600)
+ * instead of env vars. Env wins when both exist; the agent re-reads this
+ * file every poll, so Join/Leave takes effect without a daemon restart.
+ */
+export interface WorkerJoin {
+  primaryUrl: string;
+  token: string;
+}
+
+export function workerJoinPath(dataDir: string): string {
+  return path.join(dataDir, 'worker.json');
+}
+
+export function readWorkerJoin(dataDir: string): WorkerJoin | null {
+  try {
+    const raw = JSON.parse(readFileSync(workerJoinPath(dataDir), 'utf8')) as {
+      primaryUrl?: unknown;
+      token?: unknown;
+    };
+    if (typeof raw.primaryUrl !== 'string' || !raw.primaryUrl || typeof raw.token !== 'string' || !raw.token) return null;
+    return { primaryUrl: raw.primaryUrl, token: raw.token };
+  } catch {
+    return null;
+  }
+}
+
+export function writeWorkerJoin(dataDir: string, join: WorkerJoin): void {
+  const p = workerJoinPath(dataDir);
+  writeFileSync(p, JSON.stringify(join), { mode: 0o600 });
+  chmodSync(p, 0o600);
+}
+
+export function clearWorkerJoin(dataDir: string): void {
+  rmSync(workerJoinPath(dataDir), { force: true });
+}
+
+/** Env wins, worker.json second, boot options last. Never throws. */
+export function resolveWorkerCreds(dataDir: string, overrides?: { primaryUrl?: string; token?: string }): WorkerJoin | null {
+  const primaryUrl = process.env.CLOCKWORK_WORKER_PRIMARY || overrides?.primaryUrl || readWorkerJoin(dataDir)?.primaryUrl || '';
+  const token = process.env.CLOCKWORK_WORKER_TOKEN || overrides?.token || readWorkerJoin(dataDir)?.token || '';
+  if (!primaryUrl || !token) return null;
+  return { primaryUrl, token };
 }
 
 interface PrimaryJob {
@@ -37,11 +85,11 @@ interface PrimaryJob {
   jobspec: Record<string, any>;
 }
 
-async function primaryFetch(opts: WorkerAgentOptions, path: string, init?: RequestInit): Promise<Response> {
-  const url = `${opts.primaryUrl.replace(/\/$/, '')}${path}`;
+async function primaryFetch(primaryUrl: string, token: string, path: string, init?: RequestInit): Promise<Response> {
+  const url = `${primaryUrl.replace(/\/$/, '')}${path}`;
   return fetch(url, {
     ...init,
-    headers: { ...(init?.headers ?? {}), 'x-clockwork-worker': opts.token, 'content-type': 'application/json' },
+    headers: { ...(init?.headers ?? {}), 'x-clockwork-worker': token, 'content-type': 'application/json' },
   });
 }
 
@@ -97,6 +145,8 @@ export function startWorkerAgent(options: WorkerAgentOptions): { stop(): void } 
   let activeRunId: string | null = readActive();
   if (activeRunId) log(`resuming unfinished report for ${activeRunId}`);
   let workerId: string | null = null;
+  let boundCreds: string | null = null;
+  let idleLogged = false;
   let timer: ReturnType<typeof setInterval> | null = null;
 
   const localTerminal = (runId: string): { state: string; row: any } | null => {
@@ -108,12 +158,30 @@ export function startWorkerAgent(options: WorkerAgentOptions): { stop(): void } 
 
   const poll = async (): Promise<void> => {
     if (stopped) return;
+    // Resolved every poll: Join/Leave from the app's UI (worker.json) and
+    // token rotations take effect without a restart. Env wins over the file.
+    const creds = resolveWorkerCreds(dataDir, { primaryUrl: options.primaryUrl, token: options.token });
+    if (!creds) {
+      if (!idleLogged) {
+        log('not joined to a primary — polling idle until Join (Settings › Workers) or worker env is set');
+        idleLogged = true;
+      }
+      return;
+    }
+    idleLogged = false;
+    const credKey = `${creds.primaryUrl} ${creds.token}`;
+    if (boundCreds !== credKey) {
+      // Re-join or rotation: the old identity belongs to old credentials.
+      workerId = null;
+      boundCreds = credKey;
+    }
+    const { primaryUrl, token } = creds;
     try {
       // Identity first, once: the token resolves to the worker row, and every
       // other protocol route is addressed by that id (a token never stands in
       // for an id — workers must not reach each other's jobs).
       if (!workerId) {
-        const me = await primaryFetch(options, `/workers/me`);
+        const me = await primaryFetch(primaryUrl, token, `/workers/me`);
         if (me.status === 401) {
           log('identity rejected (401) — token dead (revoked?). Settle manually; polling continues in case it was rotated.');
           return;
@@ -129,7 +197,7 @@ export function startWorkerAgent(options: WorkerAgentOptions): { stop(): void } 
       // Heartbeat on EVERY poll, including while a job executes: the sweep
       // marks silence, not idleness, and a long job must not look dead.
       // (Closed a real hole: the heartbeat used to skip during execution.)
-      const hb = await primaryFetch(options, `/workers/${id}/heartbeat`, { method: 'POST', body: JSON.stringify({}) });
+      const hb = await primaryFetch(primaryUrl, token, `/workers/${id}/heartbeat`, { method: 'POST', body: JSON.stringify({}) });
       if (hb.status === 401) {
         log('heartbeat rejected (401) — token dead (revoked?). Settle manually; polling continues in case it was rotated.');
         workerId = null; // re-resolve: a rotation issues a new identity binding
@@ -148,7 +216,7 @@ export function startWorkerAgent(options: WorkerAgentOptions): { stop(): void } 
         }
         const done = localTerminal(activeRunId);
         if (!done) return; // still executing locally
-        const res = await primaryFetch(options, `/workers/${id}/runs/${activeRunId}/complete`, {
+        const res = await primaryFetch(primaryUrl, token, `/workers/${id}/runs/${activeRunId}/complete`, {
           method: 'POST',
           body: JSON.stringify({
             state: done.state,
@@ -168,7 +236,7 @@ export function startWorkerAgent(options: WorkerAgentOptions): { stop(): void } 
         }
         return;
       }
-      const jr = await primaryFetch(options, `/workers/${id}/next-job`);
+      const jr = await primaryFetch(primaryUrl, token, `/workers/${id}/next-job`);
       if (jr.status === 204) return;
       if (!jr.ok) {
         log(`next-job failed (HTTP ${jr.status})`);
@@ -178,7 +246,7 @@ export function startWorkerAgent(options: WorkerAgentOptions): { stop(): void } 
       if (!run) return;
       const spec = run.jobspec as Record<string, any>;
       if (spec.repoPath && !existsSync(spec.repoPath)) {
-        await primaryFetch(options, `/workers/${id}/runs/${run.id}/decline`, {
+        await primaryFetch(primaryUrl, token, `/workers/${id}/runs/${run.id}/decline`, {
           method: 'POST',
           body: JSON.stringify({ reason: `repo missing on worker: ${spec.repoPath}` }),
         });

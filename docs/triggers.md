@@ -55,17 +55,19 @@ past your own machine.
 `x-hub-signature-256: sha256=<hex>`; Clockwork recomputes it and does a
 constant-time compare (`triggers.ts`). The signing key is **one
 process-wide value** — the `CLOCKWORK_GITHUB_WEBHOOK_SECRET` environment
-variable — not the per-trigger `secret`, which is stored but never checked
-for this source. Leave `secret` unset for `github` triggers. No env var set
-means every request is refused with `503`, fail closed (`api.ts`).
+variable, or the secret saved in **Settings › Triggers** (top row), which
+persists 0600 to `delivery-creds.json` — not the per-trigger `secret`, which
+is stored but never checked for this source. Env wins when both exist. Leave
+`secret` unset for `github` triggers. Neither set means every request is
+refused with `503`, fail closed (`api.ts`).
 
 The daemon runs as a login `launchd` agent (`cli.ts:16-34`) whose generated
-plist has no `EnvironmentVariables` entry, and there's no settings-screen for
-this secret yet. Get it into the daemon's environment either by running
-`launchctl setenv CLOCKWORK_GITHUB_WEBHOOK_SECRET '<value>'` and then
+plist has no `EnvironmentVariables` entry, so the Settings row is the normal
+path — no terminal needed. The `launchctl` route still works if you prefer
+it: `launchctl setenv CLOCKWORK_GITHUB_WEBHOOK_SECRET '<value>'` and then
 `launchctl kickstart -k gui/$(id -u)/com.clockwork.daemon` to restart the
-agent with it, or by adding an `EnvironmentVariables` dict to
-`~/Library/LaunchAgents/com.clockwork.daemon.plist` yourself and running the
+agent with it, or add an `EnvironmentVariables` dict to
+`~/Library/LaunchAgents/com.clockwork.daemon.plist` yourself and run the
 same `kickstart` command.
 
 Verification runs over the exact bytes the sender put on the wire, not a

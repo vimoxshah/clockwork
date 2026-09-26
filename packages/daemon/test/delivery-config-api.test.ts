@@ -365,7 +365,8 @@ describe('delivery-config API', () => {
   // says the T-310 wiring contract (delivery lane snippet 3) adds `slack` and
   // `smtp` to this response. Resolved in the spec's favour by EXTENDING the
   // expected object — still `toEqual`, not `toMatchObject`, so the assertion
-  // stays exhaustive and a fifth channel appearing here would still fail it.
+  // stays exhaustive and a sixth channel appearing here would still fail it.
+  // (githubWebhook joined the same way: app-settable secret beside the env.)
   it('GET with no creds configured', async () => {
     const res = await app.inject(auth({ method: 'GET', url: '/delivery-config' }));
     expect(res.statusCode).toBe(200);
@@ -374,6 +375,7 @@ describe('delivery-config API', () => {
       webhook: { configured: false },
       slack: { configured: false, webhookUrlMasked: null },
       smtp: { configured: false, endpointMasked: null, from: null },
+      githubWebhook: { configured: false },
     });
   });
 

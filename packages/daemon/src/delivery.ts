@@ -40,6 +40,13 @@ export interface DeliveryConfigCred {
    */
   githubPat?: string;
   /**
+   * GitHub webhook verification secret. Same custody as every credential
+   * here — and settable from the app, unlike the launchd env var it
+   * shadows: Settings cannot write process environments, so this file is
+   * the only path a user has. Env wins when both exist.
+   */
+  githubWebhookSecret?: string;
+  /**
    * WhatsApp/other personal gateways: unused by any adapter, by decision.
    * ADR-018 and `plan/02-architecture.md` §240 define a gateway as any HTTP
    * endpoint that accepts the signed Run Report payload, so a gateway is
@@ -1021,6 +1028,18 @@ export function writeDeliveryCreds(dataDir: string, patch: Record<string, string
   }
   writeFileSync(path, JSON.stringify(current, null, 2), { mode: 0o600 });
   chmodSync(path, 0o600); // writeFileSync's mode is ignored when the file already exists
+}
+
+/**
+ * GitHub webhook verification secret: CLOCKWORK_GITHUB_WEBHOOK_SECRET first,
+ * the 0600 delivery-creds file second. The file exists because Settings can
+ * write files but not launchd environments — without it the secret is
+ * terminal-only and GitHub triggers are undeployable from the app. Null when
+ * neither is set, and callers must fail closed on null (a GitHub delivery
+ * with no secret to verify against is rejected, never fired).
+ */
+export function resolveGithubWebhookSecret(dataDir: string): string | null {
+  return process.env.CLOCKWORK_GITHUB_WEBHOOK_SECRET || loadDeliveryCreds(dataDir).githubWebhookSecret || null;
 }
 
 /**

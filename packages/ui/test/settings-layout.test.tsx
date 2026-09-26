@@ -14,7 +14,7 @@
 import { describe, expect, it, afterEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { renderComponent, waitForElement } from './helpers/dom';
+import { renderComponent, waitForElement, waitForText } from './helpers/dom';
 import { OfficeHoursCard } from '../src/components/OfficeHoursCard';
 
 // Source-level, like stale-page-notice.test.tsx: SettingsView reaches a dozen
@@ -98,54 +98,112 @@ describe('the office-hours controls are one row of sized fields', () => {
   });
 });
 
-describe('the page is one grid, not a stack with two-column islands', () => {
-  it('has no `settings-grid` island left', () => {
-    // The two islands began at "Usage & limits" and "CLI engines", which is why
-    // a second column appeared two thirds of the way down the page.
-    expect(VIEW).not.toContain('settings-grid');
-    expect(CSS).not.toContain('.settings-grid');
+describe('settings tabs: one group visible, sidebar navigation', () => {
+  it('declares every group once, in a fixed order', () => {
+    // New settings join a group; they must not become an eighth tab by
+    // accident or an untabbed section. The count below is the contract.
+    const groups = [...VIEW.matchAll(/\{ key: '(\w+)', label: '([^']+)' \}/g)].map((m) => m[1]);
+    expect(groups).toEqual(['general', 'providers', 'notifications', 'integrations', 'scheduling', 'governance', 'workers']);
   });
 
-  it('wraps every section in a card of the one grid', () => {
-    const cards = VIEW.match(/className="settings-card/g) ?? [];
-    const titles = VIEW.match(/className="section-title/g) ?? [];
-    expect(cards.length).toBeGreaterThanOrEqual(14);
-    // One card per section heading — a heading outside a card is a section that
-    // would not take part in the column flow.
-    expect(cards.length).toBe(titles.length);
+  it('renders every section inside exactly one group gate', () => {
+    // Each <section> opens under `{group === '<key>' && (` — a section outside
+    // any gate would render on every tab, and one under two gates would
+    // render twice. Count gates per section via the heading each block holds.
+    const gates = [...VIEW.matchAll(/\{group === '(\w+)' && \(\n\s+<section/g)].map((m) => m[1]);
+    expect(gates).toHaveLength(20);
+    const valid = new Set(['general', 'providers', 'notifications', 'integrations', 'scheduling', 'governance', 'workers']);
+    for (const g of gates) expect(valid.has(g), `unknown group gate: ${g}`).toBe(true);
+    // Scheduling owns three sections; workers owns one.
+    expect(gates.filter((g) => g === 'scheduling')).toHaveLength(3);
+    expect(gates.filter((g) => g === 'workers')).toHaveLength(1);
   });
 
-  it('stops a card stretching, and backfills the holes a full-row card leaves', () => {
-    // Deliberately NOT claiming this removes all whitespace: a grid row is
-    // still as tall as its tallest one-span card. What it removes is the
-    // half-screen — "Usage & limits" no longer shares a two-cell row with the
-    // tallest section on the page.
-    expect(CSS).toMatch(/\.settings-page\s*\{[^}]*align-items:\s*start/);
-    expect(CSS).toMatch(/\.settings-page\s*\{[^}]*grid-auto-flow:\s*row dense/);
-  });
-
-  it('starts the columns at the FIRST section, not two thirds down', () => {
-    // SET-1's first clause. Every section heading opens a card, so there is no
-    // run of full-width single-column content before the grid begins — which is
-    // what made the second column appear mid-page.
-    // Walk the file once, in order, instead of grepping a window behind each
-    // heading — a fixed lookback matches a card opened for a DIFFERENT section
-    // and would pass on a page that had drifted back into islands.
-    const tokens = [...VIEW.matchAll(/<section className="settings-card|<\/section>|<h3 className="section-title/g)];
-    let depth = 0;
-    let headings = 0;
-    for (const t of tokens) {
-      if (t[0].startsWith('<section')) depth++;
-      else if (t[0] === '</section>') depth = Math.max(0, depth - 1);
-      else {
-        headings++;
-        expect(depth, `the heading at ${t.index} is not inside a settings-card`).toBeGreaterThan(0);
-      }
+  it('keeps every anchor id the deep links use', () => {
+    // Capability-matrix "Show me" links and GROUP_FOR_ANCHOR resolve these;
+    // renaming one orphans a link with no failing assertion elsewhere.
+    for (const a of ['byok-providers', 'cli-engines', 'event-triggers', 'github', 'office-hours', 'quiet-hours', 'retention', 'earned-autonomy', 'workers', 'check-for-updates']) {
+      expect(VIEW, `anchor ${a} missing`).toContain(`id="${a}"`);
+      expect(VIEW, `anchor ${a} has no group mapping`).toContain(`'${a}'`);
     }
-    expect(headings).toBeGreaterThanOrEqual(14);
   });
 
-  it('collapses to one column by track floor rather than a breakpoint', () => {
-    expect(CSS).toMatch(/repeat\(auto-fill,\s*minmax\(min\(100%,\s*26rem\),\s*1fr\)\)/);
+  it('the nav names every group and marks tabs accessibly', () => {
+    expect(VIEW).toContain('role="tablist"');
+    expect(VIEW).toContain('role="tab"');
+    expect(VIEW).toContain('aria-selected={group === g.key}');
+    expect(VIEW).toContain('data-testid={`settings-nav-${g.key}`}');
+    expect(VIEW).toContain('role="tabpanel"');
+  });
+
+  it('the group grid keeps the card flow, and stacks on narrow windows', () => {
+    expect(CSS).toMatch(/\.settings-group\s*\{[^}]*grid-auto-flow:\s*row dense/);
+    expect(CSS).toMatch(/\.settings-nav\s*\{[^}]*flex-direction:\s*column/);
+    expect(CSS).toContain('@media (max-width: 720px)');
+  });
+});
+
+describe('settings tab switching', () => {
+  const json = (b: unknown): Response =>
+    new Response(JSON.stringify(b), { status: 200, headers: { 'content-type': 'application/json' } });
+
+  async function mountSettings(): Promise<HTMLDivElement> {
+    const { default: SettingsView } = await import('../src/components/SettingsView');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (u: unknown) => {
+        const p = String(u).split('?')[0];
+        // Shapes the cards actually read: lists stay lists, objects stay
+        // objects. A bare {} everywhere renders some cards into a crash
+        // (WorkersCard maps tasks), which would test the stub, not the tabs.
+        if (p === '/tasks' || p === '/profiles' || p === '/triggers' || p === '/calendars/ics') return json([]);
+        if (p === '/workers') return json({ workers: [] });
+        if (p === '/capabilities') return json({ tier: 'free', features: [], entitlement: { tier: 'free', state: 'none' } });
+        if (p === '/workforce/office-hours') return json({ enabled: false, windows: [] });
+        return json({});
+      }),
+    );
+    const container = await renderComponent(<SettingsView version={1} />);
+    await waitForElement(container, '[data-testid="settings-nav-general"]');
+    return container;
+  }
+
+  it('shows General first and switches groups on nav clicks', async () => {
+    const container = await mountSettings();
+    expect(container.querySelector('[data-testid="settings-group-general"]')).not.toBeNull();
+    expect(container.textContent).toContain('Appearance');
+    expect(container.querySelector('[data-testid="settings-group-workers"]')).toBeNull();
+    (container.querySelector('[data-testid="settings-nav-workers"]') as HTMLButtonElement).click();
+    await waitForElement(container, '[data-testid="settings-group-workers"]');
+    expect(container.textContent).toContain('Workers');
+    expect(container.querySelector('[data-testid="settings-group-general"]')).toBeNull();
+    const active = container.querySelector('[data-testid="settings-nav-workers"]') as HTMLButtonElement;
+    expect(active.getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('an anchor request activates its group', async () => {
+    const container = await mountSettings();
+    expect(container.querySelector('[data-testid="settings-group-integrations"]')).toBeNull();
+    // The capability-matrix "Show me" path: revealFeatureSurface invokes the
+    // activator SettingsView registered on mount. scrollIntoView is a no-op
+    // in jsdom by design; the group switch is what this proves.
+    const { revealFeatureSurface } = await import('../src/components/featureSurfaces');
+    (Element.prototype as any).scrollIntoView = () => {};
+    revealFeatureSurface({ key: 'github_pr', tab: 'settings', where: 'Settings › GitHub', anchorId: 'github' });
+    await waitForElement(container, '[data-testid="settings-group-integrations"]');
+    await waitForText(container, 'GitHub');
+  });
+
+  it('arrow keys walk the tabs with a roving tabindex', async () => {
+    const container = await mountSettings();
+    const general = container.querySelector('[data-testid="settings-nav-general"]') as HTMLButtonElement;
+    general.focus();
+    expect(general.tabIndex).toBe(0);
+    expect((container.querySelector('[data-testid="settings-nav-workers"]') as HTMLButtonElement).tabIndex).toBe(-1);
+    general.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
+    await waitForElement(container, '[data-testid="settings-group-workers"]');
+    expect(document.activeElement?.getAttribute('data-testid')).toBe('settings-nav-workers');
+    (document.activeElement as HTMLButtonElement).dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }));
+    await waitForElement(container, '[data-testid="settings-group-general"]');
   });
 });
