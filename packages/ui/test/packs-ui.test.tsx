@@ -108,4 +108,75 @@ describe('PacksSection', () => {
     await waitForText(container, 'bypassPermissions');
     expect((container.querySelector('[data-testid="pack-install-button"]') as HTMLButtonElement).disabled).toBe(true);
   });
+
+  it('install sends the trust flag; declined confirms send nothing', async () => {
+    const seen: Call[] = [];
+    const stubber = (call: Call) => {
+      seen.push(call);
+      if (call.url === '/packs/installed') return json({ packs: [{ name: 'np', version: '1.0.0', publisher: 't', tasks: 1 }] });
+      if (call.url === '/packs/preview') return json(PREVIEW_UNKNOWN);
+      if (call.url === '/packs/install') return json({ installed: 'np', version: '1.0.0', tasks: [] });
+      throw new Error(`unexpected request: ${call.method} ${call.url}`);
+    };
+    const realConfirm = window.confirm;
+    try {
+      // Decline: no DELETE fires.
+      stubFetch(stubber);
+      let container = await renderComponent(<PacksSection version={1} />);
+      await waitForText(container, 'np');
+      (window as any).confirm = () => false;
+      [...container.querySelectorAll('button')].find((b) => b.textContent === 'Uninstall')!.click();
+      await new Promise((r) => setTimeout(r, 100));
+      expect(seen.some((c) => c.method === 'DELETE')).toBe(false);
+      // Trust flag travels: without it the daemon would 422 unknown_key.
+      (window as any).confirm = () => true;
+      stubFetch(stubber);
+      container = await renderComponent(<PacksSection version={1} />);
+      await waitForElement(container, '[data-testid="pack-url-input"]');
+      const input = container.querySelector('[data-testid="pack-url-input"]') as HTMLInputElement;
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!;
+      setter.call(input, 'https://example.test/np.json');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      (container.querySelector('[data-testid="pack-preview-url"]') as HTMLButtonElement).click();
+      await waitForElement(container, '[data-testid="pack-trust-key"]');
+      (container.querySelector('[data-testid="pack-trust-key"]') as HTMLInputElement).click();
+      (container.querySelector('[data-testid="pack-install-button"]') as HTMLButtonElement).click();
+      await waitForText(container, 'arrive disabled');
+      const install = seen.filter((c) => c.url === '/packs/install').pop();
+      expect((install?.body as any)?.trustKey).toBe(true);
+    } finally {
+      (window as any).confirm = realConfirm;
+    }
+  });
+
+  it('rotation, incompatibility and conflict verdicts surface verbatim', async () => {
+    const cases: Array<{ preview: any; text: string }> = [
+      {
+        preview: { ...PREVIEW_UNKNOWN, verified: { ok: false, reason: 'key_changed', message: 'Known publisher key k1 arrived with different key bytes' } },
+        text: 'different key bytes',
+      },
+      {
+        preview: { ...PREVIEW_UNKNOWN, verified: { ok: false, reason: 'incompatible', message: 'Pack needs Clockwork 99.0.0+' } },
+        text: '99.0.0',
+      },
+    ];
+    for (const { preview, text } of cases) {
+      stubFetch((call) => {
+        if (call.url === '/packs/installed') return json({ packs: [] });
+        if (call.url === '/packs/preview') return json(preview);
+        throw new Error(`unexpected request: ${call.method} ${call.url}`);
+      });
+      const container = await renderComponent(<PacksSection version={1} />);
+      await waitForElement(container, '[data-testid="pack-url-input"]');
+      const input = container.querySelector('[data-testid="pack-url-input"]') as HTMLInputElement;
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!;
+      setter.call(input, 'https://example.test/x.json');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      (container.querySelector('[data-testid="pack-preview-url"]') as HTMLButtonElement).click();
+      await waitForText(container, text);
+      // Neither verdict offers an install path.
+      expect((container.querySelector('[data-testid="pack-install-button"]') as HTMLButtonElement).disabled).toBe(true);
+      document.body.innerHTML = '';
+    }
+  });
 });
