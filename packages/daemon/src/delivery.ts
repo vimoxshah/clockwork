@@ -126,12 +126,26 @@ export function formatReportText(p: RunReportPayload): string {
   return lines.join('\n');
 }
 
+/**
+ * "in 2h 5m (Tue 29 Sep, 01:45 GMT+5:30)". The daemon runs on the user's own
+ * Mac, so its local zone is the reader's zone; the relative part holds even
+ * when that assumption does not (a worker in another zone).
+ */
+function formatDeadline(timeoutAt: number, now: number): string {
+  const mins = Math.round((timeoutAt - now) / 60_000);
+  const left = mins <= 0 ? 'now' : mins < 60 ? `in ${mins}m` : `in ${Math.floor(mins / 60)}h ${mins % 60}m`;
+  const clock = new Intl.DateTimeFormat('en-GB', {
+    weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZoneName: 'short',
+  }).format(timeoutAt);
+  return `${left} (${clock})`;
+}
+
 /** Compact "a human needs to answer" message — same shape for every channel. */
-export function formatApprovalText(p: ApprovalNotifyPayload): string {
+export function formatApprovalText(p: ApprovalNotifyPayload, now: number = Date.now()): string {
   const lines = [
     `🔒 ${p.taskName} (${p.engine}) is waiting on your approval`,
     `${p.tool}: ${p.commandSummary}`,
-    `Auto-denies at ${new Date(p.timeoutAt).toISOString()} if nobody answers.`,
+    `Auto-denies ${formatDeadline(p.timeoutAt, now)} if nobody answers.`,
     `Answer in Clockwork's Inbox.`,
     `Approval ${p.approvalId}`,
   ];
