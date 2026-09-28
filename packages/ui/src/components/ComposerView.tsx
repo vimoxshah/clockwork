@@ -258,10 +258,13 @@ const DOW: Array<{ value: Weekday; label: string }> = [
  * string). `packages/daemon/test/templates-library.test.ts` separately
  * verifies the JSON files parse and validate on their own.
  *
- * Only what the composer actually prefills is carried: `missedPolicy`,
- * `overlapPolicy` and `delivery` are the schema defaults `submit()` already
- * sends (run-late / skip / {osNotify:true}), so a template never needs to
- * restate them. `tz` is deliberately NOT carried — the shipped files use
+ * Only what the composer actually prefills is carried: `missedPolicy` and
+ * `delivery` are the schema defaults `submit()` still sends unconditionally
+ * (run-late / {osNotify:true}), so a template never needs to restate them.
+ * `overlapPolicy` defaults to 'skip' in form state and `applyTemplate` below
+ * leaves it untouched, so applying a template still books 'skip' unless the
+ * user changes the Overlap policy control (Schedule section) afterwards.
+ * `tz` is deliberately NOT carried — the shipped files use
  * 'UTC' as a portable placeholder; the composer leaves the user's own
  * `Intl` zone untouched.
  */
@@ -421,6 +424,11 @@ export default function ComposerView({
     intervalToHour: '24',
     rruleTime: '09:00',
     monthlyDay: String(new Date().getDate()),
+    // Only meaningful for a recurring schedule — a one-off or ASAP booking
+    // never has a "previous occurrence" to collide with. Defaults to the
+    // schema default ('skip', schemas.ts) so leaving the control untouched
+    // books exactly what pre-control tasks always booked.
+    overlapPolicy: 'skip' as 'skip' | 'queue',
     tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
     telegramChatId: '',
     telegramIsGroup: false,
@@ -529,7 +537,11 @@ export default function ComposerView({
         permissionMode: form.permissionMode,
         budget: { maxUsd: maxUsdN, maxTurns: maxTurnsN, timeoutSec: timeoutSecN },
         missedPolicy: 'run-late',
-        overlapPolicy: 'skip',
+        // The control only shows for a recurring schedule (below); a one-off
+        // or ASAP booking has no "previous occurrence" to collide with, so a
+        // 'queue' picked on a Recurring tab must not leak in if the user
+        // switches to One-off/ASAP afterwards without touching the field again.
+        overlapPolicy: form.kind === 'rrule' ? form.overlapPolicy : 'skip',
         retryOnTransient: false,
         context: { files: [] },
         delivery,
@@ -1086,6 +1098,24 @@ export default function ComposerView({
                         />
                       </div>
                     )}
+                    <div>
+                      <Label htmlFor="c-overlap-policy">If the previous run is still going</Label>
+                      <Select
+                        value={form.overlapPolicy}
+                        onValueChange={(v) => setForm({ ...form, overlapPolicy: v as 'skip' | 'queue' })}
+                      >
+                        <SelectTrigger id="c-overlap-policy" aria-label="Overlap policy" data-testid="composer-overlap-policy">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="skip">Skip — mark this occurrence skipped, with a note (default)</SelectItem>
+                          <SelectItem value="queue">Queue — book it anyway; same-repo runs take turns, a task with no repo just waits for a free slot</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="mt-1 text-xs text-dim">
+                        Counts a run still waiting on your approval as "still going", the same as one actively executing.
+                      </p>
+                    </div>
                       </div>
                       <NextRunsPanel
                         rrule={'rrule' in previewRule ? previewRule.rrule : null}

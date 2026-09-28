@@ -885,6 +885,14 @@ function EditDialog({
   const [maxTurns, setMaxTurns] = useState(String(task.budget.maxTurns));
   const [timeoutSec, setTimeoutSec] = useState(String(task.budget.timeoutSec));
   const [permissionMode, setPermissionMode] = useState(task.permissionMode);
+  // `TaskViewT.overlapPolicy` (api.ts) already carries the row's current
+  // value — this is the composer's create-time control's edit-mode sibling
+  // (ComposerView.tsx only ever POSTs; this dialog is the real PATCH path,
+  // see AGENT_CHAINS_SURFACE's doc comment above for the same reasoning
+  // about "Chain after"). `GET /tasks` (daemon api.ts `view()`) has no
+  // `schedule` field, so this dialog cannot tell a recurring task from a
+  // one-off one and shows the control unconditionally, unlike the composer.
+  const [overlapPolicy, setOverlapPolicy] = useState(task.overlapPolicy);
   const [chainAfter, setChainAfter] = useState<string | null>(task.chainAfter ?? null);
   const [chainOn, setChainOn] = useState<string>(task.chainOn ?? 'completed');
   // sibling tasks offered as upstream (excluding self)
@@ -903,6 +911,7 @@ function EditDialog({
         name,
         prompt,
         permissionMode,
+        overlapPolicy,
         chainAfter,
         chainOn: chainAfter ? chainOn : undefined,
         budget: { maxUsd: Number(maxUsd) || task.budget.maxUsd, maxTurns: Number(maxTurns) || task.budget.maxTurns, timeoutSec: Number(timeoutSec) || task.budget.timeoutSec },
@@ -947,6 +956,18 @@ function EditDialog({
             <SelectItem value="acceptEdits">acceptEdits</SelectItem>
           </SelectContent>
         </Select>
+
+        <label className="f">If the previous run is still going</label>
+        <Select value={overlapPolicy} onValueChange={setOverlapPolicy}>
+          <SelectTrigger aria-label="Overlap policy" data-testid="edit-overlap-policy"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="skip">Skip — mark this occurrence skipped, with a note</SelectItem>
+            <SelectItem value="queue">Queue — book it anyway; same-repo runs take turns, a task with no repo just waits for a free slot</SelectItem>
+          </SelectContent>
+        </Select>
+        <p className="hint" style={{ margin: '4px 0 0' }}>
+          Counts a run still waiting on your approval as "still going", the same as one actively executing.
+        </p>
 
         <label className="f" id={AGENT_CHAINS_SURFACE.anchorId}>Chain after (run when that task finishes)</label>
         <Select
