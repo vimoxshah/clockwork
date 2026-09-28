@@ -70,6 +70,10 @@ const run = async (): Promise<number> => {
   // surfaces are registered against (SettingsView.tsx:32,35), so
   // workforce-settings.test.tsx already fails if it stops rendering. Anchoring
   // here borrows a contract the app maintains instead of matching on prose.
+  //
+  // Settings is tabbed: the heading only exists once its group renders, so
+  // open "Providers & execution" first (SettingsView.tsx GROUP_FOR_ANCHOR).
+  await page.click('[data-testid="settings-nav-providers"]');
   await page.locator('#byok-providers').scrollIntoViewIfNeeded();
   await page.click('[data-testid="connect-provider-btn"]');
   await page.waitForTimeout(400);

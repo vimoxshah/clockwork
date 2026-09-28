@@ -232,6 +232,8 @@ const run = async (): Promise<number> => {
 
   // ---- Settings: connect-provider dialog semantics (original spike check) ----
   await page.evaluate(() => { window.location.hash = '#/settings'; });
+  // Settings is tabbed; the provider controls render only in their group.
+  await page.click('[data-testid="settings-nav-providers"]');
   const connectBtn = page.locator('[data-testid="connect-provider-btn"]');
   // Settings loads its provider/capabilities data async — poll for the
   // control rather than a fixed sleep, which intermittently ran first.
