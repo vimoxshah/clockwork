@@ -1757,9 +1757,15 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     if (!row || row.id !== id) return reply.code(401).send({ error: 'unauthorized' });
     const parsed = z.object({ platform: z.string().max(120).optional(), capabilities: z.string().max(2000).optional() }).safeParse(req.body ?? {});
     const now = Date.now();
+    const { isWorkerOnline } = await import('./workers.js');
+    const wasOnline = isWorkerOnline(row, now);
     deps.db
       .prepare('UPDATE workers SET last_heartbeat=?, online=1, platform=COALESCE(?, platform), capabilities=COALESCE(?, capabilities) WHERE id=?')
       .run(now, parsed.success ? (parsed.data.platform ?? null) : null, parsed.success ? (parsed.data.capabilities ?? null) : null, id);
+    // Only the edge into online: every 30 s per worker would refetch every
+    // open view for nothing. Going silent is time-based; the Workers card
+    // re-polls while visible to show it.
+    if (!wasOnline) broadcast({ type: 'workers.changed', at: now });
     return { ok: true };
   });
 

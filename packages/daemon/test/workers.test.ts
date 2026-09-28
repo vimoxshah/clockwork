@@ -27,7 +27,7 @@ import {
   listWorkers,
   HEARTBEAT_TIMEOUT_MS,
 } from '../src/workers.js';
-import { ensureWorkerTaskRow, startWorkerAgent } from '../src/worker-agent.js';
+import { ensureWorkerTaskRow, startWorkerAgent, describePlatform } from '../src/worker-agent.js';
 import { RunManager } from '../src/run-manager.js';
 import { Scheduler } from '../src/scheduler.js';
 import { FakeClock } from '../src/clock.js';
@@ -662,6 +662,98 @@ describe('worker completion carries start time and outcome reason', () => {
       vi.unstubAllGlobals();
       wdb.close();
       rmSync(wdir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('worker platform label', () => {
+  it('names the OS release and arch the way a person would', () => {
+    expect(describePlatform('darwin', '24.1.0', 'arm64')).toBe('macOS 15 · arm64');
+    expect(describePlatform('darwin', '25.6.0', 'arm64')).toBe('macOS 26 · arm64');
+    expect(describePlatform('darwin', '20.6.0', 'x64')).toBe('macOS 11 · x64');
+    expect(describePlatform('darwin', '19.6.0', 'x64')).toBe('macOS 10.15 · x64');
+    expect(describePlatform('linux', '6.8.0-45-generic', 'x64')).toBe('Linux 6.8 · x64');
+    expect(describePlatform('win32', '10.0.22631', 'x64')).toBe('Windows 10.0 · x64');
+    expect(describePlatform('freebsd', '14.1-RELEASE', 'arm64')).toBe('freebsd 14.1 · arm64');
+  });
+
+  it('the agent sends it on every heartbeat, and the primary shows it', async () => {
+    const f = await freshApp();
+    const w = pairUp(f.db, 'mini');
+    const wdir = mkdtempSync(path.join(os.tmpdir(), 'cw-wplat-'));
+    const wdb = openDatabase(wdir).db;
+    createMigrator(wdb, MIGRATIONS).migrate();
+    const beats: any[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown, init?: RequestInit) => {
+        const u = new URL(String(url));
+        // Forward to the real primary routes, capturing heartbeat bodies.
+        if (u.pathname.endsWith('/heartbeat')) beats.push(JSON.parse(String(init?.body)));
+        const res = await f.app.inject({
+          method: (init?.method ?? 'GET') as any,
+          url: u.pathname,
+          headers: init?.headers as any,
+          payload: init?.body as any,
+        });
+        return new Response(res.statusCode === 204 ? null : res.body, { status: res.statusCode });
+      }) as any,
+    );
+    const agent = startWorkerAgent({ db: wdb, dataDir: wdir, primaryUrl: 'http://primary:1', token: w.token, pump: () => {}, intervalMs: 60_000, log: () => {} });
+    try {
+      await vi.waitFor(() => expect(beats).toHaveLength(1));
+      const expected = describePlatform(process.platform, os.release(), process.arch);
+      expect(beats[0].platform).toBe(expected);
+      await vi.waitFor(async () => {
+        const list = await f.app.inject({ method: 'GET', url: '/workers', headers: { authorization: `Bearer ${f.token}` } });
+        expect(list.json().workers[0].platform).toBe(expected);
+      });
+    } finally {
+      agent.stop();
+      vi.unstubAllGlobals();
+      wdb.close();
+      rmSync(wdir, { recursive: true, force: true });
+      await f.app.close();
+      f.db.close();
+      rmSync(f.dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the worker list refreshes live', () => {
+  it('a heartbeat broadcasts workers.changed only when the worker comes online', async () => {
+    const { db, dir } = freshDb();
+    const rm = new RunManager({
+      db,
+      clock: new FakeClock(Date.now()),
+      dataDir: dir,
+      runnerChildModule: '/nonexistent/runner-child.js',
+      notify: () => {},
+      broadcast: () => {},
+      safetyJournal: new SafetyJournal(`${dir}/journal.jsonl`),
+    });
+    const scheduler = new Scheduler({ db, clock: new FakeClock(Date.now()), enqueueRun: () => {}, notify: () => {} });
+    const built = await buildServer({ db, dataDir: dir, runManager: rm, scheduler, version: 'test' });
+    await built.app.ready();
+    // A stub SSE client in the real set: the REAL broadcast writes to it.
+    const events: any[] = [];
+    built.sseClients.add({ raw: { write: (chunk: string) => events.push(JSON.parse(chunk.replace(/^data: /, ''))) } } as any);
+    const changed = (): number => events.filter((e) => e.type === 'workers.changed').length;
+    try {
+      const w = pairUp(db, 'mini');
+      const beat = () =>
+        built.app.inject({ method: 'POST', url: `/workers/${w.id}/heartbeat`, headers: { 'x-clockwork-worker': w.token }, payload: {} });
+      expect((await beat()).statusCode).toBe(200);
+      expect(changed()).toBe(1); // never heard from → online
+      await beat();
+      expect(changed()).toBe(1); // still online: no event every 30 s per worker
+      db.prepare('UPDATE workers SET last_heartbeat=? WHERE id=?').run(Date.now() - HEARTBEAT_TIMEOUT_MS - 1, w.id);
+      await beat();
+      expect(changed()).toBe(2); // silent → online again
+    } finally {
+      await built.app.close();
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
