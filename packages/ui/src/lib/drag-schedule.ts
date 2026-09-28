@@ -14,8 +14,10 @@
  *   - daily / interval / cron / multi-day weekly → REFUSE (the move means
  *     nothing, or means several things — edit in Tasks instead)
  *
- * Past drops refuse client-side too (the daemon would 422 under S-23), so
- * the ghost never promises what the save cannot keep.
+ * Past drops of one-offs and queue landings refuse client-side too (the
+ * daemon would 422 under S-23), so the ghost never promises what the save
+ * cannot keep. A weekly/monthly drop is a rule change for future
+ * occurrences, so a past grid day is a valid weekday/month-day pick.
  */
 import {
   composeWeeklyRule,

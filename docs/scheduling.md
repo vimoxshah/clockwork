@@ -209,8 +209,10 @@ Booking chips drag onto another day to reschedule: one-offs keep their wall
 time on the new date, single-day weeklies move weekdays, monthlies move
 month-days (1st–28th), and unscheduled queue jobs land as 9:00 AM one-offs.
 The drop preview names the resulting schedule before release; refusing moves
-(daily/interval jobs, multi-day weeklies, cron, past days) say why instead of
-guessing. Most moves offer Undo — queue landings cannot (a queue row holds no
+(daily/interval jobs, multi-day weeklies, cron) say why instead of guessing.
+One-offs and queue landings refuse a past day. A weekly or monthly drop sets
+the weekday or month-day for future occurrences, so the day it lands on can
+be past: dropping a Monday job on last Tuesday makes it a Tuesday job. Most moves offer Undo — queue landings cannot (a queue row holds no
 previous schedule to restore), and Undo refuses when the job changed since the
 move rather than discarding your edit. Moves rewrite the whole series, never one
 occurrence. Keyboard users get the same moves through the task editor and the
