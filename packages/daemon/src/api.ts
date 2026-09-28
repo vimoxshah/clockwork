@@ -1669,15 +1669,73 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     // App-visible twin of `clockworkd worker-key`: mints the Mini's ed25519
     // identity, stores the private key 0600, returns the DER-hex public key
     // to paste into the primary's pair flow. The private key NEVER leaves.
-    const { generateKeyPairSync } = await import('node:crypto');
-    const { writeFileSync, chmodSync } = await import('node:fs');
-    const { default: path } = await import('node:path');
-    const { publicKey, privateKey } = generateKeyPairSync('ed25519');
-    const privPath = path.join(deps.dataDir, 'worker-key');
-    writeFileSync(privPath, privateKey.export({ format: 'der', type: 'pkcs8' }).toString('hex'), { mode: 0o600 });
-    chmodSync(privPath, 0o600);
+    const { mintWorkerKey } = await import('./worker-agent.js');
+    const publicKeyHex = mintWorkerKey(deps.dataDir);
     audit('worker.keygen', 'worker', undefined, {});
-    return { publicKeyHex: publicKey.export({ format: 'der', type: 'spki' }).toString('hex') };
+    return { publicKeyHex };
+  });
+
+  // Read-only on purpose: opening Settings › Workers must never mint or
+  // rotate a key (a rotation silently breaks an open pairing).
+  app.get('/worker/identity', async () => {
+    const { readWorkerPublicKey } = await import('./worker-agent.js');
+    return { publicKeyHex: readWorkerPublicKey(deps.dataDir) };
+  });
+
+  // The worker's half of the ceremony, in the app: sign the nonce the
+  // primary's "Start pairing" showed, with THIS machine's worker-key, and
+  // hand { nonce, pubkeyHex, signatureHex } to the primary's claim route.
+  // The primary's answer is relayed as-is, so its refusals (not_found,
+  // unknown_nonce, bad_signature, …) reach the user verbatim. A claim earns
+  // no token — the primary's Approve still issues it, once.
+  app.post('/worker/claim', async (req, reply) => {
+    const parsed = z
+      .object({ primaryUrl: z.string().min(1).max(500), nonce: z.string().max(200) })
+      .safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(422).send({ error: 'validation' });
+    const nonce = parsed.data.nonce.trim();
+    if (!/^[0-9a-f]{32}$/i.test(nonce)) {
+      return reply.code(422).send({ error: 'validation', message: 'The nonce is the 32-character hex code the primary showed after Start pairing.' });
+    }
+    let base: URL;
+    try {
+      base = new URL(parsed.data.primaryUrl.trim());
+      if (base.protocol !== 'http:' && base.protocol !== 'https:') throw new Error('bad protocol');
+    } catch {
+      return reply.code(422).send({ error: 'validation', message: 'primaryUrl must be an http(s) URL' });
+    }
+    const { signPairingNonce } = await import('./worker-agent.js');
+    const signed = signPairingNonce(deps.dataDir, nonce);
+    if (!signed) {
+      return reply.code(409).send({ error: 'no_identity', message: 'This machine has no worker identity yet — create one first, then start pairing on the primary with its public key.' });
+    }
+    const target = `${base.origin}${base.pathname.replace(/\/+$/, '')}/workers/pairing/claim`;
+    let res: Response;
+    try {
+      res = await fetch(target, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ nonce, ...signed }),
+        signal: AbortSignal.timeout(10_000),
+      });
+    } catch (e) {
+      audit('worker.claim_sent', 'worker', undefined, { primaryHost: base.host, result: 'unreachable' });
+      return reply.code(502).send({ error: 'unreachable', message: `Could not reach ${base.host}: ${(e as Error).message}. Check the URL and your tunnel.` });
+    }
+    let body: any = null;
+    try {
+      body = await res.json();
+    } catch {
+      body = null;
+    }
+    const ok = res.ok && body?.ok === true;
+    audit('worker.claim_sent', 'worker', ok ? String(body.workerId) : undefined, { primaryHost: base.host, result: ok ? 'claimed' : String(body?.error ?? res.status) });
+    if (!ok) {
+      return reply
+        .code(res.status >= 400 ? res.status : 502)
+        .send({ error: body?.error ?? 'claim_failed', message: body?.message ?? `The primary answered HTTP ${res.status}.` });
+    }
+    return { ok: true, workerId: body.workerId, primaryHost: base.host };
   });
 
   app.get('/workers/me', async (req, reply) => {

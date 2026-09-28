@@ -20,6 +20,7 @@
  *   primary row claimed; the primary's silence sweep marks it worker_lost.
  */
 import { existsSync, readFileSync, writeFileSync, rmSync, chmodSync } from 'node:fs';
+import { createPrivateKey, createPublicKey, generateKeyPairSync, sign } from 'node:crypto';
 import path from 'node:path';
 import type { DB } from './db.js';
 
@@ -70,6 +71,54 @@ export function writeWorkerJoin(dataDir: string, join: WorkerJoin): void {
 
 export function clearWorkerJoin(dataDir: string): void {
   rmSync(workerJoinPath(dataDir), { force: true });
+}
+
+/**
+ * This machine's worker identity: an ed25519 private key, pkcs8 DER hex,
+ * 0600 at <dataDir>/worker-key (same file `clockworkd worker-key` writes).
+ * Only the public half and signatures ever leave these helpers.
+ */
+export function workerKeyPath(dataDir: string): string {
+  return path.join(dataDir, 'worker-key');
+}
+
+/** Mints (or rotates) the identity; returns the DER-hex public key. */
+export function mintWorkerKey(dataDir: string): string {
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+  const p = workerKeyPath(dataDir);
+  writeFileSync(p, privateKey.export({ format: 'der', type: 'pkcs8' }).toString('hex'), { mode: 0o600 });
+  chmodSync(p, 0o600);
+  return publicKey.export({ format: 'der', type: 'spki' }).toString('hex');
+}
+
+function readWorkerPrivateKey(dataDir: string): ReturnType<typeof createPrivateKey> | null {
+  try {
+    const hex = readFileSync(workerKeyPath(dataDir), 'utf8').trim();
+    const key = createPrivateKey({ key: Buffer.from(hex, 'hex'), format: 'der', type: 'pkcs8' });
+    return key.asymmetricKeyType === 'ed25519' ? key : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Read-only: the public key if an identity exists, else null. Never mints. */
+export function readWorkerPublicKey(dataDir: string): string | null {
+  const key = readWorkerPrivateKey(dataDir);
+  if (!key) return null;
+  return createPublicKey(key).export({ format: 'der', type: 'spki' }).toString('hex');
+}
+
+/**
+ * Signs a pairing nonce (hex) the way the primary verifies it: ed25519 over
+ * the nonce bytes. Null when this machine has no identity yet.
+ */
+export function signPairingNonce(dataDir: string, nonceHex: string): { pubkeyHex: string; signatureHex: string } | null {
+  const key = readWorkerPrivateKey(dataDir);
+  if (!key) return null;
+  return {
+    pubkeyHex: createPublicKey(key).export({ format: 'der', type: 'spki' }).toString('hex'),
+    signatureHex: sign(null, Buffer.from(nonceHex, 'hex'), key).toString('hex'),
+  };
 }
 
 /** Env wins, worker.json second, boot options last. Never throws. */
