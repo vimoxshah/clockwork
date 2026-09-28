@@ -15,6 +15,7 @@ import {
   runCommand,
   readToken,
   baseUrl,
+  main,
   EXIT_OK,
   EXIT_USAGE,
   EXIT_UNREACHABLE,
@@ -87,6 +88,44 @@ describe('status and lists', () => {
     expect(JSON.parse(out[0]!)).toEqual(body);
   });
 
+  it('runs table shows the task name parsed from jobspec_json, not the raw id', async () => {
+    // `/runs` rows have no `task_name` column (repo.ts does `SELECT *` off the
+    // runs table) — the only place a human name lives is the frozen
+    // jobspec_json the run was queued with.
+    const body = [
+      { id: '01M3MJKJ0000000000000001', state: 'completed', jobspec_json: JSON.stringify({ taskName: 'Nightly repo scan' }), cost_usd: 0.5, started_at: 1790000000000 },
+      { id: '01M3MJKJ0000000000000002', state: 'queued', jobspec_json: JSON.stringify({ taskName: 'Other task' }), cost_usd: 0, scheduled_for: 1790000000000 },
+    ];
+    const { t, out } = stub({ 'GET /runs?limit=20': { status: 200, json: body } });
+    expect(await runCommand(['runs'], t)).toBe(EXIT_OK);
+    const text = out.join('\n');
+    expect(text).toContain('Nightly repo scan');
+    expect(text).toContain('Other task');
+    expect(text).not.toContain('01M3MJKJ0000000000000001');
+  });
+
+  it('runs falls back to the task id when jobspec_json is missing or malformed', async () => {
+    const body = [{ id: 'run_1', state: 'completed', jobspec_json: 'not json', task_id: 'task-77', cost_usd: 0 }];
+    const { t, out } = stub({ 'GET /runs?limit=20': { status: 200, json: body } });
+    expect(await runCommand(['runs'], t)).toBe(EXIT_OK);
+    expect(out.join('\n')).toContain('task-77');
+  });
+
+  it('short ids are taken from the END of the id, so ULIDs with a shared time prefix do not collide', async () => {
+    // ULIDs sort by a leading timestamp: two runs queued moments apart share
+    // their first ~8 characters. Truncating from the front (the old
+    // behaviour) rendered both rows identically; the tail is random.
+    const body = [
+      { id: '01M3MJKJ0000000000000001', state: 'completed', jobspec_json: '{}', task_id: 't', cost_usd: 0 },
+      { id: '01M3MJKJ0000000000000002', state: 'completed', jobspec_json: '{}', task_id: 't', cost_usd: 0 },
+    ];
+    const { t, out } = stub({ 'GET /runs?limit=20': { status: 200, json: body } });
+    expect(await runCommand(['runs'], t)).toBe(EXIT_OK);
+    const rows = out.join('\n').split('\n').filter((l) => l.includes('completed'));
+    const shortIds = rows.map((l) => l.trim().split(/\s+/)[0]);
+    expect(new Set(shortIds).size, 'two ULIDs sharing a time prefix must not render the same short id').toBe(2);
+  });
+
   it('tables align columns and cap names', async () => {
     const { t, out } = stub({ 'GET /tasks': { status: 200, json: [{ id: 't1', name: 'A very long task name that goes on and on', enabled: true, nextFire: null }] } });
     expect(await runCommand(['tasks'], t)).toBe(EXIT_OK);
@@ -157,6 +196,52 @@ describe('approvals and runs', () => {
     const s3 = stub({ 'GET /runs/run_9/report': { status: 200, json: rep } });
     expect(await runCommand(['open', 'run_9'], s3.t)).toBe(EXIT_OK);
     expect(s3.out.join('\n')).toContain('git fetch origin && git checkout clockwork/x/1');
+  });
+
+  it('show resolves a unique prefix or suffix of the full id after a 404', async () => {
+    const list = [
+      { id: 'run_01ABCDEF00001111', state: 'completed' },
+      { id: 'run_01ABCDEF00002222', state: 'completed' },
+    ];
+    const rep = { run: {}, report: { taskName: 'N', state: 'completed', summary: 'ok', branch: 'b', costUsd: 0, turns: 0 } };
+    // Unique suffix.
+    const s1 = stub({
+      'GET /runs/1111/report': { status: 404, json: { error: 'not_found' } },
+      'GET /runs?limit=500': { status: 200, json: list },
+      'GET /runs/run_01ABCDEF00001111/report': { status: 200, json: rep },
+    });
+    expect(await runCommand(['show', '1111'], s1.t)).toBe(EXIT_OK);
+    expect(s1.out.join('\n')).toContain('ok');
+    // Unique prefix (shorter than either full id).
+    const s2 = stub({
+      'GET /runs/run_01ABCDEF00002/report': { status: 404, json: { error: 'not_found' } },
+      'GET /runs?limit=500': { status: 200, json: list },
+      'GET /runs/run_01ABCDEF00002222/report': { status: 200, json: rep },
+    });
+    expect(await runCommand(['show', 'run_01ABCDEF00002'], s2.t)).toBe(EXIT_OK);
+  });
+
+  it('show reports an ambiguous prefix/suffix instead of guessing', async () => {
+    const list = [
+      { id: 'run_01ABCDEF00001111', state: 'completed' },
+      { id: 'run_01ABCDEF00002222', state: 'completed' },
+    ];
+    const { t, err } = stub({
+      'GET /runs/run_01ABCDEF/report': { status: 404, json: { error: 'not_found' } },
+      'GET /runs?limit=500': { status: 200, json: list },
+    });
+    expect(await runCommand(['show', 'run_01ABCDEF'], t)).toBe(EXIT_USAGE);
+    expect(err.join('\n')).toContain('matches 2 runs');
+  });
+
+  it('show with no matching prefix/suffix still reports the original not-found', async () => {
+    const list = [{ id: 'run_01ABCDEF00001111', state: 'completed' }];
+    const { t, err } = stub({
+      'GET /runs/zzz/report': { status: 404, json: { error: 'not_found' } },
+      'GET /runs?limit=500': { status: 200, json: list },
+    });
+    expect(await runCommand(['show', 'zzz'], t)).toBe(EXIT_NOT_FOUND);
+    expect(err.join('\n')).toContain('not found');
   });
 
   it('open on a branchless run exits 3 with guidance', async () => {
@@ -261,6 +346,16 @@ describe('failures and auth', () => {
     expect(await runCommand(['pack', 'preview'], s1.t)).toBe(EXIT_USAGE);
   });
 
+  it('pack preview/install refuse a non-https URL as a bad URL, never as a file path', async () => {
+    const s1 = stub({});
+    expect(await runCommand(['pack', 'preview', 'http://evil.example/pack.json'], s1.t)).toBe(EXIT_USAGE);
+    expect(s1.err.join('\n')).toContain('https');
+    expect(s1.calls, 'never reaches the daemon').toHaveLength(0);
+    const s2 = stub({});
+    expect(await runCommand(['pack', 'install', 'http://evil.example/pack.json'], s2.t)).toBe(EXIT_USAGE);
+    expect(s2.calls).toHaveLength(0);
+  });
+
   it('pack list renders installed packs', async () => {
     const s = stub({ 'GET /packs/installed': { status: 200, json: { packs: [{ name: 'np', version: '1.0.0', tasks: 2 }] } } });
     expect(await runCommand(['pack', 'list'], s.t)).toBe(EXIT_OK);
@@ -289,5 +384,82 @@ describe('failures and auth', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('pack sign in human mode prints the full {keyId,pubkeyHex,signature} object to paste', async () => {
+    // docs/packs.md tells publishers to "paste the printed {keyId, pubkeyHex,
+    // signature}" — human mode used to print only the keyId and the hint.
+    const { generateKeyPairSync } = await import('node:crypto');
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'cw-packsign-human-'));
+    try {
+      const { privateKey } = generateKeyPairSync('ed25519');
+      const privHex = privateKey.export({ format: 'der', type: 'pkcs8' }).toString('hex');
+      const doc = { schema: 'clockwork.pack.v1', manifest: { name: 'n', version: '1.0.0', publisher: 'p' }, templates: [{ schema: 'clockwork.template.v1', name: 't' }] };
+      writeFileSync(path.join(dir, 'pack.json'), JSON.stringify(doc));
+      writeFileSync(path.join(dir, 'key.hex'), privHex);
+      const s = stub({});
+      expect(await runCommand(['pack', 'sign', path.join(dir, 'pack.json'), '--key', path.join(dir, 'key.hex')], s.t)).toBe(EXIT_OK);
+      const human = s.out.join('\n');
+      const obj = JSON.parse(human.match(/\{[\s\S]*\}/)![0]);
+      expect(obj).toHaveProperty('keyId');
+      expect(obj).toHaveProperty('pubkeyHex');
+      expect(obj).toHaveProperty('signature');
+      expect(human).toContain("add this object to the pack's signatures[]");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('main(): help answers before the token check', () => {
+  function withEmptyHome<T>(fn: () => Promise<T>): Promise<T> {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'cw-cli-help-'));
+    const prevHome = process.env.CLOCKWORK_HOME;
+    process.env.CLOCKWORK_HOME = dir; // exists, holds no api-token
+    return Promise.resolve()
+      .then(fn)
+      .finally(() => {
+        if (prevHome === undefined) delete process.env.CLOCKWORK_HOME;
+        else process.env.CLOCKWORK_HOME = prevHome;
+        rmSync(dir, { recursive: true, force: true });
+      });
+  }
+
+  it('--help, help, and no args all print help without an api token', async () => {
+    await withEmptyHome(async () => {
+      const chunks: string[] = [];
+      const origWrite = process.stdout.write.bind(process.stdout);
+      (process.stdout.write as unknown) = (s: unknown) => {
+        chunks.push(String(s));
+        return true;
+      };
+      try {
+        for (const args of [['--help'], [], ['help']]) {
+          chunks.length = 0;
+          expect(await main(args)).toBe(EXIT_OK);
+          expect(chunks.join('')).toContain('approve <id>');
+        }
+      } finally {
+        process.stdout.write = origWrite;
+      }
+    });
+  });
+
+  it('a real command still refuses without an api token', async () => {
+    await withEmptyHome(async () => {
+      const chunks: string[] = [];
+      const origWrite = process.stderr.write.bind(process.stderr);
+      (process.stderr.write as unknown) = (s: unknown) => {
+        chunks.push(String(s));
+        return true;
+      };
+      try {
+        const code = await main(['status']);
+        expect(code).toBe(EXIT_UNREACHABLE);
+        expect(chunks.join('')).toContain('no api token');
+      } finally {
+        process.stderr.write = origWrite;
+      }
+    });
   });
 });

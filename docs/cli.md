@@ -6,6 +6,19 @@ the app, and anything refused here is refused there too.
 
 ## Install
 
+**From the cask** (once a release ships `Contents/Resources/app/bin/clockwork`
+— see the note in `packaging/homebrew/clockwork.rb`): `brew install --cask
+clockwork` puts `clockwork` on PATH. It runs the Node bundled inside
+`Clockwork.app`, so no system Node is required.
+
+If your installed app predates that wrapper (every DMG through 0.14.0), run
+the bundled CLI directly with the app's own Node:
+
+```bash
+/Applications/Clockwork.app/Contents/MacOS/node \
+  /Applications/Clockwork.app/Contents/Resources/app/packages/daemon/dist/clockwork-cli.js status
+```
+
 No install step while running from source:
 
 ```bash
@@ -16,33 +29,37 @@ node packages/daemon/dist/clockwork-cli.js status
 Or link it onto your PATH once: `pnpm --filter @clockwork/daemon exec npm link`
 (uses your shell's npm prefix), then `clockwork status` works anywhere.
 
+`clockwork --help`, `clockwork help` and a bare `clockwork` all print usage
+without needing an api token — useful before `clockworkd` has ever run.
+
 ## Tour
 
 ```bash
 $ clockwork status
-clockworkd 0.13.0
+clockworkd 0.14.0
 paused: no · active: 0 · queued: 2
 next: Sep 28, 02:00 AM
 
 $ clockwork runs
-RUN       STATUS     AGENT    COST    WHEN
-9f3a21    waiting    Securit  $0.00   Sep 28, 02:14 AM
-8c21bb    completed  Enginee  $1.20   Sep 27, 09:41 PM
+RUN         STATUS     TASK              COST    WHEN
+…f3a21bc    waiting    Security audit    $0.00   Sep 28, 02:14 AM
+…8c21bb99   completed  Engineering sync  $1.20   Sep 27, 09:41 PM
 
 $ clockwork approvals
-ID        KIND        RUN       WAITING SINCE
-a91f      permission  9f3a21    Sep 28, 02:14 AM
+ID          KIND        RUN         WAITING SINCE
+…a91fd001   permission  …f3a21bc    Sep 28, 02:14 AM
 
-$ clockwork approve a91f --note "tests green, go"
-✓ Approved a91f
+$ clockwork approve a91fd001 --note "tests green, go"
+✓ Approved a91fd001
 $ clockwork run task-triage --json
 {"runId":"run_…"}
 ```
 
-`show <run-id>` prints the report; `open <run-id>` prints the branch
-checkout (it never launches an editor — output is text you can pipe);
-`tasks`, `queue`, `agents`, `workers` list their panes; `approve --deny`
-denies.
+`show <run-id>` prints the report and accepts any run id that is unique by a
+prefix or a suffix, not only the full id (ambiguous ones list every match);
+`open <run-id>` prints the branch checkout (it never launches an editor —
+output is text you can pipe); `tasks`, `queue`, `agents`, `workers` list their
+panes; `approve --deny` denies.
 
 ## Scripting
 

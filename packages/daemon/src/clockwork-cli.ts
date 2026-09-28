@@ -60,9 +60,30 @@ function fmtTime(ms: number | null | undefined): string {
   return new Date(ms).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-/** Full id when short, visibly truncated when not — copy-paste never silently breaks. */
+/** Full id when short, visibly truncated when not — copy-paste never silently
+ *  breaks. Truncates from the FRONT, keeping the last 8 characters: ids are
+ *  ULIDs, whose leading ~8 characters are a time prefix shared by anything
+ *  created around the same moment, so cutting the front and keeping THAT
+ *  collided constantly (three runs booked in the same minute all printed the
+ *  same short id). The tail is random and does not collide. The leading `…`
+ *  marks which end was cut, so it reads as "this id continues to the left". */
 function shortId(s: string): string {
-  return s.length <= 12 ? s : `${s.slice(0, 8)}…`;
+  return s.length <= 12 ? s : `…${s.slice(-8)}`;
+}
+
+/** `/runs` rows carry no `task_name` column (repo.ts's `list` is a bare
+ *  `SELECT *`) — the only human name is inside the frozen jobspec_json the
+ *  run was queued with. Falls back to the task id, never throws on a
+ *  malformed or missing value. */
+function taskNameOf(r: any): string {
+  if (typeof r.task_name === 'string' && r.task_name) return r.task_name;
+  try {
+    const spec = JSON.parse(r.jobspec_json ?? '{}');
+    if (spec && typeof spec.taskName === 'string' && spec.taskName) return spec.taskName;
+  } catch {
+    // fall through to the id below
+  }
+  return String(r.task_id ?? r.id ?? '?');
 }
 
 function table(rows: string[][]): string {
@@ -179,17 +200,37 @@ export async function runCommand(argv: string[], t: CliTransport, port?: number)
       }
       const { status, json: runs } = await call('GET', `/runs?limit=${limit}`);
       if (status !== 200) return fail(status, runs, 'runs');
-      const rows = (runs as any[]).map((r) => [shortId(String(r.id)), String(r.state ?? '?'), String(r.task_name ?? r.task_id ?? '?').slice(0, 32), `$${Number(r.cost_usd ?? 0).toFixed(2)}`, fmtTime(r.started_at ?? r.scheduled_for)]);
+      const rows = (runs as any[]).map((r) => [shortId(String(r.id)), String(r.state ?? '?'), taskNameOf(r).slice(0, 32), `$${Number(r.cost_usd ?? 0).toFixed(2)}`, fmtTime(r.started_at ?? r.scheduled_for)]);
       return emit(runs, rows.length ? table([['RUN', 'STATUS', 'TASK', 'COST', 'WHEN'], ...rows]) : 'no runs yet');
     }
     case 'show': {
-      const id = rest2[0];
-      if (!id) {
+      const idArg = rest2[0];
+      if (!idArg) {
         t.err('usage: clockwork show <run-id>');
         return EXIT_USAGE;
       }
-      const { status, json: rep } = await call('GET', `/runs/${encodeURIComponent(id)}/report`);
-      if (status !== 200) return fail(status, rep, `run ${id}`);
+      // A full id costs exactly one request, same as before. Only on a 404
+      // does this widen the search: idArg may be a short id (RUN column only
+      // ever prints the last 8 characters — see shortId), so it is resolved
+      // against a unique prefix OR suffix among recent runs before giving up.
+      let id = idArg;
+      let hit = await call('GET', `/runs/${encodeURIComponent(id)}/report`);
+      if (hit.status === 404) {
+        const { status: lsStatus, json: list } = await call('GET', '/runs?limit=500');
+        if (lsStatus === 200 && Array.isArray(list)) {
+          const ids = list.map((r: any) => String(r.id));
+          const matches = [...new Set(ids.filter((full) => full === id || full.startsWith(id) || full.endsWith(id)))];
+          if (matches.length === 1) {
+            id = matches[0]!;
+            hit = await call('GET', `/runs/${encodeURIComponent(id)}/report`);
+          } else if (matches.length > 1) {
+            t.err(`error: '${idArg}' matches ${matches.length} runs — give more of the id:\n${matches.map((m) => `  ${shortId(m)}`).join('\n')}`);
+            return EXIT_USAGE;
+          }
+        }
+      }
+      const { status, json: rep } = hit;
+      if (status !== 200) return fail(status, rep, `run ${idArg}`);
       const r = rep.report ?? {};
       return emit(rep, [`${r.taskName ?? id} — ${r.state ?? '?' }`, ``, `${r.summary ?? '(no summary)' }`, ``, `branch: ${r.branch ?? '—'} · cost: $${Number(r.costUsd ?? 0).toFixed(2)} · turns: ${r.turns ?? 0}`].join('\n'));
     }
@@ -215,7 +256,7 @@ export async function runCommand(argv: string[], t: CliTransport, port?: number)
     case 'approvals': {
       const { status, json: list } = await call('GET', '/approvals');
       if (status !== 200) return fail(status, list, 'approvals');
-      const rows = (list as any[]).map((a) => [shortId(String(a.id)), String(a.kind ?? '?'), String(a.run_id ?? '').slice(0, 8), fmtTime(a.requested_at)]);
+      const rows = (list as any[]).map((a) => [shortId(String(a.id)), String(a.kind ?? '?'), a.run_id ? shortId(String(a.run_id)) : '—', fmtTime(a.requested_at)]);
       return emit(list, rows.length ? table([['ID', 'KIND', 'RUN', 'WAITING SINCE'], ...rows]) : 'nothing waiting — the inbox agrees');
     }
     case 'approve': {
@@ -249,7 +290,7 @@ export async function runCommand(argv: string[], t: CliTransport, port?: number)
       }
       const { status, json: r } = await call('POST', `/tasks/${encodeURIComponent(id)}/run-now`, {});
       if (status !== 200 && status !== 202) return fail(status, r, `task ${id}`);
-      return emit(r, `✓ Run queued${(r as any)?.runId ? ` (${String((r as any).runId).slice(0, 8)})` : ''} — watch the inbox`);
+      return emit(r, `✓ Run queued${(r as any)?.runId ? ` (${shortId(String((r as any).runId))})` : ''} — watch the inbox`);
     }
     case 'open': {
       const id = rest2[0];
@@ -306,7 +347,11 @@ export async function runCommand(argv: string[], t: CliTransport, port?: number)
           const sig = cryptoSign(null, Buffer.from(canon, 'utf8'), priv).toString('hex');
           const { createHash } = await import('node:crypto');
           const keyId = createHash('sha256').update(pubHex.toLowerCase(), 'utf8').digest('hex').slice(0, 16);
-          return emit({ keyId, pubkeyHex: pubHex, signature: sig }, `keyId: ${keyId}\nadd this object to the pack's signatures[] — then verify with: clockwork pack preview <file>`);
+          const obj = { keyId, pubkeyHex: pubHex, signature: sig };
+          // docs/packs.md tells publishers to paste the printed object itself
+          // — human mode used to print only the keyId and the hint below it,
+          // so there was nothing to paste.
+          return emit(obj, `${JSON.stringify(obj, null, 2)}\n\nadd this object to the pack's signatures[] — then verify with: clockwork pack preview <file>`);
         } catch (e) {
           t.err(`error: cannot sign: ${e instanceof Error ? e.message : String(e)}`);
           return EXIT_USAGE;
@@ -322,6 +367,13 @@ export async function runCommand(argv: string[], t: CliTransport, port?: number)
       let body: Record<string, unknown>;
       if (/^https:\/\//i.test(target)) {
         body = { url: target };
+      } else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(target)) {
+        // Looks like a URL (has a scheme) but is not https:// — refuse it as
+        // a bad URL rather than falling into the file-path branch below,
+        // where it would read as a literal (nonexistent) filename named
+        // "http://…" and fail with a confusing ENOENT.
+        t.err(`error: pack URLs must be https:// — refusing '${target}'`);
+        return EXIT_USAGE;
       } else {
         try {
           const { readFileSync: readFs } = await import('node:fs');
@@ -380,6 +432,16 @@ function realTransport(port?: number): CliTransport & { token: string } {
   };
 }
 
+/** True when this invocation resolves to `--help`/`-h`, a bare `help`, or no
+ *  command at all — every shape `runCommand` itself answers with HELP without
+ *  touching the network. Mirrors runCommand's own parsing order so the two
+ *  never disagree about what counts as a help request. */
+function isHelpInvocation(argv: string[]): boolean {
+  if (argv.includes('--help') || argv.includes('-h')) return true;
+  const firstReal = argv.find((a) => a !== '--json');
+  return firstReal === undefined || firstReal === 'help';
+}
+
 /** Entry: --port is stripped here and passed down, so runCommand never sees
  *  two spellings to disagree on (first-vs-last-wins divergence). */
 export async function main(argv: string[]): Promise<number> {
@@ -398,7 +460,11 @@ export async function main(argv: string[]): Promise<number> {
       clean.push(argv[i]!);
     }
   }
-  if (!readToken()) {
+  // Help must work before clockworkd is even installed: `--help`, `help` and
+  // a bare invocation never call the daemon, so they must not be gated behind
+  // a credential that would only be needed for an actual command.
+  const helpOnly = isHelpInvocation(clean);
+  if (!helpOnly && !readToken()) {
     process.stderr.write(`error: no api token — is clockworkd installed? looked in ${dataDir()}/api-token\n`);
     return EXIT_UNREACHABLE;
   }

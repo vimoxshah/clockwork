@@ -11,19 +11,11 @@ cask "clockwork" do
   arch arm: "aarch64", intel: "x64"
 
   version "0.14.0"
-  # The intel digest is a PLACEHOLDER, and deliberately 64 zeroes rather than
-  # prose. No Intel DMG exists yet — v0.11.0, v0.11.1 and v0.11.2 each
-  # published aarch64 only — and the first one comes out of the next tag built
-  # by release.yml's two-leg matrix. Zeroes are the placeholder that gets
-  # CAUGHT if this file is published early: homebrew-tap-drift.yml reads every
-  # 64-hex token out of the live tap and fails when one is absent from the
-  # release's checksums-sha256.txt, while a "TBD" would not parse as a hash at
-  # all and would slip past it.
-  #
-  # DO NOT copy this cask to the tap until the intel digest is real.
-  # `packaging/stage-release.sh` cannot fill it in yet: it hashes the aarch64
-  # DMG only, and its sed matches `^  sha256 "` — a single digest at two-space
-  # indent — so against the two-digest form below it silently changes nothing.
+  # Both digests are real (checked into checksums-sha256.txt on the v0.14.0
+  # release) — the two-leg build matrix has published an Intel DMG since
+  # 0.12.0. An earlier revision of this comment warned that the intel digest
+  # was a 64-zero PLACEHOLDER; that stopped being true once the Intel leg
+  # shipped, and the warning outlived the condition it described.
   sha256 arm:   "9d3ad5a7b943ada2f7f643392c4a795d439a0d91bc3d7ea4980061d2399600a9",
          intel: "9fc914bda182c10f674eee5f7801a31e7fba8f7f626fbb553c7fb89ee41876bd"
 
@@ -47,6 +39,19 @@ cask "clockwork" do
 
   app "Clockwork.app"
 
+  # `clockwork` on PATH (BUN-3): symlinks this file into the Homebrew prefix
+  # bin dir. It is a thin wrapper, staged by tools/stage-bundle.mjs, that execs
+  # the app's own bundled Node against its own bundled CLI entry point — no
+  # system Node required. bundled-resources-staged.test.ts guards that the
+  # staging script actually places a file at this exact path.
+  #
+  # DO NOT sync this stanza to the published tap until a release DMG contains
+  # Contents/Resources/app/bin/clockwork. Every DMG through 0.14.0 predates
+  # this wrapper: `binary` only symlinks — it does not check the target
+  # exists — so `brew install` would succeed and leave `clockwork` a dangling
+  # link. docs/cli.md names the full command that works on those installs.
+  binary "#{appdir}/Clockwork.app/Contents/Resources/app/bin/clockwork"
+
   # The build is not notarised — an Apple Developer certificate is $99/year and
   # this is an early release. Homebrew 6 removed --no-quarantine and
   # HOMEBREW_CASK_OPTS does not accept it either, so quarantine is always
@@ -61,6 +66,9 @@ cask "clockwork" do
     From 0.11.0 this cask installs everything: the app carries the daemon and
     its own Node runtime, and registers a background agent on first launch.
     There is nothing else to install and no token to paste.
+
+    The `clockwork` terminal CLI is on your PATH now too — try `clockwork
+    status` once the app has launched at least once.
 
     You do need at least one provider CLI you are already logged into
     (claude, codex, opencode or hermes) on your PATH.

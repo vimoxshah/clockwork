@@ -78,6 +78,13 @@ export function parseGitHubRemote(url: string): { owner: string; repo: string } 
   if (m) return { owner: m[1]!, repo: m[2]! };
   m = u.match(/^git@github\.com:([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i);
   if (m) return { owner: m[1]!, repo: m[2]! };
+  // ssh://[user@]github.com[:port]/owner/repo(.git) — same host, spelled as a
+  // URL instead of the scp-like git@host:path form above. This still refuses
+  // to push (pushBranch has no ssh-agent and reads no keys), but recognizing
+  // it here is what lets that refusal come back as ssh_origin with the fix
+  // hint, instead of not_github as if the remote were not GitHub at all.
+  m = u.match(/^ssh:\/\/(?:[^@/\s]+@)?github\.com(?::\d+)?\/([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i);
+  if (m) return { owner: m[1]!, repo: m[2]! };
   return null;
 }
 

@@ -110,9 +110,16 @@ export function assertTemplateShape(t: unknown): t is { name?: unknown; prompt?:
 /**
  * Verify structure, version compatibility, and at least one signature from a
  * trusted key. Unknown keys are NOT failures to argue with — they return
- * unknown_key with the fingerprint so the caller can ask a human. A known
- * keyId presenting a DIFFERENT pubkey is key_changed: the publisher rotated
- * (or someone swaps keys) and quiet re-trust is exactly what TOFU forbids.
+ * unknown_key with the fingerprint so the caller can ask a human.
+ *
+ * Rotation (key_changed) is detected by PUBLISHER NAME, not by keyId
+ * collision: keyId is a hash of the key bytes, so a genuinely rotated key
+ * always gets a genuinely new keyId and would otherwise look exactly like an
+ * unknown key — indistinguishable from a stranger, which is exactly the case
+ * TOFU exists to flag loudly instead of prompting for quiet re-trust. A known
+ * keyId literally presenting different key bytes (self-inconsistent trust
+ * data, which pinTrustedKey never produces but is checked anyway) also
+ * refuses as key_changed, belt and braces.
  */
 export function verifyPack(
   pack: PackFile,
@@ -145,6 +152,25 @@ export function verifyPack(
     if (keyIdOf(sig.pubkeyHex) !== sig.keyId) continue;
     const known = trusted.get(sig.keyId);
     if (!known) {
+      // Not found under ITS OWN keyId — but if this publisher already has a
+      // pinned key that is not this one, that is a rotation, not a stranger.
+      // Looking this up by name, rather than trusting.get(sig.keyId), is the
+      // whole fix: sig.keyId is freshly computed from the new key's own
+      // bytes, so it can never collide with the old pinned entry's key.
+      const publisher = typeof pack.manifest?.publisher === 'string' ? pack.manifest.publisher : '';
+      if (publisher) {
+        for (const rec of trusted.values()) {
+          if (rec.publisher === publisher && rec.pubkeyHex.trim().toLowerCase() !== sig.pubkeyHex.trim().toLowerCase()) {
+            return {
+              ok: false,
+              reason: 'key_changed',
+              message: `Publisher "${publisher}" is already trusted under a different key — this pack is signed by key ${sig.keyId}, not the pinned one. Rotation requires explicit re-trust, never a quiet update.`,
+              keyId: sig.keyId,
+              pubkeyHex: sig.pubkeyHex,
+            };
+          }
+        }
+      }
       unknown = unknown ?? sig;
       continue;
     }
