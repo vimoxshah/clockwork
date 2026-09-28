@@ -13,7 +13,7 @@
  */
 import { useCallback, useRef, useState } from 'react';
 import { api } from '../api';
-import { computeMove, type MoveSource } from '../lib/drag-schedule';
+import { computeMove, type MoveOk, type MoveSource } from '../lib/drag-schedule';
 
 export interface DragInfo {
   taskId: string;
@@ -42,6 +42,17 @@ interface UndoEntry {
    *  no longer matches this — otherwise it would silently discard an edit
    *  made in Tasks after the move. */
   moved: { kind: string; runAt?: number | null; rrule?: string | null; tz: string };
+}
+
+/**
+ * The PATCH schedule that restores a snapshot, in the discriminated shape the
+ * daemon's ScheduleSpec takes: runAt and rrule are optional there, NOT
+ * nullable, so a null for the field the kind does not use is a 422. Null when
+ * the snapshot lacks the field its own kind needs.
+ */
+export function undoScheduleFor(prev: UndoEntry['prev']): MoveOk['patch']['schedule'] | null {
+  if (prev.kind === 'once') return typeof prev.runAt === 'number' ? { kind: 'once', runAt: prev.runAt, tz: prev.tz } : null;
+  return prev.rrule ? { kind: 'rrule', rrule: prev.rrule, tz: prev.tz } : null;
 }
 
 export function useTaskDrag(opts: { onMoved: () => void; countOthers: (dayTs: number, taskId: string) => number }): {
@@ -247,8 +258,14 @@ export function useTaskDrag(opts: { onMoved: () => void; countOthers: (dayTs: nu
           setUndo(null);
           return;
         }
+        const schedule = undoScheduleFor(u.prev);
+        if (!schedule) {
+          setNotice({ ok: false, text: `Couldn't undo — the previous schedule of “${u.name}” was not fully read. Edit it in Tasks.` });
+          setUndo(null);
+          return;
+        }
         return api
-          .patchTask(u.taskId, { schedule: { kind: u.prev.kind, runAt: u.prev.runAt ?? null, rrule: u.prev.rrule ?? null, tz: u.prev.tz }, version: fresh.version })
+          .patchTask(u.taskId, { schedule, version: fresh.version })
           .then(() => {
             setNotice({ ok: true, text: `Move undone — “${u.name}” is back on its previous schedule.` });
             setUndo(null);

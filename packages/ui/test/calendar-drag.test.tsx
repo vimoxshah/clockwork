@@ -5,8 +5,16 @@
  * jsdom has no real DnD, so dataTransfer is a stub object defined onto a
  * plain Event — the handlers only touch setData/effectAllowed/preventDefault,
  * which is the whole contract they rely on in a browser.
+ *
+ * The Undo cases parse the captured PATCH body with the daemon's REAL
+ * TaskPatch schema. This is a test-only reach into packages/shared: the UI
+ * source still imports nothing from it (see schedule-rule-emitter.test.ts),
+ * but a stubbed fetch answers 200 to any body, and that is how an Undo that
+ * always 422'd against the daemon passed here. Imported from source so the
+ * UI suite needs no shared build first.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { TaskPatch } from '../../shared/src/schemas';
 import CalendarView from '../src/components/CalendarView';
 import { renderComponent, waitForElement, waitForText } from './helpers/dom';
 
@@ -101,6 +109,15 @@ async function mount(
   return { container, calls };
 }
 
+/** After the first PATCH, the "daemon" reads back what that PATCH wrote. */
+function readBack(patches: unknown[]): (s: Record<string, unknown>) => Record<string, unknown> {
+  return (s) => {
+    const first = patches[0] as { schedule: Record<string, unknown> } | undefined;
+    if (!first) return s;
+    return { kind: first.schedule.kind, rrule: first.schedule.rrule ?? null, cron: null, runAt: first.schedule.runAt ?? null, tz: first.schedule.tz, version: 4 };
+  };
+}
+
 describe('calendar drag/drop', () => {
   it('drags a booking chip onto another day and PATCHes the rewritten rule', async () => {
     const patches: unknown[] = [];
@@ -180,5 +197,58 @@ describe('calendar drag/drop', () => {
     await waitForText(container, 'changed since the move');
     // No second PATCH with the stale snapshot.
     expect(patches).toHaveLength(1);
+  });
+
+  it('Undo restores a weekly rule with a body the daemon schema accepts', async () => {
+    const patches: unknown[] = [];
+    const { container } = await mount(
+      patches,
+      { kind: 'rrule', rrule: 'FREQ=WEEKLY;BYDAY=MO;BYHOUR=2;BYMINUTE=0', cron: null, runAt: null, tz: 'America/New_York', version: 3 },
+      readBack(patches),
+    );
+    const chip = container.querySelector('[data-testid="booking-chip-t1"]')!;
+    fire(chip, 'dragstart');
+    const cells = [...container.querySelectorAll('[data-testid="cal-cell"]')] as HTMLElement[];
+    await hoverUntil(container, cells[cells.length - 1]!, 'Every ');
+    fire(cells[cells.length - 1]!, 'drop');
+    await waitForElement(container, '[data-testid="move-undo"]');
+    (container.querySelector('[data-testid="move-undo"]') as HTMLButtonElement).click();
+    await waitForText(container, 'Move undone');
+    expect(patches).toHaveLength(2);
+    const parsed = TaskPatch.safeParse(patches[1]);
+    expect(parsed.success, JSON.stringify(parsed.error?.issues)).toBe(true);
+    expect(patches[1]).toEqual({
+      schedule: { kind: 'rrule', rrule: 'FREQ=WEEKLY;BYDAY=MO;BYHOUR=2;BYMINUTE=0', tz: 'America/New_York' },
+      version: 4,
+    });
+  });
+
+  it('Undo restores a one-off with a body the daemon schema accepts', async () => {
+    const patches: unknown[] = [];
+    const runAt = Date.now() + 3 * 86400_000;
+    const { container } = await mount(
+      patches,
+      { kind: 'once', rrule: null, cron: null, runAt, tz: 'America/New_York', version: 3 },
+      readBack(patches),
+    );
+    const chip = container.querySelector('[data-testid="booking-chip-t1"]')!;
+    fire(chip, 'dragstart');
+    const cells = [...container.querySelectorAll('[data-testid="cal-cell"]')] as HTMLElement[];
+    await hoverUntil(container, cells[cells.length - 1]!, 'Moved to');
+    fire(cells[cells.length - 1]!, 'drop');
+    await waitForElement(container, '[data-testid="move-undo"]');
+    const moved = (patches[0] as { schedule: { runAt: number } }).schedule.runAt;
+    (container.querySelector('[data-testid="move-undo"]') as HTMLButtonElement).click();
+    await waitForText(container, 'Move undone');
+    expect(moved).not.toBe(runAt);
+    const parsed = TaskPatch.safeParse(patches[1]);
+    expect(parsed.success, JSON.stringify(parsed.error?.issues)).toBe(true);
+    expect(patches[1]).toEqual({ schedule: { kind: 'once', runAt, tz: 'America/New_York' }, version: 4 });
+  });
+
+  it('the null-field shape Undo used to send is one the daemon refuses', () => {
+    // Guards the guard: if this ever parses, the schema test above proves nothing.
+    const old = { schedule: { kind: 'rrule', runAt: null, rrule: 'FREQ=WEEKLY;BYDAY=MO;BYHOUR=2;BYMINUTE=0', tz: 'America/New_York' }, version: 3 };
+    expect(TaskPatch.safeParse(old).success).toBe(false);
   });
 });
