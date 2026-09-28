@@ -25,5 +25,6 @@ describe('formatApprovalText deadline', () => {
   it('says minutes only under an hour, and "now" once the deadline has passed', () => {
     expect(formatApprovalText({ ...base, timeoutAt: now + 45 * 60_000 }, now)).toMatch(/in 45m \(/);
     expect(formatApprovalText({ ...base, timeoutAt: now - 1000 }, now)).toMatch(/Auto-denies now \(/);
+    expect(formatApprovalText({ ...base, timeoutAt: now + (3 * 24 + 4) * 3_600_000 }, now)).toMatch(/in 3d 4h \(/);
   });
 });

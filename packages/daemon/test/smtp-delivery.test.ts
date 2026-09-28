@@ -275,7 +275,10 @@ describe('a run report reaches a plain local relay', () => {
     expect(body).toContain('Bash');
     expect(body).toContain('kubectl apply -f prod.yaml');
     expect(body).toContain('01JRAPPROVAL000000000000AA');
-    expect(body).toContain(new Date(approval.timeoutAt).toISOString());
+    // The deadline is stated as time left plus a local clock time, never as a
+    // raw UTC stamp (approval-text-deadline.test.ts owns the exact format).
+    expect(body).toMatch(/Auto-denies in \d+[dhm]/);
+    expect(body).not.toContain(new Date(approval.timeoutAt).toISOString());
   });
 
   it('reads a reply split across packets and a multi-line reply delivered in one', async () => {

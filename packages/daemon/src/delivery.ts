@@ -133,7 +133,12 @@ export function formatReportText(p: RunReportPayload): string {
  */
 function formatDeadline(timeoutAt: number, now: number): string {
   const mins = Math.round((timeoutAt - now) / 60_000);
-  const left = mins <= 0 ? 'now' : mins < 60 ? `in ${mins}m` : `in ${Math.floor(mins / 60)}h ${mins % 60}m`;
+  const hours = Math.floor(mins / 60);
+  const left =
+    mins <= 0 ? 'now'
+    : mins < 60 ? `in ${mins}m`
+    : hours < 48 ? `in ${hours}h ${mins % 60}m`
+    : `in ${Math.floor(hours / 24)}d ${hours % 24}h`;
   const clock = new Intl.DateTimeFormat('en-GB', {
     weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZoneName: 'short',
   }).format(timeoutAt);
