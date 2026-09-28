@@ -255,6 +255,38 @@ const run = async (): Promise<number> => {
     await page.keyboard.press('Escape');
   }
 
+  // ---- Settings › Workers: every input is on top where it is drawn ----
+  // Labelled and visible is not enough: .cred-row put several fields in one
+  // grid cell, so the name and join-URL inputs rendered UNDER their siblings
+  // and a mouse could not reach them (VERIFY-REPORT Bug 2). Hit-test each
+  // control at its centre. elementFromPoint only sees the viewport, so each
+  // one is scrolled into view first; anonymous arrows only (see the __name
+  // note above contrastFailures).
+  await page.evaluate(() => { window.location.hash = '#/settings'; });
+  await page.click('[data-testid="settings-nav-workers"]');
+  const workersGroup = page.locator('[data-testid="settings-group-workers"]');
+  await workersGroup.locator('[data-testid="worker-join-url"]').waitFor({ state: 'visible', timeout: 5_000 }).catch(() => {});
+  const hits = await page.evaluate(() => {
+    const group = document.querySelector('[data-testid="settings-group-workers"]');
+    if (!group) return null;
+    const controls = [...group.querySelectorAll('input:not([type=hidden]), select, textarea')] as HTMLElement[];
+    return controls
+      .filter((el) => el.offsetParent !== null)
+      .map((el) => {
+        el.scrollIntoView({ block: 'center', inline: 'center' });
+        const r = el.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return {
+          control: el.getAttribute('data-testid') ?? el.id ?? el.tagName,
+          ok: hit === el || (hit !== null && el.contains(hit)),
+          covering: hit === el ? '' : (hit?.outerHTML ?? 'nothing').slice(0, 120),
+        };
+      });
+  });
+  check('Settings › Workers: controls rendered to hit-test', Boolean(hits && hits.length >= 6), JSON.stringify(hits?.map((h) => h.control)));
+  const coveredControls = (hits ?? []).filter((h) => !h.ok);
+  check('Settings › Workers: every input is the element at its own centre', coveredControls.length === 0, JSON.stringify(coveredControls));
+
   await browser.close();
   console.log(failures === 0 ? '\nA11Y AUDIT: ALL CHECKS PASSED' : `\nA11Y AUDIT: ${failures} FAILURE(S)`);
   return failures;

@@ -17,10 +17,10 @@
  * Hence: every victim is proven to be a readable regular file OUTSIDE the
  * sandbox first, and the suite FAILS if it finds nothing to attack.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import {
-  mkdtempSync, rmSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync, symlinkSync,
+  mkdtempSync, rmSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync, symlinkSync, realpathSync,
 } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -53,6 +53,10 @@ const MUST_BE_DENIED = [
   // api-token one iteration 13 verified: read the key, impersonate the
   // worker, pull jobs as it.
   '.clockwork/worker-key',
+  // P4 Join: worker.json holds the worker's bearer token in plain text. A run
+  // on the worker that could cat it could heartbeat, pull and report as the
+  // worker — the api-token escape again, one daemon over.
+  '.clockwork/worker.json',
   // P6: pack trust pins are public keys, but the FILE decides what the next
   // install trusts — a run that could write it could bless its own pack and
   // wait for a human to install "already trusted" malware.
@@ -224,5 +228,66 @@ describe.skipIf(!onMac)('sandbox credential containment', () => {
     const inner = t.isDir ? path.join(link, path.basename(t.victim)) : link;
     const r = inSandbox(['/bin/sh', '-c', `cat ${JSON.stringify(inner)}`]);
     expect(r.ok, `symlink READ ${t.label}`).toBe(false);
+  });
+});
+
+// The pinned list above only attacks files that already exist in the real
+// ~/.clockwork, and a test must never write there. worker.json is absent on
+// most machines, so the effectiveness half would silently skip it. Instead
+// point CLOCKWORK_HOME at a scratch dir, load a FRESH copy of the module (the
+// deny list is fixed at import), plant a real worker.json and read it.
+describe.skipIf(!onMac)('worker.json join file is denied', () => {
+  let home: string;
+  let prof: string;
+  let joinFile: string;
+  let sibling: string;
+  let wrap: typeof wrapWithSandbox;
+
+  beforeAll(async () => {
+    // Real path: os.tmpdir() is /var/… on macOS, a symlink to /private/var/…,
+    // and Seatbelt matches the resolved path. ~/.clockwork is not a symlink.
+    home = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'cw-sbx-home-')));
+    joinFile = path.join(home, 'worker.json');
+    sibling = path.join(home, 'settings.json');
+    writeFileSync(joinFile, JSON.stringify({ primaryUrl: 'http://primary:4747', token: 'SECRET-WORKER-TOKEN' }), { mode: 0o600 });
+    writeFileSync(sibling, '{"readable":"by-design"}\n');
+    vi.stubEnv('CLOCKWORK_HOME', home);
+    vi.resetModules();
+    const fresh = await import('../src/sandbox.js');
+    wrap = fresh.wrapWithSandbox;
+    const { profile } = fresh.generateSeatbeltProfile({ writePaths: [dir], readPaths: [dir] });
+    prof = path.join(home, 'profile.sb');
+    writeFileSync(prof, profile);
+  });
+
+  afterAll(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  const run = (argv: string[]): { ok: boolean; out: string } => {
+    const w = wrap(argv, prof);
+    try {
+      return { ok: true, out: execFileSync(w[0]!, w.slice(1), { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 20_000 }) };
+    } catch (e) {
+      const err = e as { stdout?: string; stderr?: string };
+      return { ok: false, out: `${err.stdout ?? ''}${err.stderr ?? ''}` };
+    }
+  };
+
+  it('control: a sibling file in the same data dir IS readable', () => {
+    const r = run(['/bin/cat', sibling]);
+    expect(r.ok, `sibling read denied, so the denial below proves nothing: ${r.out}`).toBe(true);
+    expect(r.out).toContain('by-design');
+  });
+
+  it('cat of worker.json fails inside the sandbox and leaks no token', () => {
+    execFileSync('/bin/cat', [joinFile], { stdio: 'ignore' }); // readable outside
+    const r = run(['/bin/cat', joinFile]);
+    expect(r.ok, 'sandboxed cat READ worker.json').toBe(false);
+    expect(r.out).not.toContain('SECRET-WORKER-TOKEN');
+    const sh = run(['/bin/sh', '-c', `cat ${JSON.stringify(joinFile)}`]);
+    expect(sh.ok, 'sandboxed shell READ worker.json').toBe(false);
   });
 });

@@ -452,6 +452,13 @@ label.f { display: block; color: var(--muted); font-size: 12px; margin: 12px 0 4
 .cred-row > .cred-field { grid-area: field; width: 100%; }
 .cred-row > .cred-hint { grid-area: hint; margin: 4px 0 0; }
 .cred-row > .cred-extra { grid-area: extra; min-width: 0; }
+/* The grid has ONE cell per area, so a row with several controls must not
+   hand each its own .cred-field — they would all land in the field cell and
+   cover each other (Settings › Workers did exactly that). Such a row wraps
+   its controls in one .cred-field.cred-stack; the inner controls take
+   .cred-input, which sizes them and claims no area. */
+.cred-row > .cred-stack { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.cred-stack .cred-input { width: 100%; min-width: 0; }
 /* Save and Clear are COLUMNS, not just a right-aligned group.
    Right-aligning the group lines up whatever happens to be last — so Clear
    agreed across rows while Save sat at x=1297 on four rows and x=1213 on the
