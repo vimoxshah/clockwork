@@ -60,6 +60,9 @@ export const CONTROL_PLANE_PATHS = [
   `${dataDir}/clockwork.sqlite-shm`,
   `${dataDir}/delivery-creds.json`,
   `${dataDir}/worker-key`,
+  // P4 Join: the worker's bearer token for its primary, in plain text. A run
+  // that could read it could heartbeat, pull and report as this worker.
+  `${dataDir}/worker.json`,
   // P6: pack trust pins are public keys, but the FILE decides what the next
   // install trusts — a run that could write it could bless its own pack and
   // wait for a human to install "already trusted" malware. Nothing in a run
