@@ -56,6 +56,31 @@ describe('once moves keep the wall time', () => {
 });
 
 describe('weekly moves rewrite the weekday', () => {
+  // docs/scheduling.md "Moving jobs on the calendar": a series move sets the
+  // weekday (or month-day) for FUTURE occurrences, so the day of the grid it
+  // lands on may be past. Only one-offs and queue landings refuse past days.
+  it('a past-day drop on a single-day weekly is a weekday change, not a refusal', () => {
+    const lastTue = Date.UTC(2026, 8, 22, 12, 0, 0); // Tuesday, before now
+    const r = computeMove(src({ kind: 'rrule', rrule: 'FREQ=WEEKLY;BYDAY=MO;BYHOUR=2;BYMINUTE=0' }), lastTue, WED);
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error('unreachable');
+    expect(r.patch.schedule).toEqual({ kind: 'rrule', rrule: 'FREQ=WEEKLY;BYDAY=TU;BYHOUR=2;BYMINUTE=0', tz: NY });
+    expect(r.interpretation).toContain('moves all future occurrences');
+  });
+
+  it('a past-day drop on a monthly is a month-day change, not a refusal', () => {
+    const sep3 = Date.UTC(2026, 8, 3, 12, 0, 0);
+    const r = computeMove(src({ kind: 'rrule', rrule: 'FREQ=MONTHLY;BYMONTHDAY=15;BYHOUR=9;BYMINUTE=0' }), sep3, WED);
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error('unreachable');
+    expect(r.patch.schedule).toEqual({ kind: 'rrule', rrule: 'FREQ=MONTHLY;BYMONTHDAY=3;BYHOUR=9;BYMINUTE=0', tz: NY });
+  });
+
+  it('a past-day queue landing refuses', () => {
+    const lastTue = Date.UTC(2026, 8, 22, 12, 0, 0);
+    expect(computeMove(src({ kind: 'queue' }), lastTue, WED)).toMatchObject({ ok: false, reason: 'past' });
+  });
+
   it('single-day weekly MO 2am → drop Monday Sep 28 stays MO; drop Wed Sep 30 → WE', () => {
     const s = src({ kind: 'rrule', rrule: 'FREQ=WEEKLY;BYDAY=MO;BYHOUR=2;BYMINUTE=0' });
     const stay = computeMove(s, NEXT_MON, WED);

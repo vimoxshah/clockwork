@@ -191,14 +191,16 @@ field; the Next Runs panel previews exactly what Book-it will save.
 Rules the parser holds, in order of surprise:
 
 - Only composer shapes come out (daily/weekly/monthly/interval grids the
-  emitter already produces). "Every other Monday", "hourly", "every March"
-  and day-of-month 29–31 refuse with guidance instead of approximating.
+  emitter already produces). "Every other Monday", "hourly", "every 2 hours",
+  "every 2 days", "every March" and day-of-month 29–31 refuse with guidance
+  instead of approximating. Interval steps are 5, 10, 15 or 30 minutes.
 - A bare singular day ("Friday at 5pm") is a one-off, not a weekly rule —
   recurrence needs every/each, a plural, or a list.
 - A bare 1–5 with no meridiem ("Friday at 5") refuses and asks AM or PM.
   6–11 default to AM; both are stated on screen either way.
 - Everything parses in the schedule's timezone, never the machine's;
-  the interpretation names the zone.
+  the interpretation names the zone. "Tomorrow 9am" typed late at night in
+  Kolkata or early in the morning in Los Angeles means the next wall day there.
 - A failed parse touches nothing — the last good builder state stands.
 
 ## Moving jobs on the calendar
@@ -207,8 +209,10 @@ Booking chips drag onto another day to reschedule: one-offs keep their wall
 time on the new date, single-day weeklies move weekdays, monthlies move
 month-days (1st–28th), and unscheduled queue jobs land as 9:00 AM one-offs.
 The drop preview names the resulting schedule before release; refusing moves
-(daily/interval jobs, multi-day weeklies, cron, past days) say why instead of
-guessing. Most moves offer Undo — queue landings cannot (a queue row holds no
+(daily/interval jobs, multi-day weeklies, cron) say why instead of guessing.
+One-offs and queue landings refuse a past day. A weekly or monthly drop sets
+the weekday or month-day for future occurrences, so the day it lands on can
+be past: dropping a Monday job on last Tuesday makes it a Tuesday job. Most moves offer Undo — queue landings cannot (a queue row holds no
 previous schedule to restore), and Undo refuses when the job changed since the
 move rather than discarding your edit. Moves rewrite the whole series, never one
 occurrence. Keyboard users get the same moves through the task editor and the

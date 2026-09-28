@@ -5,7 +5,7 @@
  * in, <120 rows out), memoized rows (a prop-identical re-render commits
  * no DOM writes), and the parse classifier the worker shares.
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import UnifiedDiff, { EST_ROW_PX, OVERSCAN, parseUnifiedDiff } from '../src/components/UnifiedDiff';
 import { renderComponent, waitFor } from './helpers/dom';
 
@@ -41,5 +41,42 @@ describe('UnifiedDiff virtualization', () => {
     await waitFor(() => scroller.getAttribute('aria-activedescendant') === 'ud-row-0', 'k to move back to row 0', {
       describe: () => `activedescendant = ${scroller.getAttribute('aria-activedescendant')}`,
     });
+  });
+});
+
+/**
+ * Wrapped rows are taller than the estimate. The measured height used to go
+ * into a ref and nothing re-rendered, so the next row kept its estimated top
+ * and overlapped the wrapped one until the user scrolled. jsdom does no
+ * layout (offsetHeight is 0), so row heights are faked on the prototype.
+ */
+describe('UnifiedDiff measured heights', () => {
+  const proto = HTMLElement.prototype;
+  const original = Object.getOwnPropertyDescriptor(proto, 'offsetHeight');
+  afterEach(() => {
+    if (original) Object.defineProperty(proto, 'offsetHeight', original);
+  });
+
+  function fakeHeights(heightOf: (id: string) => number): void {
+    Object.defineProperty(proto, 'offsetHeight', {
+      configurable: true,
+      get(this: HTMLElement) {
+        return heightOf(this.id);
+      },
+    });
+  }
+
+  const topOf = (container: HTMLElement, index: number): string =>
+    (container.querySelector(`#ud-row-${index}`)?.parentElement as HTMLElement | null)?.style.top ?? 'missing';
+
+  it('a wrapped row pushes the next row down with no scroll', async () => {
+    fakeHeights((id) => (id === 'ud-row-0' ? 66 : EST_ROW_PX));
+    const container = await renderComponent(<UnifiedDiff lines={makeLines(50)} height={480} />);
+    await waitFor(() => topOf(container, 1) === '66px', 'row 1 to sit below the 66px-tall row 0', {
+      describe: () => `row 1 top = ${topOf(container, 1)}`,
+    });
+    expect(topOf(container, 2)).toBe(`${66 + EST_ROW_PX}px`);
+    const spacer = container.querySelector('[data-testid="unified-diff"]')!.firstElementChild as HTMLElement;
+    expect(spacer.style.height).toBe(`${66 + 49 * EST_ROW_PX}px`);
   });
 });

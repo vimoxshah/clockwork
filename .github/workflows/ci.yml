@@ -36,6 +36,21 @@ jobs:
       - name: UI calendar-grid tests
         run: pnpm --filter @clockwork/ui test
 
+      # The runner's own zone is UTC, where a timezone bug in the UI stays
+      # invisible: NL scheduling once shifted every parse by the machine's
+      # offset and passed here while failing on every US and Indian laptop.
+      # A zone west of UTC and one east of it (with a half-hour offset) catch
+      # both directions. ~35s each.
+      - name: UI tests under TZ=America/Los_Angeles
+        run: pnpm --filter @clockwork/ui test
+        env:
+          TZ: America/Los_Angeles
+
+      - name: UI tests under TZ=Asia/Kolkata
+        run: pnpm --filter @clockwork/ui test
+        env:
+          TZ: Asia/Kolkata
+
       - name: Build all packages
         run: pnpm build
 

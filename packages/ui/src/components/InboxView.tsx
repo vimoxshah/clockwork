@@ -1260,12 +1260,26 @@ function ReportDetail({
           <button className="btn small" data-testid="transcript-toggle" onClick={() => setShowTr((s) => !s)}>
             {showTr ? 'Hide transcript' : `Show transcript (${tr.data.totalLines ?? '?'} lines)`}
           </button>
+          {showTr && <TranscriptCapNote shown={tr.data.lines.length} total={tr.data.totalLines} />}
           {showTr && <TranscriptDiff lines={tr.data.lines} />}
         </div>
       )}
 
       {!active && <ProofOfWorkExport runId={runId} />}
     </>
+  );
+}
+
+/**
+ * The transcript route sends only the tail of a long transcript; totalLines
+ * is the full count, so a gap between the two is a cut the view must name.
+ */
+function TranscriptCapNote({ shown, total }: { shown: number; total: number | undefined }): JSX.Element | null {
+  if (total === undefined || total <= shown) return null;
+  return (
+    <p className="hint" data-testid="transcript-truncated">
+      Showing the last {shown.toLocaleString('en-US')} of {total.toLocaleString('en-US')} lines.
+    </p>
   );
 }
 
