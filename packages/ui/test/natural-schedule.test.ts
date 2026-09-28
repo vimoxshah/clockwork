@@ -7,7 +7,7 @@
  * Fixed clock: Wednesday 2026-09-23 12:00 UTC. America/New_York is EDT
  * (UTC-4) until 2026-11-01, EST (UTC-5) after — the DST cases pin both.
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseNaturalSchedule, wallToUtcMs, type NlRrule, type NlOnce } from '../src/lib/natural-schedule';
 
 const WED = Date.UTC(2026, 8, 23, 12, 0, 0);
@@ -235,6 +235,118 @@ describe('timezones and DST', () => {
     expect(r.rrule).toBe('FREQ=WEEKLY;BYDAY=MO;BYHOUR=2;BYMINUTE=0');
     expect(r.confidence).toBe('medium');
     expect(r.warnings.join(' ')).toMatch(/Ignored extra text/);
+  });
+});
+
+/**
+ * The MACHINE timezone must not move a parse. chrono reads its reference
+ * Date through local getters, so a reference built in the wrong frame shifts
+ * every result by the laptop's UTC offset: "tomorrow" became today on a US
+ * morning and two days out on an Indian evening. Node honours a runtime
+ * change to process.env.TZ, so each case runs under several machine zones in
+ * one process — this block fails on any machine, not only on one in the
+ * wrong zone. CI also runs the whole suite under LA and Kolkata.
+ */
+describe('machine timezone never moves a parse', () => {
+  const MACHINE_TZS = ['UTC', 'America/Los_Angeles', 'Asia/Kolkata', 'Pacific/Kiritimati'];
+  const savedTz = process.env.TZ;
+  afterEach(() => {
+    if (savedTz === undefined) delete process.env.TZ;
+    else process.env.TZ = savedTz;
+  });
+
+  function wallDate(runAt: number, tz: string): string {
+    return new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short', month: 'short', day: 'numeric' }).format(new Date(runAt));
+  }
+
+  // 18:00 UTC is 23:30 IST, late on Wed Sep 23; 13:00 UTC is 6:00 AM PDT.
+  const LATE_IST = Date.UTC(2026, 8, 23, 18, 0);
+  const EARLY_LA = Date.UTC(2026, 8, 23, 13, 0);
+  // 07:00 UTC is 3:00 AM EDT — a wall hour inside the 1–5 AM/PM refusal.
+  const THREE_AM_NY = Date.UTC(2026, 8, 23, 7, 0);
+
+  for (const machine of MACHINE_TZS) {
+    describe(`machine TZ=${machine}`, () => {
+      beforeEach(() => {
+        process.env.TZ = machine;
+      });
+
+      it('"tomorrow 9am" late at night in Kolkata is the next wall day', () => {
+        const r = once('tomorrow 9am', LATE_IST, 'Asia/Kolkata');
+        expect(wallDate(r.runAt, 'Asia/Kolkata')).toBe('Thu, Sep 24');
+        expect(wallHour(r.runAt, 'Asia/Kolkata')).toBe(9);
+      });
+
+      it('"tomorrow 9am" early morning in LA is tomorrow, not today', () => {
+        const r = once('tomorrow 9am', EARLY_LA, 'America/Los_Angeles');
+        expect(wallDate(r.runAt, 'America/Los_Angeles')).toBe('Thu, Sep 24');
+        expect(wallHour(r.runAt, 'America/Los_Angeles')).toBe(9);
+      });
+
+      it('"next week" is seven wall days out, time assumed out loud', () => {
+        const ist = once('next week', LATE_IST, 'Asia/Kolkata');
+        expect(wallDate(ist.runAt, 'Asia/Kolkata')).toBe('Wed, Sep 30');
+        expect(wallHour(ist.runAt, 'Asia/Kolkata')).toBe(9);
+        expect(ist.warnings.join(' ')).toMatch(/Assumed 9:00 AM/);
+        const la = once('next week', EARLY_LA, 'America/Los_Angeles');
+        expect(wallDate(la.runAt, 'America/Los_Angeles')).toBe('Wed, Sep 30');
+      });
+
+      it('"Friday at 5pm" is the coming Friday at 17:00 in the task zone', () => {
+        const r = once('Friday at 5pm', LATE_IST, 'Asia/Kolkata');
+        expect(wallDate(r.runAt, 'Asia/Kolkata')).toBe('Fri, Sep 25');
+        expect(wallHour(r.runAt, 'Asia/Kolkata')).toBe(17);
+      });
+
+      it('"every 15 minutes" books the grid, even at 3 AM task time', () => {
+        expect(rrule('every 15 minutes').rrule).toBe('FREQ=HOURLY;BYMINUTE=0,15,30,45');
+        expect(rrule('every 15 minutes', THREE_AM_NY, NY).rrule).toBe('FREQ=HOURLY;BYMINUTE=0,15,30,45');
+      });
+
+      it('"in 2 hours" is now + 2h, even at 3 AM task time', () => {
+        expect(once('in 2 hours', THREE_AM_NY, NY).runAt).toBe(THREE_AM_NY + 2 * 3600_000);
+      });
+
+      it('"every Mon 2am" is Monday 02:00 in the task zone', () => {
+        expect(rrule('every Mon 2am', LATE_IST, 'Asia/Kolkata').rrule).toBe('FREQ=WEEKLY;BYDAY=MO;BYHOUR=2;BYMINUTE=0');
+      });
+    });
+  }
+});
+
+describe('hour and day steps never become a daily job', () => {
+  it('"every 2 hours" refuses with guidance instead of booking daily or once', () => {
+    const r = parseNaturalSchedule({ text: 'every 2 hours', nowMs: WED, tz: NY });
+    expect(r.kind).toBe('error');
+    if (r.kind !== 'error') throw new Error('unreachable');
+    expect(r.message).toMatch(/hour/i);
+    expect(r.hint).toMatch(/every 30 minutes/);
+  });
+
+  it('"every hour" and "every 3 hrs" refuse the same way', () => {
+    expect(fails('every hour')).toMatch(/hour/i);
+    expect(fails('every 3 hrs')).toMatch(/hour/i);
+  });
+
+  it('"every 2 days" refuses instead of becoming daily', () => {
+    expect(fails('every 2 days')).toMatch(/Multi-day/);
+  });
+});
+
+describe('residue warnings name only text the parser never read', () => {
+  it('"on weekdays" is not ignored text — the rule used it', () => {
+    const r = rrule('every 5 minutes on weekdays 9 to 17');
+    expect(r.rrule).toBe('FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,5,10,15,20,25,30,35,40,45,50,55');
+    expect(r.warnings).toEqual([]);
+    expect(r.confidence).toBe('high');
+  });
+
+  it('"every 15 minutes on weekends" keeps quiet too', () => {
+    expect(rrule('every 15 minutes on weekends').warnings).toEqual([]);
+  });
+
+  it('real leftovers still warn', () => {
+    expect(rrule('every 5 minutes on weekdays please').warnings.join(' ')).toMatch(/Ignored extra text.*please/);
   });
 });
 

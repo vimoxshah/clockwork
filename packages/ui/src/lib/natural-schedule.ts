@@ -177,6 +177,17 @@ export function parseNaturalSchedule(input: NlInput): NlResult {
   if (/\bevery\s+\d+\s*(weeks?|months?|years?)\b/.test(t)) {
     return err('Multi-week intervals are not offered.', 'Book it weekly and skip weeks by hand, or file separate weekly tasks.');
   }
+  // Same failure class one unit down: "every 2 days" has no composer shape
+  // and would daily-ify. "every 1 day" is plain daily and falls through.
+  if (/\bevery\s+([2-9]|\d{2,})\s*days?\b/.test(t)) {
+    return err('Multi-day intervals are not offered.', 'Book it daily, or weekly on the days you want.');
+  }
+  // Hour steps have no composer shape either (the interval grid tops out at
+  // 30 minutes). Refused here, before chrono reads "2 hours" as "in 2 hours"
+  // and the bare-every rule books a daily job at now + 2h.
+  if (/\bevery\s+(\d+\s*|an?\s+|one\s+)?(hours?|hrs?)\b/.test(t)) {
+    return err('Hour steps are not offered — the largest interval is every 30 minutes.', 'Try "every 30 minutes", or a daily rule at the hour you want.');
+  }
   // Bare month names ("every March") match the every-word below but mean a
   // yearly shape the composer cannot emit — refuse, do not daily-ify. An
   // explicit year ("March 8 2026") is a once date, not a recurrence, and is
@@ -199,26 +210,31 @@ export function parseNaturalSchedule(input: NlInput): NlResult {
   }
 
   // Reference date in TASK-tz wall space so "2am" parses where the job fires.
-  // Built AND read in UTC space (Date.UTC + getUTC*): the machine timezone
-  // must not move the boundary. The frame is self-consistent — wall date
-  // encoded as UTC, day arithmetic inside it, wallToUtcMs converting out —
-  // so a UTC+14 laptop and a UTC-8 one parse identically. Parsed up front so
-  // every branch below (including the interval branch's residue check) sees it.
+  // chrono reads the reference through LOCAL getters (getHours, getDate…),
+  // so the task-tz wall clock is built with the local constructor: whatever
+  // the machine zone, those getters then return the task-tz wall reading, and
+  // every component chrono hands back is a task-tz wall component. We only
+  // ever read components (never chrono's .date()), and wallToUtcMs converts
+  // out. A Date.UTC reference here shifted every parse by the machine's
+  // offset ("tomorrow" meant today on a US morning). Parsed up front so every
+  // branch below (including the interval branch's residue check) sees it.
   //
   // Two strips before chrono runs: the leading every/each (recurrence intent
   // is ours, not chrono's) and hour windows ("9 to 17" parses as two times
   // and would trip the two-times refusal). Residue is measured against this
   // same stripped text, or the indices never align.
   const nowWall = wallInTz(input.nowMs, input.tz);
-  const ref = new Date(Date.UTC(nowWall.y, nowWall.mo, nowWall.d, nowWall.h, nowWall.mi, 0));
+  const ref = new Date(nowWall.y, nowWall.mo, nowWall.d, nowWall.h, nowWall.mi, 0);
   const chronoText = t
     .replace(/^\s*(every|each)\s+/, '')
     .replace(/\b\d{1,2}(?::00)?\s*(?:to|-)\s*\d{1,2}(?::00)?\b/g, ' ');
   const found = chronoParse(chronoText, ref, { forwardDate: true });
   // Time can live in a LATER result ("mon, wed, fri AT 6pm" parses as three),
   // but two certain times ("2am and 3pm") is two schedules, not one: taking
-  // the first would silently drop the second.
-  const certainTimes = found.filter((r) => r.start.isCertain('hour'));
+  // the first would silently drop the second. A duration ("15 minutes",
+  // "in 2 hours") is not a named time: chrono marks its hour certain as
+  // now + n, which at 1–5 AM task time tripped the AM/PM refusal below.
+  const certainTimes = found.filter((r) => r.start.isCertain('hour') && !r.tags().has('result/relativeDate'));
   if (certainTimes.length > 1) {
     return err('Two different times in one schedule — one schedule holds one time.', 'Book "2am" and "3pm" as two tasks, or pick one.');
   }
@@ -354,18 +370,17 @@ export function parseNaturalSchedule(input: NlInput): NlResult {
   }
 
   // One-off: needs a real future datetime, never a bare word. The DATE is
-  // resolved here in wall space — chrono's absolute resolution runs on
-  // machine-local getters, so a laptop far from the task zone would move the
-  // day. Only chrono-CERTAIN explicit dates are taken as-is; everything else
-  // is keyword/weekday arithmetic on the tz wall clock.
+  // resolved here in wall space. Only chrono-CERTAIN dates are taken as-is
+  // (they are task-tz wall components, see the reference above); everything
+  // else is keyword/weekday arithmetic on the tz wall clock.
   if (!first) {
     return err(`Could not find a date or time in “${raw}”.`, 'Try "tomorrow 9am", "Friday at 5pm", or "every Mon 2am".');
   }
   const onceDate = resolveOnceDate(t, found, nowWall, input.tz);
   if ('err' in onceDate) return onceDate.err;
-  // Relative durations ("in 2 hours") anchor on NOW, not the UTC parse frame
-  // (the frame ref is wall-encoded, so chrono's "+2h" lands in the wrong
-  // place). Parsed here directly: exact, tz-independent, midnight-safe.
+  // Relative durations ("in 2 hours") anchor on the real instant NOW, not on
+  // chrono's wall-clock reference (its "+2h" is wall arithmetic, wrong by an
+  // hour across a DST change). Parsed here directly: exact, midnight-safe.
   const durMatch = t.match(/^\s*in\s+(\d+)\s*(minutes?|hours?|days?|weeks?)\b/);
   if (durMatch) {
     const n = Number(durMatch[1]);
@@ -505,6 +520,10 @@ function resolveOnceDate(
   return { err: err('Could not find a date in that text.', 'Try "tomorrow 9am" or "Friday at 5pm".') };
 }
 
+/** Vocabulary parseNaturalSchedule consumes outside chrono's matches. */
+const CONSUMED_WORDS =
+  /\b(on|at|and|the|every|each|daily|nightly|weekly|monthly|weekdays?|weekends?|mon(day)?s?|tue(sday)?s?|wed(nesday)?s?|thu(rsday)?s?|fri(day)?s?|sat(urday)?s?|sun(day)?s?|\d{1,2}(st|nd|rd|th))\b/g;
+
 /**
  * Alphabetic residue past the last chrono match ("2amx", "please") — booked
  * text the parser never looked at. A warning, not an error: politeness
@@ -513,7 +532,13 @@ function resolveOnceDate(
 function residueWarnings(t: string, found: Array<{ index: number; text: string }>): string[] {
   if (found.length === 0) return [];
   const end = Math.max(...found.map((r) => r.index + r.text.length));
-  const rest = t.slice(end).trim();
+  // Words the keyword layer reads itself ("on weekdays", "every Friday")
+  // sit outside chrono's match but are not ignored — naming them as ignored
+  // contradicts the interpretation printed beside the warning.
+  const rest = t
+    .slice(end)
+    .replace(CONSUMED_WORDS, ' ')
+    .trim();
   // Any trailing letter counts — even one ("2amx" is a typo, not 2am).
   // Punctuation alone ("mon 2am,") is not words and stays silent.
   if (/[a-zA-Z]/.test(rest)) return [`Ignored extra text after the schedule: "${rest.slice(0, 40)}".`];
