@@ -26,13 +26,14 @@ with a PAT you paste once — no `gh` CLI involved anywhere.
    main repo — retention may have pruned the worktree), base resolves, and the
    branch holds commits beyond the base. An empty branch **refuses** with the
    reason instead of opening an empty PR.
-2. The origin remote must be an `https://github.com/…` URL. SSH remotes
-   refuse with the fix (`git remote set-url origin https://…` or push
-   manually) — the daemon has no ssh-agent and never reads keys.
-3. The branch is pushed (`--set-upstream`, so a retry just works).
-4. Open PRs off that branch are looked up first: an existing one is
+3. The origin remote must be an `https://github.com/…` URL (`ssh://` and
+   `git@` forms are recognized as GitHub too, but refuse with the fix —
+   `git remote set-url origin https://…` or push manually — because the
+   daemon has no ssh-agent and never reads keys).
+4. The branch is pushed (`--set-upstream`, so a retry just works).
+5. Open PRs off that branch are looked up first: an existing one is
    **returned, never duplicated**.
-5. Otherwise the PR is created with the run summary, diffstat, cost/turns,
+6. Otherwise the PR is created with the run summary, diffstat, cost/turns,
    and a footer naming Clockwork as the author of the push, not the code.
 
 Every refusal names its fix in the button's error line. Nothing here edits

@@ -63,6 +63,11 @@ describe('parseGitHubRemote', () => {
     expect(parseGitHubRemote('https://github.com/o/r.git')).toEqual({ owner: 'o', repo: 'r' });
     expect(parseGitHubRemote('https://github.com/o/r/')).toEqual({ owner: 'o', repo: 'r' });
     expect(parseGitHubRemote('git@github.com:o/r.git')).toEqual({ owner: 'o', repo: 'r' });
+    // ssh:// form: same host, same owner/repo shape, refused later (as
+    // ssh_origin, not not_github) by pushBranch because this daemon has no
+    // ssh-agent — but collectPrContext must recognize it as GitHub first.
+    expect(parseGitHubRemote('ssh://git@github.com/o/r.git')).toEqual({ owner: 'o', repo: 'r' });
+    expect(parseGitHubRemote('ssh://git@github.com/o/r')).toEqual({ owner: 'o', repo: 'r' });
   });
   it('refuses non-github and garbage', () => {
     expect(parseGitHubRemote('https://gitlab.com/o/r.git')).toBeNull();
@@ -200,6 +205,25 @@ describe('local git: collect + push', () => {
       expect(pushBranch({ workDir: repo, branch: 'main', pat: PAT })).toMatchObject({ ok: false, reason: 'ssh_origin' });
     } finally {
       git(repo, 'remote', 'set-url', 'origin', 'https://github.com/o/r.git');
+    }
+  });
+
+  it('ssh:// origin is recognized as GitHub by collectPrContext, then refused as ssh_origin (not not_github)', () => {
+    // Before the fix, parseGitHubRemote had no ssh:// form, so
+    // collectPrContext refused this as not_github and the SSH fix hint never
+    // reached the user — even though the remote IS github.com.
+    git(repo, 'checkout', '-b', 'cw/ssh');
+    git(repo, '-c', 'user.email=t@t.test', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'w');
+    git(repo, 'remote', 'set-url', 'origin', 'ssh://git@github.com/o/r.git');
+    try {
+      const ctx = collectPrContext({ repoPath: repo, worktreePath: null, branch: 'cw/ssh', baseBranch: 'main' });
+      expect(ctx).toMatchObject({ owner: 'o', repo: 'r', branch: 'cw/ssh' });
+      if ('ok' in ctx) throw new Error('expected a PrContext, got a PrFailure');
+      expect(pushBranch({ workDir: ctx.workDir, branch: ctx.branch, pat: PAT })).toMatchObject({ ok: false, reason: 'ssh_origin' });
+    } finally {
+      git(repo, 'remote', 'set-url', 'origin', 'https://github.com/o/r.git');
+      git(repo, 'checkout', 'main');
+      git(repo, 'branch', '-D', 'cw/ssh');
     }
   });
 
