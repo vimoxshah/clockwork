@@ -185,7 +185,7 @@ export function parseNaturalSchedule(input: NlInput): NlResult {
   // Hour steps have no composer shape either (the interval grid tops out at
   // 30 minutes). Refused here, before chrono reads "2 hours" as "in 2 hours"
   // and the bare-every rule books a daily job at now + 2h.
-  if (/\bevery\s+(\d+\s*|an?\s+|one\s+)?(hours?|hrs?)\b/.test(t)) {
+  if (/\bevery\s+(\d+\s*|an?\s+|one\s+|half\s+(an?\s+)?)?(hours?|hrs?)\b/.test(t)) {
     return err('Hour steps are not offered — the largest interval is every 30 minutes.', 'Try "every 30 minutes", or a daily rule at the hour you want.');
   }
   // Bare month names ("every March") match the every-word below but mean a

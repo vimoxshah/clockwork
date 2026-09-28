@@ -323,9 +323,11 @@ describe('hour and day steps never become a daily job', () => {
     expect(r.hint).toMatch(/every 30 minutes/);
   });
 
-  it('"every hour" and "every 3 hrs" refuse the same way', () => {
+  it('"every hour", "every 3 hrs" and "every half hour" refuse the same way', () => {
     expect(fails('every hour')).toMatch(/hour/i);
     expect(fails('every 3 hrs')).toMatch(/hour/i);
+    expect(fails('every half hour')).toMatch(/hour/i);
+    expect(fails('every half an hour')).toMatch(/hour/i);
   });
 
   it('"every 2 days" refuses instead of becoming daily', () => {
