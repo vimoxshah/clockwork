@@ -160,6 +160,18 @@ approval is never shifted by this feature.
 When a recurring fire lands while the previous run is still executing:
 `skip` (default) → occurrence marked skipped with an inbox note;
 `queue` → second instance queues behind the repo mutex (never parallel in-repo).
+A task with no repo (a scratch task) has no mutex to queue behind, so a queued
+occurrence there only waits for a free run slot, the same as any other queued
+run (`run-manager.ts`).
+
+"Still executing" reads the task's own run states — `queued`, `preparing`,
+`running`, `waiting_approval` and `finalizing` all count, so a run sitting on
+your approval blocks the next occurrence exactly as an actively-running one
+does (`scheduler.ts:enqueue`).
+
+Set per task in New task › Schedule › Recurring (shown only for a recurring
+booking — a one-off or ASAP run has no previous occurrence to collide with)
+and changed later from Tasks › Edit.
 
 ## Keep-awake honesty
 
