@@ -27,8 +27,9 @@ worker is the one that will run them.
 5. **On the worker**, under **Join another daemon**, the URL is already
    filled in from step 3. Paste the token and press **Join**. It is saved
    0600 to `worker.json` and takes effect without a restart. The worker
-   polls every 30 seconds; its next poll sends a heartbeat. Reopen
-   **Settings › Workers** on the primary to see it marked **online**.
+   polls every 30 seconds; its next poll sends a heartbeat, and the
+   primary’s list marks it **online** with its platform (for example
+   `macOS 26 · arm64`) without a reload.
 
 A valid signature alone never earns a token. Approval waits for a verified
 claim; claiming waits for an operator-started pairing. If Claim is refused,
