@@ -367,7 +367,7 @@ footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--i
     <div class="grid">
       <div class="c1-5 hero-copy">
         <h1>Put your agents on a schedule.</h1>
-        <p class="lede">Book Claude Code, Codex, OpenCode or Hermes like a meeting. Clockwork runs it sandboxed and files a readable report.</p>
+        <p class="lede">Book Claude Code, Codex, OpenCode or Hermes like a meeting. Clockwork runs it sandboxed, on this Mac or one that stays awake, and files a report you can turn into a pull request.</p>
         <div class="btn-row">
           <a class="btn primary dl" href="https://github.com/vimoxshah/clockwork/releases/latest/download/Clockwork_aarch64.dmg" download type="application/octet-stream">Download for Mac</a>
           <a class="btn" href="#day">How it works</a>
@@ -544,10 +544,12 @@ footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--i
     <dl class="spec rv">
       <div><dt>Engines</dt><dd>Claude Code, Codex CLI, OpenCode and Hermes Agent, on the logins you already have. Switch per task.</dd></div>
       <div><dt>Your own keys</dt><dd>OpenAI-compatible providers too: Anthropic, OpenAI, Google, OpenRouter, xAI, Mistral, DeepSeek, Ollama and custom gateways. Keys live in the macOS Keychain and are billed by the provider.</dd></div>
+      <div><dt>Plain-English schedules</dt><dd>Type "weekdays at 9" or "every Monday 2am". Clockwork shows how it read the rule, what it assumed and the next real fire times, and asks when a rule is ambiguous. Drag a booking to a new slot on the calendar, see the result before you let go, and Undo it.</dd></div>
       <div><dt>Triggers</dt><dd>The calendar: RRULE or cron, expanded in the schedule's own IANA zone with daylight-saving rules that are tested. Or an event: HMAC-verified webhooks and GitHub sources fire tasks. Two triggers on the free tier.</dd></div>
       <div><dt>No double fire</dt><dd>Each occurrence is claimed in the same transaction that creates the run, so a crash, a restart or a second scheduler cannot run it twice. Sleeping through several occurrences yields one catch-up run.</dd></div>
-      <div><dt>Where it runs</dt><dd>A macOS Seatbelt sandbox around a fresh git worktree, or an ephemeral Docker container with no network by default and CPU, memory and process caps.</dd></div>
-      <div><dt>Chains</dt><dd>Sequence agents: scan, fix, test, open a PR. Each stage waits for its upstream and receives that report as <code>{{previous.report}}</code>.</dd></div>
+      <div><dt>Where it runs</dt><dd>A macOS Seatbelt sandbox around a fresh git worktree, on this Mac or on a paired worker Mac. A Docker runner with no network by default and CPU, memory and process caps is built and tested, but a task cannot select it yet.</dd></div>
+      <div><dt>Pipelines</dt><dd>Chain agents in a line, or fan out and back in: three reviewers run in parallel, and one summary waits for all three. A stage reads any upstream report as <code>{{runs.&lt;id&gt;.report}}</code>, inside a shared context budget. A cycle is refused before it saves.</dd></div>
+      <div><dt>Worker Macs</dt><dd>Pair an always-on Mac as a worker. Its ed25519 key never leaves it, and you approve each pairing. Pin a job to a machine, or let it fall back to this one. A worker that goes quiet has its runs marked lost, never silently done, and a revoked worker is refused at once.</dd></div>
       <div><dt>Budgets</dt><dd>A dollar cap, a turn cap and a wall-clock timeout, enforced by the supervisor outside the model. Cost and reliability analytics by task, provider and day.</dd></div>
       <div><dt>Approvals</dt><dd>Risky actions pause the run and ask, and the run holds for the rest of its wall-clock budget rather than a fixed two minutes. Answer from the inbox or from Telegram. A plan mode exists for jobs that read untrusted input.</dd></div>
       <div><dt>Delivery</dt><dd>macOS notifications, Telegram, Slack, email and an HMAC-signed webhook that fronts Discord, ntfy or anything else. Every channel receives the approval request. Telegram alone carries the decision — its message has approve and deny buttons; a Slack or email notice can only point you at the Inbox.</dd></div>
@@ -559,13 +561,16 @@ footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--i
       <div><dt>Earned autonomy</dt><dd>A profile starts in plan mode and is offered a higher rung after a run of accepted outcomes. Offered, never granted: you accept it, and enrolment is opt-in so nothing you already have is moved without asking.</dd></div>
       <div><dt>Self-healing</dt><dd>After repeated failures a task books a diagnostic run, and that run's output is a proposal you apply. The agent never edits its own prompt.</dd></div>
       <div><dt>Timesheets and reviews</dt><dd>Hours worked, spend, accepted outcomes and an effective hourly rate per agent, plus a scorecard per profile. Rows touched by a daemon restart are flagged rather than presented as exact.</dd></div>
+      <div><dt>Open a PR</dt><dd>A finished run's report offers Open PR: it pushes the branch and opens the pull request over the GitHub API, and tells you when one is already open. The token lives in a 0600 file on your Mac, never in git config, logs or the sandbox. No <code>gh</code> CLI needed.</dd></div>
+      <div><dt>Terminal</dt><dd><code>clockwork status</code>, <code>runs</code>, <code>tasks</code>, <code>queue</code>, <code>approve</code>, <code>workers</code> and <code>pack</code>, as readable tables or <code>--json</code> with stable exit codes.</dd></div>
+      <div><dt>Template packs</dt><dd>One signed file installs a team's jobs. The first key you see is pinned, the preview shows each template's security flags, and one bad template blocks the whole pack. Everything arrives switched off.</dd></div>
       <div><dt>Proof of work</dt><dd>Export a run report as one redacted, self-contained page you host yourself. Nothing is uploaded anywhere.</dd></div>
       <div><dt>Your first run</dt><dd>One button. <em>Run a sample job now</em> points the read-only Code Reviewer at a repository Clockwork already knows about, caps it at fifty cents, starts it and opens the live log. It cannot change anything: plan mode frozen into the job spec, a throwaway worktree, and a sandbox profile that mounts the repo read-only.</dd></div>
       <div><dt>Job templates</dt><dd>Five jobs you can book without writing a prompt: Monday dependency triage, a flaky-test sweep, a Friday docs-drift check, a morning repo-health digest and a pre-release changelog draft. Export a task you already have as a template too, through the same security preview an imported file gets.</dd></div>
       <div><dt>While it runs</dt><dd>The log streams live, and a tab opened mid-run catches up instead of starting blank. A menu-bar item means a waiting approval is visible with the window shut.</dd></div>
       <div><dt>The morning after</dt><dd>Overnight runs are summarised in the Inbox, and each report ends with the next action as a button: check out the branch, read the diff, open a pull request, run it again. The report also says when the Mac slept, with a duration, and declines to answer when nobody could know rather than answering no.</dd></div>
       <div><dt>Updates</dt><dd>A manual check, from the tray and from Settings. A click, never a timer. All four outcomes are stated and a failed check never reports "up to date". There is no automatic or signed update path.</dd></div>
-      <div><dt>What is not built</dt><dd>Container execution has daemon support and no screen. The capability list inside the app shows no tick for it rather than implying you can use it, and it earns that tick only when a screen registers itself. Quiet hours, history retention and outbound webhook delivery each got that screen in 0.12.</dd></div>
+      <div><dt>What is not built</dt><dd>Docker execution for tasks: the runner and its limits are tested, and the capability list inside the app shows no tick for it until a task can select it. Notarisation and automatic updates. Linux and Windows.</dd></div>
       <div><dt>Your data</dt><dd>SQLite in one folder in your home directory. The API listens on loopback only. Ninety days of history on the free tier. Verified at one thousand scheduled tasks.</dd></div>
       <div><dt>Requires</dt><dd>macOS 13 or newer, Apple silicon or Intel, and at least one engine CLI on your PATH. The daemon and its Node runtime ship inside the app, so there is nothing else to install. The download is <span data-size>52.8 MB</span>.</dd></div>
     </dl>
@@ -619,11 +624,11 @@ footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--i
             <li data-feature="approvals">Human approval gates that fail closed</li>
             <li data-feature="budget_guards">Dollar, turn and wall-clock caps</li>
             <li data-feature="agent_chains">Agent chains</li>
-            <li data-feature="container_execution">Ephemeral Docker execution</li>
+            <li data-feature="container_execution">Docker runner, planned for tasks: built and tested, not yet selectable</li>
             <li data-feature="webhooks">Webhook delivery to Slack, Discord, ntfy or anything</li>
             <li data-feature="event_triggers">Two event triggers</li>
             <li data-feature="analytics_basic">90 days of cost and reliability analytics</li>
-            <li data-feature="retention">30 days of run history</li>
+            <li data-feature="retention">90 days of run history</li>
           </ul>
         </div>
       </div>
