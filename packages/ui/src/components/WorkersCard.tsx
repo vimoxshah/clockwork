@@ -268,29 +268,30 @@ export function WorkersCard({ version }: { version: number }): JSX.Element {
         <label className="f cred-label" htmlFor="worker-name">
           Pair new worker
         </label>
-        <input
-          id="worker-name"
-          className="cred-field"
-          type="text"
-          autoComplete="off"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Mac Mini (always-on)"
-          data-testid="worker-name-input"
-        />
-        <input
-          id="worker-pubkey"
-          aria-label="Worker public key (DER hex)"
-          className="cred-field"
-          type="text"
-          autoComplete="off"
-          spellCheck={false}
-          value={pubkey}
-          onChange={(e) => setPubkey(e.target.value)}
-          placeholder="Worker ed25519 pubkey (DER hex — from clockworkd worker-key)"
-          data-testid="worker-pubkey-input"
-          style={{ marginTop: 6 }}
-        />
+        <div className="cred-field cred-stack">
+          <input
+            id="worker-name"
+            className="cred-input"
+            type="text"
+            autoComplete="off"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Mac Mini (always-on)"
+            data-testid="worker-name-input"
+          />
+          <input
+            id="worker-pubkey"
+            aria-label="Worker public key (DER hex)"
+            className="cred-input"
+            type="text"
+            autoComplete="off"
+            spellCheck={false}
+            value={pubkey}
+            onChange={(e) => setPubkey(e.target.value)}
+            placeholder="Worker ed25519 pubkey (DER hex — from clockworkd worker-key)"
+            data-testid="worker-pubkey-input"
+          />
+        </div>
         <div className="hint cred-hint">Three steps, all visible above: paste the key to start, hand over the nonce, approve after the worker claims.</div>
         <div className="cred-actions">
           <button className="btn small primary" disabled={busy || !name.trim() || !pubkey.trim()} onClick={() => void pair()} data-testid="worker-pair-button">
@@ -302,64 +303,66 @@ export function WorkersCard({ version }: { version: number }): JSX.Element {
         <label className="f cred-label" htmlFor="worker-pin-task">
           Pin a task to a worker
         </label>
-        <select
-          id="worker-pin-task"
-          className="cred-field"
-          value={pinTask}
-          onChange={(e) => setPinTask(e.target.value)}
-          data-testid="worker-pin-task"
-        >
-          <option value="">Pick a task…</option>
-          {tasks.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.name}
-              {t.workerPin ? ` (pinned: ${workers.find((w) => w.id === t.workerPin)?.name ?? t.workerPin})` : ''}
-            </option>
-          ))}
-        </select>
-        <div className="flex gap-2" style={{ marginTop: 6 }}>
+        <div className="cred-field cred-stack">
           <select
-            aria-label="Worker"
-            className="cred-field"
-            value={pinWorker}
-            onChange={(e) => setPinWorker(e.target.value)}
-            data-testid="worker-pin-worker"
-            style={{ flex: 1 }}
+            id="worker-pin-task"
+            className="cred-input"
+            value={pinTask}
+            onChange={(e) => setPinTask(e.target.value)}
+            data-testid="worker-pin-task"
           >
-            <option value="">Local (unpin)</option>
-            {workers
-              .filter((w) => w.status === 'paired')
-              .map((w) => (
-                <option key={w.id} value={w.id}>
-                  {w.name} {w.onlineComputed ? '' : '(silent)'}
-                </option>
-              ))}
+            <option value="">Pick a task…</option>
+            {tasks.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+                {t.workerPin ? ` (pinned: ${workers.find((w) => w.id === t.workerPin)?.name ?? t.workerPin})` : ''}
+              </option>
+            ))}
           </select>
-          <fieldset style={{ marginTop: 6, border: 'none', padding: 0 }}>
-            <legend className="hint" style={{ marginBottom: 4 }}>
-              If the worker is silent when a run fires:
-            </legend>
-            <label className="hint" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-              <input
-                type="radio"
-                name="worker-pin-mode"
-                checked={pinRequired}
-                onChange={() => setPinRequired(true)}
-                data-testid="worker-pin-required"
-              />
-              Required — wait for the worker
-            </label>
-            <label className="hint" style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 4 }}>
-              <input
-                type="radio"
-                name="worker-pin-mode"
-                checked={!pinRequired}
-                onChange={() => setPinRequired(false)}
-                data-testid="worker-pin-preferred"
-              />
-              Preferred — run here instead, noted on the run
-            </label>
-          </fieldset>
+          <div className="flex gap-2">
+            <select
+              aria-label="Worker"
+              className="cred-input"
+              value={pinWorker}
+              onChange={(e) => setPinWorker(e.target.value)}
+              data-testid="worker-pin-worker"
+              style={{ flex: 1 }}
+            >
+              <option value="">Local (unpin)</option>
+              {workers
+                .filter((w) => w.status === 'paired')
+                .map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.name} {w.onlineComputed ? '' : '(silent)'}
+                  </option>
+                ))}
+            </select>
+            <fieldset style={{ border: 'none', padding: 0, margin: 0 }}>
+              <legend className="hint" style={{ marginBottom: 4 }}>
+                If the worker is silent when a run fires:
+              </legend>
+              <label className="hint" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <input
+                  type="radio"
+                  name="worker-pin-mode"
+                  checked={pinRequired}
+                  onChange={() => setPinRequired(true)}
+                  data-testid="worker-pin-required"
+                />
+                Required — wait for the worker
+              </label>
+              <label className="hint" style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 4 }}>
+                <input
+                  type="radio"
+                  name="worker-pin-mode"
+                  checked={!pinRequired}
+                  onChange={() => setPinRequired(false)}
+                  data-testid="worker-pin-preferred"
+                />
+                Preferred — run here instead, noted on the run
+              </label>
+            </fieldset>
+          </div>
         </div>
         <div className="cred-actions">
           <button className="btn small primary" disabled={busy || !pinTask} onClick={() => void savePin()} data-testid="worker-pin-save">
@@ -377,42 +380,43 @@ export function WorkersCard({ version }: { version: number }): JSX.Element {
         <label className="f cred-label" htmlFor="worker-join-url">
           Join another daemon
         </label>
-        {joinQ.data?.joined ? (
-          <p className="hint" style={{ margin: '0 0 6px' }} data-testid="worker-join-status">
-            Joined to <strong className="mono">{joinQ.data.primaryHost ?? 'unknown host'}</strong>
-            {joinQ.data.via === 'env' ? ' via environment (Join below would be shadowed — unset the env to switch)' : ' via this app'}.
-            This daemon pulls jobs from there; its own tasks still run here.
-          </p>
-        ) : (
-          <p className="hint" style={{ margin: '0 0 6px' }} data-testid="worker-join-status">
-            This daemon pulls from nobody. Paste the primary’s URL and the bearer token its Approve step
-            showed once — the Mini side of the ceremony above, no terminal needed.
-          </p>
-        )}
-        <input
-          id="worker-join-url"
-          className="cred-field"
-          type="url"
-          autoComplete="off"
-          spellCheck={false}
-          value={joinUrl}
-          onChange={(e) => setJoinUrl(e.target.value)}
-          placeholder="https://mini-lan:8787 or http://100.x.y.z:8787"
-          data-testid="worker-join-url"
-        />
-        <input
-          id="worker-join-token"
-          aria-label="Primary bearer token"
-          className="cred-field"
-          type="password"
-          autoComplete="off"
-          spellCheck={false}
-          value={joinToken}
-          onChange={(e) => setJoinToken(e.target.value)}
-          placeholder="Bearer token from the primary’s Approve step"
-          data-testid="worker-join-token"
-          style={{ marginTop: 6 }}
-        />
+        <div className="cred-field cred-stack">
+          {joinQ.data?.joined ? (
+            <p className="hint" style={{ margin: 0 }} data-testid="worker-join-status">
+              Joined to <strong className="mono">{joinQ.data.primaryHost ?? 'unknown host'}</strong>
+              {joinQ.data.via === 'env' ? ' via environment (Join below would be shadowed — unset the env to switch)' : ' via this app'}.
+              This daemon pulls jobs from there; its own tasks still run here.
+            </p>
+          ) : (
+            <p className="hint" style={{ margin: 0 }} data-testid="worker-join-status">
+              This daemon pulls from nobody. Paste the primary’s URL and the bearer token its Approve step
+              showed once — the Mini side of the ceremony above, no terminal needed.
+            </p>
+          )}
+          <input
+            id="worker-join-url"
+            className="cred-input"
+            type="url"
+            autoComplete="off"
+            spellCheck={false}
+            value={joinUrl}
+            onChange={(e) => setJoinUrl(e.target.value)}
+            placeholder="https://mini-lan:8787 or http://100.x.y.z:8787"
+            data-testid="worker-join-url"
+          />
+          <input
+            id="worker-join-token"
+            aria-label="Primary bearer token"
+            className="cred-input"
+            type="password"
+            autoComplete="off"
+            spellCheck={false}
+            value={joinToken}
+            onChange={(e) => setJoinToken(e.target.value)}
+            placeholder="Bearer token from the primary’s Approve step"
+            data-testid="worker-join-token"
+          />
+        </div>
         <div className="hint cred-hint">Saved to worker.json (0600) — never shown again, never logged. Takes effect without a restart.</div>
         <div className="cred-actions">
           <button className="btn small primary" disabled={joinBusy || !joinUrl.trim() || joinToken.trim().length < 16} onClick={() => void join()} data-testid="worker-join-button">
@@ -427,22 +431,24 @@ export function WorkersCard({ version }: { version: number }): JSX.Element {
             Mint identity
           </button>
         </div>
-        {miniPubkey && (
-          <div className="ok-banner" data-testid="worker-mini-pubkey" role="status">
-            This machine’s public key (paste into the primary’s pair flow):
-            <div>
-              <code className="mono" style={{ userSelect: 'all' }}>
-                {miniPubkey}
-              </code>
+        <div className="cred-extra">
+          {miniPubkey && (
+            <div className="ok-banner" data-testid="worker-mini-pubkey" role="status">
+              This machine’s public key (paste into the primary’s pair flow):
+              <div>
+                <code className="mono" style={{ userSelect: 'all' }}>
+                  {miniPubkey}
+                </code>
+              </div>
             </div>
-          </div>
-        )}
-        {joinMsg && <div className="ok-banner">{joinMsg}</div>}
-        {joinErr && (
-          <div className="error-banner" role="alert">
-            {joinErr}
-          </div>
-        )}
+          )}
+          {joinMsg && <div className="ok-banner">{joinMsg}</div>}
+          {joinErr && (
+            <div className="error-banner" role="alert">
+              {joinErr}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

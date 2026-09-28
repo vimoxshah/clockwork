@@ -49,11 +49,52 @@ function stubAll(): void {
     if (call.url === '/workers/wrk_1/revoke') return json({ unassigned: 1, lost: 0 });
     if (call.url === '/workers/wrk_1' && call.method === 'DELETE') return json({ removed: true });
     if (call.url === '/tasks/t1') return json({ id: 't1', workerPin: 'wrk_1' });
+    if (call.url === '/worker/status') return json({ joined: false, primaryHost: null, via: null });
     throw new Error(`unexpected request: ${call.method} ${call.url}`);
   });
 }
 
+/**
+ * .cred-row is a grid with ONE cell per named area (styles.css). Two direct
+ * children that claim the same area stack in one cell and cover each other;
+ * a child with no area falls into an implicit cell. That is how the name,
+ * pubkey and join-URL inputs ended up unclickable (VERIFY-REPORT Bug 2).
+ */
+const AREAS = ['cred-label', 'cred-field', 'cred-hint', 'cred-extra', 'cred-actions'];
+function layoutFaults(container: HTMLElement): string[] {
+  const faults: string[] = [];
+  container.querySelectorAll('.cred-row').forEach((row, i) => {
+    const taken = new Set<string>();
+    for (const child of [...row.children]) {
+      const what = `<${child.tagName.toLowerCase()} ${child.getAttribute('data-testid') ?? child.className}>`;
+      const areas = AREAS.filter((a) => child.classList.contains(a));
+      if (areas.length !== 1) {
+        faults.push(`row ${i}: ${what} claims ${areas.length} grid areas`);
+        continue;
+      }
+      if (taken.has(areas[0]!)) faults.push(`row ${i}: ${what} shares the ${areas[0]} cell`);
+      taken.add(areas[0]!);
+    }
+  });
+  return faults;
+}
+
 describe('WorkersCard', () => {
+  it('every cred-row child owns its own grid cell, so no input covers another', async () => {
+    stubAll();
+    const container = await renderComponent(<WorkersCard version={1} />);
+    await waitForText(container, 'Mini');
+    await waitForElement(container, '[data-testid="worker-join-status"]');
+    expect(container.querySelectorAll('.cred-row').length).toBeGreaterThan(0);
+    expect(layoutFaults(container)).toEqual([]);
+    // Every text input and select still renders, inside a row's field cell.
+    for (const id of ['worker-name-input', 'worker-pubkey-input', 'worker-pin-task', 'worker-pin-worker', 'worker-join-url', 'worker-join-token']) {
+      const el = container.querySelector(`[data-testid="${id}"]`);
+      expect(el, id).toBeTruthy();
+      expect(el!.closest('.cred-row > .cred-field'), `${id} is outside a field cell`).toBeTruthy();
+    }
+  });
+
   it('lists workers with honest states', async () => {
     stubAll();
     const container = await renderComponent(<WorkersCard version={1} />);
