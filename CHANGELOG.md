@@ -8,6 +8,68 @@ is a red build here, not a marketing choice.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — planned as 0.14.1
+
+A pre-launch check of every 0.13 and 0.14 feature, run live against two
+daemons, found four things 0.14.0 shipped broken and one hole that `main`
+had opened since. Each one below has a test that failed before its fix.
+
+### Fixed
+
+- **Worker pairing could not be finished.** 0.14.0 described an
+  init/claim/approve ceremony, and nothing in the product performed the
+  claim: only a test called `/workers/pairing/claim`. The worker's
+  Settings › Workers now shows its key (or creates one), takes the primary's
+  URL and pairing code, and signs the claim itself. The key never leaves the
+  worker. The whole pairing now runs by clicks, and `docs/workers.md` names
+  the real control at each step.
+- **Settings › Workers hid its own inputs.** Several fields shared one grid
+  cell, so the key input sat on top of the name input and the token on top
+  of the join URL. Mouse users could not start pairing or join. A browser
+  check now hit-tests every input on that screen.
+- **Plain-English scheduling was wrong outside UTC.** The parser built its
+  reference time in UTC and read it back in local time, so on a Mac in India
+  after 18:30 "tomorrow 9am" meant the day after tomorrow, and in a US
+  morning it meant today. The file's own comment claimed the opposite. A
+  second fault made "every 15 minutes" refuse between 1 and 5 AM. Worse,
+  "every 2 hours" booked a daily job and showed it with a green tick. Hour
+  and multi-day steps now refuse with a pointer to a rule that works. The UI
+  suite now also runs under Los Angeles and Kolkata time in CI.
+- **Calendar Undo always failed** with "Undo failed: validation". It sent
+  `null` where the schema takes an absent field, and the tests mocked the
+  API, so they never met the real schema. They now run the Undo payload
+  through it.
+- **A run on a worker could read the worker's token** (`worker.json`, added
+  on `main` after 0.14.0, never released). It is now on the sandbox deny
+  list next to the worker key.
+- **Wrapped transcript lines overlapped the next line** until you scrolled.
+  A cut transcript now says "Showing the last 400 of N lines".
+- **The `clockwork` CLI was not on your PATH** after a Homebrew install, and
+  `--help` failed before the app had first run. The app now ships a wrapper
+  that uses its own bundled Node, and the cask links it. `clockwork runs`
+  shows task names instead of ids, and short ids no longer collide.
+- **Pack key rotation could never be detected.** `key_changed` was keyed on
+  a hash of the key, so a new key never matched an old entry. It is now keyed
+  on the publisher.
+- `ssh://` GitHub remotes get the SSH hint instead of "not a github.com URL".
+  A queued run waiting for a worker says so, instead of "starting soon".
+
+### Added
+
+- **Overlap policy in the composer and in Tasks › Edit.** Skip or Queue,
+  with what each does when the last run is still going or waiting for you.
+  It was a hidden default before.
+- **Tabbed Settings**, with worker join and the GitHub webhook secret
+  settable in the app.
+
+### Still not true
+
+- The build is not notarised, and updates are manual.
+- No task can run in Docker. The runner and its limits are tested; nothing
+  selects it.
+- Approvals that hold are a Claude Code feature. The other engines have no
+  permission hook.
+
 ## [0.14.0] — 2026-09-26
 
 ### Added
