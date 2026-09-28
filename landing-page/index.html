@@ -248,6 +248,14 @@ pre.cmd .c { color: #8C93A6; font-weight: 400; }
 /* final */
 .final { padding: 104px 0 112px; }
 .final .fine { margin-top: 18px; font: 400 14px/1.6 var(--mono); color: var(--ink-3); }
+.sub-form h3 { margin: 0 0 8px; font: 600 20px/1.3 var(--sans); }
+.sub-form p { margin: 0 0 16px; color: var(--ink-2); font-size: 15px; line-height: 1.55; }
+.sub-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.sub-row input { flex: 1 1 220px; min-width: 0; min-height: 48px; padding: 0 14px; border: 1px solid var(--line-2); border-radius: var(--r); background: var(--surface); color: var(--ink); font: 400 15px/1 var(--sans); }
+.sub-row input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.sub-msg { min-height: 22px; margin: 10px 0 0 !important; font: 400 13px/1.5 var(--mono) !important; color: var(--ink-3) !important; }
+.sub-msg.ok { color: #1F7A45 !important; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--ink-2); font-size: 15px; }
 .ft { row-gap: 40px; align-items: start; }
 .ft-brand { grid-column: 1 / 6; }
@@ -676,6 +684,19 @@ footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--i
         </div>
         <p class="fine">Apple silicon or Intel, macOS 13 or newer, <span data-size>52.8 MB</span>. Version <span data-ver>0.14.0</span>.</p>
       </div>
+      <!-- Release-notes signup. Posts to the site Worker (worker/index.js), which
+           stores the address and the time, nothing else. If the endpoint is
+           unreachable the message says so and offers the mailto instead. -->
+      <form class="c8-12 rv sub-form" id="sub-form" novalidate>
+        <h3>Get the release notes.</h3>
+        <p>One email when a version ships. No tracking, no other mail. The app itself still collects nothing.</p>
+        <div class="sub-row">
+          <label for="sub-email" class="sr-only">Your email address</label>
+          <input id="sub-email" name="email" type="email" required autocomplete="email" placeholder="you@example.com">
+          <button id="sub-btn" class="btn primary" type="submit">Subscribe</button>
+        </div>
+        <p id="sub-msg" class="sub-msg" role="status" aria-live="polite"></p>
+      </form>
     </div>
   </div>
 </section>
@@ -878,6 +899,40 @@ footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--i
   var io = new IntersectionObserver(function (entries) { entries.forEach(function (en) { if (en.isIntersecting) { en.target.classList.add('in'); io.unobserve(en.target); } }); }, { threshold: .1 });
   els.forEach(function (el) { io.observe(el); });
   setTimeout(function () { els.forEach(function (el) { if (el.getBoundingClientRect().top < innerHeight) el.classList.add('in'); }); }, 1200);
+})();
+</script>
+<script>
+(function () {
+  var f = document.getElementById('sub-form');
+  if (!f) return;
+  var msg = document.getElementById('sub-msg');
+  var btn = document.getElementById('sub-btn');
+  var input = document.getElementById('sub-email');
+  // GitHub Pages is static, so it posts cross-origin to the Worker (CORS
+  // allow-listed there). Anywhere the Worker serves the page, stay same-origin.
+  var ENDPOINT = location.hostname.endsWith('github.io') ? 'https://clockwork.vmoksh-shah179.workers.dev/subscribe' : '/subscribe';
+  var MAILTO = '<a href="mailto:vmoksh.shah179@gmail.com?subject=Clockwork%20release%20notes">email me</a>';
+  f.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var email = input.value.trim();
+    msg.className = 'sub-msg';
+    if (!email || !input.checkValidity()) { msg.textContent = 'That does not look like an email address.'; input.focus(); return; }
+    btn.disabled = true;
+    msg.textContent = 'Sending…';
+    fetch(ENDPOINT, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: email }) })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        if (res.ok && res.d.ok) {
+          msg.className = 'sub-msg ok';
+          msg.textContent = res.d.already ? 'You are already on the list. Thanks.' : 'Thanks. You will get release notes, nothing else.';
+          f.reset();
+        } else if (res.d && res.d.error === 'invalid_email') {
+          msg.textContent = 'That does not look like an email address.';
+        } else { throw new Error('failed'); }
+      })
+      .catch(function () { msg.innerHTML = 'Sign-up did not go through. Please ' + MAILTO + ' and I will add you.'; })
+      .then(function () { btn.disabled = false; });
+  });
 })();
 </script>
 </body>
