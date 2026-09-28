@@ -991,6 +991,11 @@ export const api = {
     req<{ ok: boolean; primaryHost: string }>('POST', '/worker/join', body),
   leaveWorker: () => req<{ ok: boolean }>('POST', '/worker/leave', {}),
   workerKeygen: () => req<{ publicKeyHex: string }>('POST', '/worker/keygen', {}),
+  /** Read-only: this machine's worker public key, or null before one exists. */
+  workerIdentity: () => req<{ publicKeyHex: string | null }>('GET', '/worker/identity'),
+  /** Signs the primary's pairing nonce HERE and hands it to the primary's claim route. */
+  claimPairing: (body: { primaryUrl: string; nonce: string }) =>
+    req<{ ok: boolean; workerId: string; primaryHost: string }>('POST', '/worker/claim', body),
 
   // ---- template packs (P6) ----
   packsInstalled: () => req<{ packs: Array<{ name: string; version: string; publisher: string; tasks: number }> }>('GET', '/packs/installed'),

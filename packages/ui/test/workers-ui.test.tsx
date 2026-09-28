@@ -6,7 +6,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WorkersCard } from '../src/components/WorkersCard';
-import { renderComponent, waitForElement, waitForText } from './helpers/dom';
+import { renderComponent, waitFor, waitForElement, waitForText } from './helpers/dom';
 
 interface Call {
   url: string;
@@ -50,6 +50,7 @@ function stubAll(): void {
     if (call.url === '/workers/wrk_1' && call.method === 'DELETE') return json({ removed: true });
     if (call.url === '/tasks/t1') return json({ id: 't1', workerPin: 'wrk_1' });
     if (call.url === '/worker/status') return json({ joined: false, primaryHost: null, via: null });
+    if (call.url === '/worker/identity') return json({ publicKeyHex: 'aa'.repeat(22) });
     throw new Error(`unexpected request: ${call.method} ${call.url}`);
   });
 }
@@ -88,7 +89,19 @@ describe('WorkersCard', () => {
     expect(container.querySelectorAll('.cred-row').length).toBeGreaterThan(0);
     expect(layoutFaults(container)).toEqual([]);
     // Every text input and select still renders, inside a row's field cell.
-    for (const id of ['worker-name-input', 'worker-pubkey-input', 'worker-pin-task', 'worker-pin-worker', 'worker-join-url', 'worker-join-token']) {
+    await waitForElement(container, '[data-testid="worker-identity-key"]');
+    expect(layoutFaults(container)).toEqual([]);
+    for (const id of [
+      'worker-name-input',
+      'worker-pubkey-input',
+      'worker-pin-task',
+      'worker-pin-worker',
+      'worker-identity-key',
+      'worker-claim-url',
+      'worker-claim-nonce',
+      'worker-join-url',
+      'worker-join-token',
+    ]) {
       const el = container.querySelector(`[data-testid="${id}"]`);
       expect(el, id).toBeTruthy();
       expect(el!.closest('.cred-row > .cred-field'), `${id} is outside a field cell`).toBeTruthy();
@@ -202,5 +215,111 @@ describe('WorkersCard', () => {
     wsel.dispatchEvent(new Event('change', { bubbles: true }));
     (container.querySelector('[data-testid="worker-pin-save"]') as HTMLButtonElement).click();
     await waitForText(container, 'Unpinned');
+  });
+  it('shows this machine\'s public key for copying, and offers to create one when absent', async () => {
+    stubAll();
+    const container = await renderComponent(<WorkersCard version={1} />);
+    const key = (await waitForElement(container, '[data-testid="worker-identity-key"]')) as HTMLInputElement;
+    await waitForText(container, 'Copy key');
+    expect(key.value).toBe('aa'.repeat(22));
+    expect(key.readOnly).toBe(true);
+
+    const calls: Call[] = [];
+    let minted: string | null = null;
+    stubFetch((call) => {
+      calls.push(call);
+      if (call.url === '/worker/identity') return json({ publicKeyHex: minted });
+      if (call.url === '/worker/keygen') {
+        minted = 'cc'.repeat(22);
+        return json({ publicKeyHex: minted });
+      }
+      if (call.url === '/worker/status') return json({ joined: false, primaryHost: null, via: null });
+      if (call.url === '/workers') return json({ workers: [] });
+      if (call.url === '/tasks') return json([]);
+      throw new Error(`unexpected request: ${call.method} ${call.url}`);
+    });
+    const fresh = await renderComponent(<WorkersCard version={2} />);
+    const create = (await waitForElement(fresh, '[data-testid="worker-identity-create"]')) as HTMLButtonElement;
+    // No confirm: there is no old key to lose.
+    const realConfirm = window.confirm;
+    (window as any).confirm = () => {
+      throw new Error('first identity must not ask to replace a key');
+    };
+    try {
+      create.click();
+      await waitFor(
+        () => (fresh.querySelector('[data-testid="worker-identity-key"]') as HTMLInputElement | null)?.value === 'cc'.repeat(22),
+        'the new public key in the identity field',
+      );
+    } finally {
+      (window as any).confirm = realConfirm;
+    }
+    expect(calls.some((c) => c.url === '/worker/keygen' && c.method === 'POST')).toBe(true);
+  });
+
+  it('claim signs on this daemon, then pre-fills Join with the same primary', async () => {
+    const calls: Call[] = [];
+    stubFetch((call) => {
+      calls.push(call);
+      if (call.url === '/worker/claim') return json({ ok: true, workerId: 'wrk_9', primaryHost: 'laptop:4882' });
+      if (call.url === '/worker/identity') return json({ publicKeyHex: 'aa'.repeat(22) });
+      if (call.url === '/worker/status') return json({ joined: false, primaryHost: null, via: null });
+      if (call.url === '/workers') return json({ workers: [] });
+      if (call.url === '/tasks') return json([]);
+      throw new Error(`unexpected request: ${call.method} ${call.url}`);
+    });
+    const container = await renderComponent(<WorkersCard version={1} />);
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!;
+    const url = (await waitForElement(container, '[data-testid="worker-claim-url"]')) as HTMLInputElement;
+    const nonce = container.querySelector('[data-testid="worker-claim-nonce"]') as HTMLInputElement;
+    const button = container.querySelector('[data-testid="worker-claim-button"]') as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    setter.call(url, 'http://laptop:4882');
+    url.dispatchEvent(new Event('input', { bubbles: true }));
+    setter.call(nonce, 'ab'.repeat(16));
+    nonce.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(button.disabled).toBe(false);
+    button.click();
+    await waitForText(container, 'Claimed');
+    expect(calls.find((c) => c.url === '/worker/claim')?.body).toEqual({ primaryUrl: 'http://laptop:4882', nonce: 'ab'.repeat(16) });
+    expect((container.querySelector('[data-testid="worker-join-url"]') as HTMLInputElement).value).toBe('http://laptop:4882');
+    // Nothing here pretends a token arrived: the primary still has to approve.
+    expect(container.textContent).toMatch(/Approve/);
+  });
+
+  it('claim refusals from the primary read as what to do next', async () => {
+    stubFetch((call) => {
+      if (call.url === '/worker/claim') return json({ error: 'unknown_nonce', message: 'Unknown or already-used nonce' }, 422);
+      if (call.url === '/worker/identity') return json({ publicKeyHex: 'aa'.repeat(22) });
+      if (call.url === '/worker/status') return json({ joined: false, primaryHost: null, via: null });
+      if (call.url === '/workers') return json({ workers: [] });
+      if (call.url === '/tasks') return json([]);
+      throw new Error(`unexpected request: ${call.method} ${call.url}`);
+    });
+    const container = await renderComponent(<WorkersCard version={1} />);
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!;
+    const url = (await waitForElement(container, '[data-testid="worker-claim-url"]')) as HTMLInputElement;
+    setter.call(url, 'http://laptop:4882');
+    url.dispatchEvent(new Event('input', { bubbles: true }));
+    const nonce = container.querySelector('[data-testid="worker-claim-nonce"]') as HTMLInputElement;
+    setter.call(nonce, 'ab'.repeat(16));
+    nonce.dispatchEvent(new Event('input', { bubbles: true }));
+    (container.querySelector('[data-testid="worker-claim-button"]') as HTMLButtonElement).click();
+    const err = await waitForElement(container, '[data-testid="worker-claim-error"]');
+    expect(err.textContent).toContain('Nonces are single use');
+    expect(err.textContent).toContain('unknown_nonce');
+  });
+  it('a failed identity load never offers to mint — that could replace a real key', async () => {
+    stubFetch((call) => {
+      if (call.url === '/worker/identity') return json({ error: 'boom' }, 500);
+      if (call.url === '/worker/status') return json({ joined: false, primaryHost: null, via: null });
+      if (call.url === '/workers') return json({ workers: [] });
+      if (call.url === '/tasks') return json([]);
+      throw new Error(`unexpected request: ${call.method} ${call.url}`);
+    });
+    const container = await renderComponent(<WorkersCard version={1} />);
+    await waitForElement(container, '[data-testid="worker-identity-error"]');
+    expect(container.querySelector('[data-testid="worker-identity-create"]')).toBeNull();
+    expect((container.querySelector('[data-testid="worker-claim-button"]') as HTMLButtonElement).disabled).toBe(true);
   });
 });

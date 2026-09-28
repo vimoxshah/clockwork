@@ -1,8 +1,10 @@
 /**
  * Workers card (P4): the fleet on one screen. Pairing is a human-driven
- * ceremony in three visible steps — paste the worker's pubkey, hand the
- * nonce to the worker, approve AFTER it claims — and the bearer token
- * appears exactly once for copying, never again.
+ * ceremony, every step a control on this card: the worker shows its public
+ * key, the primary starts pairing with it and shows a nonce, the worker
+ * claims (it signs the nonce with its own key, here in the app), the primary
+ * approves AFTER the claim, and the worker joins with the bearer token —
+ * which appears exactly once for copying, never again.
  *
  * Task pins live here too (not in the composer): pick a task, pick a
  * worker (or local), required waits while preferred falls back. The current
@@ -30,6 +32,24 @@ interface WorkerT {
   onlineComputed: boolean;
 }
 
+/**
+ * The claim route relays the primary's refusal code; the shared client
+ * surfaces only that code, so each one gets its next step here.
+ */
+const CLAIM_HINTS: Record<string, string> = {
+  validation: 'Check the URL (http or https) and the nonce (32 hex characters).',
+  no_identity: 'This machine has no worker key yet — press Create identity first.',
+  unreachable: 'Could not reach the primary. Check the URL and your tunnel.',
+  not_found: 'The primary has no pairing for this machine’s key. Start pairing there with the key shown above.',
+  unknown_nonce: 'Unknown or used nonce. Nonces are single use — press Start pairing on the primary again.',
+  expired: 'The nonce expired (10 minutes). Press Start pairing on the primary again.',
+  bad_signature: 'The primary could not verify the signature. Make sure the key it has is this machine’s current key.',
+  pubkey_mismatch: 'The primary expects a different key. Start pairing there with the key shown above.',
+  bad_key: 'The primary could not read this machine’s key.',
+  bad_state: 'This machine is already paired with that primary.',
+  revoked: 'The primary revoked this machine. Remove it there and pair again.',
+};
+
 export function WorkersCard({ version }: { version: number }): JSX.Element {
   const tasksQ = useAsync(() => api.tasks(), [version]);
   const tasks: TaskViewT[] = tasksQ.data ?? [];
@@ -50,7 +70,12 @@ export function WorkersCard({ version }: { version: number }): JSX.Element {
   const [joinBusy, setJoinBusy] = useState(false);
   const [joinMsg, setJoinMsg] = useState<string | null>(null);
   const [joinErr, setJoinErr] = useState<string | null>(null);
-  const [miniPubkey, setMiniPubkey] = useState<string | null>(null);
+  const identityQ = useAsync(() => api.workerIdentity(), [version]);
+  const [claimUrl, setClaimUrl] = useState('');
+  const [claimNonce, setClaimNonce] = useState('');
+  const [claimBusy, setClaimBusy] = useState(false);
+  const [claimMsg, setClaimMsg] = useState<string | null>(null);
+  const [claimErr, setClaimErr] = useState<string | null>(null);
 
   const reload = (): void => ws.reload();
 
@@ -80,7 +105,7 @@ export function WorkersCard({ version }: { version: number }): JSX.Element {
       setNonce({ ...r, workerName });
       setName('');
       setPubkey('');
-      setMsg('Pairing started — hand the nonce to the worker, then approve once it claims.');
+      setMsg('Pairing started. On the worker, paste this daemon’s URL and the nonce under Claim a pairing, then approve here once it claims.');
       reload();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -98,7 +123,7 @@ export function WorkersCard({ version }: { version: number }): JSX.Element {
     try {
       const r = await api.approveWorker(id);
       setToken({ workerId: id, workerName, token: r.token });
-      setMsg('Approved. Copy the token below into the worker configuration — it shows exactly once.');
+      setMsg('Approved. Copy the token below into the worker’s Join another daemon form — it shows exactly once.');
       reload();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -148,19 +173,54 @@ export function WorkersCard({ version }: { version: number }): JSX.Element {
     }
   };
 
+  const publicKeyHex = identityQ.data?.publicKeyHex ?? null;
+  // Only a successful "no key" answer counts as no identity. A failed load
+  // says nothing about the disk, and minting then could replace a real key.
+  const noIdentity = identityQ.data !== null && identityQ.data.publicKeyHex === null;
+
   const keygen = async (): Promise<void> => {
-    if (!confirm('Mint a new worker identity? The old key dies — the primary must re-pair this machine.')) return;
+    // Only a REPLACEMENT asks: minting the first identity loses nothing.
+    if (!noIdentity && !confirm('Mint a new worker identity? The old key dies — the primary must re-pair this machine.')) return;
     setJoinBusy(true);
     setJoinMsg(null);
     setJoinErr(null);
     try {
-      const r = await api.workerKeygen();
-      setMiniPubkey(r.publicKeyHex);
-      setJoinMsg('New identity minted. Paste the public key into the primary’s pair flow.');
+      await api.workerKeygen();
+      setJoinMsg(publicKeyHex ? 'New identity minted. Pair this machine again on the primary with the new key.' : 'Identity created. Copy the key into the primary’s Pair new worker.');
+      identityQ.reload();
     } catch (e) {
       setJoinErr(e instanceof Error ? e.message : String(e));
     } finally {
       setJoinBusy(false);
+    }
+  };
+
+  const copy = async (text: string, what: string): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setJoinMsg(`${what} copied.`);
+    } catch {
+      setJoinErr(`Couldn’t reach the clipboard — select the ${what.toLowerCase()} and copy it by hand.`);
+    }
+  };
+
+  const claim = async (): Promise<void> => {
+    setClaimBusy(true);
+    setClaimMsg(null);
+    setClaimErr(null);
+    try {
+      const primaryUrl = claimUrl.trim();
+      const r = await api.claimPairing({ primaryUrl, nonce: claimNonce.trim() });
+      setClaimNonce('');
+      // The token exists only on the primary, at Approve — pre-fill the
+      // rest of Join so only the token is left to paste.
+      if (!joinUrl.trim()) setJoinUrl(primaryUrl);
+      setClaimMsg(`Claimed on ${r.primaryHost}. Now press Approve on the primary, then paste the token it shows under Join another daemon.`);
+    } catch (e) {
+      const code = e instanceof Error ? e.message : String(e);
+      setClaimErr(`${CLAIM_HINTS[code] ?? 'The claim failed.'} (${code})`);
+    } finally {
+      setClaimBusy(false);
     }
   };
 
@@ -178,10 +238,12 @@ export function WorkersCard({ version }: { version: number }): JSX.Element {
         sandbox. Pin overnight jobs to the always-on machine; keep afternoons local. Workers reach
         this daemon over your own tunnel (Tailscale, WireGuard); there is no Clockwork relay.
       </p>
-      <ol className="hint" style={{ margin: '0 0 8px 18px', padding: 0 }}>
-        <li>1. Paste the worker&apos;s pubkey below to start pairing.</li>
-        <li>2. Hand the shown nonce to the worker so it can claim.</li>
-        <li>3. Approve below — only after the worker claimed. A signature alone never earns a token.</li>
+      <ol className="hint" style={{ margin: '0 0 8px 18px', padding: 0 }} data-testid="worker-steps">
+        <li>1. On the worker: copy its key from This machine’s worker key.</li>
+        <li>2. Here: Pair new worker — name it, paste the key, Start pairing. Copy the nonce.</li>
+        <li>3. On the worker: Claim a pairing — this daemon’s URL and the nonce, then Claim.</li>
+        <li>4. Here: Approve on the worker’s row. Copy the token — it shows once.</li>
+        <li>5. On the worker: Join another daemon — this daemon’s URL and the token, then Join.</li>
       </ol>
       {ws.error && (
         <div className="error-banner" role="alert">
@@ -259,9 +321,14 @@ export function WorkersCard({ version }: { version: number }): JSX.Element {
               {nonce.nonce}
             </code>
           </div>
-          <button className="btn small" style={{ marginTop: 6 }} onClick={() => setNonce(null)}>
-            Dismiss
-          </button>
+          <div className="flex gap-2" style={{ marginTop: 6 }}>
+            <button className="btn small" onClick={() => void copy(nonce.nonce, 'Nonce')} data-testid="worker-nonce-copy">
+              Copy nonce
+            </button>
+            <button className="btn small" onClick={() => setNonce(null)}>
+              Dismiss
+            </button>
+          </div>
         </div>
       )}
       <div className="cred-row">
@@ -288,11 +355,11 @@ export function WorkersCard({ version }: { version: number }): JSX.Element {
             spellCheck={false}
             value={pubkey}
             onChange={(e) => setPubkey(e.target.value)}
-            placeholder="Worker ed25519 pubkey (DER hex — from clockworkd worker-key)"
+            placeholder="Worker public key (from the worker’s Settings › Workers)"
             data-testid="worker-pubkey-input"
           />
         </div>
-        <div className="hint cred-hint">Three steps, all visible above: paste the key to start, hand over the nonce, approve after the worker claims.</div>
+        <div className="hint cred-hint">Start pairing shows a nonce (10 minutes, single use). The worker claims with it; approve only after that.</div>
         <div className="cred-actions">
           <button className="btn small primary" disabled={busy || !name.trim() || !pubkey.trim()} onClick={() => void pair()} data-testid="worker-pair-button">
             {busy ? 'Starting…' : 'Start pairing'}
@@ -319,7 +386,7 @@ export function WorkersCard({ version }: { version: number }): JSX.Element {
               </option>
             ))}
           </select>
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-start">
             <select
               aria-label="Worker"
               className="cred-input"
@@ -376,6 +443,106 @@ export function WorkersCard({ version }: { version: number }): JSX.Element {
           {err}
         </div>
       )}
+      <h3 className="hint" style={{ margin: '14px 0 6px', fontWeight: 600 }}>
+        On the worker machine
+      </h3>
+      <div className="cred-row">
+        <label className="f cred-label" htmlFor="worker-identity-key">
+          This machine’s worker key
+        </label>
+        <div className="cred-field cred-stack">
+          {publicKeyHex ? (
+            <input
+              id="worker-identity-key"
+              className="cred-input mono"
+              type="text"
+              readOnly
+              value={publicKeyHex}
+              onFocus={(e) => e.currentTarget.select()}
+              data-testid="worker-identity-key"
+            />
+          ) : identityQ.error ? (
+            <p className="hint" style={{ margin: 0 }} role="alert" data-testid="worker-identity-error">
+              Couldn’t read this machine’s worker key: {identityQ.error}
+            </p>
+          ) : (
+            <p className="hint" style={{ margin: 0 }} data-testid="worker-identity-none">
+              {noIdentity ? 'No worker identity yet. Create one to pair this machine with a primary.' : 'Loading…'}
+            </p>
+          )}
+        </div>
+        <div className="hint cred-hint">The public half only. The private key stays on this machine (0600) and never leaves.</div>
+        <div className="cred-actions">
+          {publicKeyHex ? (
+            <>
+              <button className="btn small primary" disabled={joinBusy} onClick={() => void copy(publicKeyHex, 'Key')} data-testid="worker-identity-copy">
+                Copy key
+              </button>
+              <button className="btn small" disabled={joinBusy} onClick={() => void keygen()} data-testid="worker-keygen-button" title="Replace this machine’s identity — the primary must re-pair it">
+                New key
+              </button>
+            </>
+          ) : noIdentity ? (
+            <button className="btn small primary" disabled={joinBusy} onClick={() => void keygen()} data-testid="worker-identity-create">
+              Create identity
+            </button>
+          ) : null}
+        </div>
+      </div>
+      <div className="cred-row">
+        <label className="f cred-label" htmlFor="worker-claim-url">
+          Claim a pairing
+        </label>
+        <div className="cred-field cred-stack">
+          <input
+            id="worker-claim-url"
+            className="cred-input"
+            type="text"
+            inputMode="url"
+            autoComplete="off"
+            spellCheck={false}
+            value={claimUrl}
+            onChange={(e) => setClaimUrl(e.target.value)}
+            placeholder="Primary URL, e.g. http://laptop.tailnet:4747"
+            data-testid="worker-claim-url"
+          />
+          <input
+            id="worker-claim-nonce"
+            aria-label="Pairing nonce from the primary"
+            className="cred-input mono"
+            type="text"
+            autoComplete="off"
+            spellCheck={false}
+            value={claimNonce}
+            onChange={(e) => setClaimNonce(e.target.value)}
+            placeholder="Nonce the primary showed after Start pairing"
+            data-testid="worker-claim-nonce"
+          />
+        </div>
+        <div className="hint cred-hint">This machine signs the nonce with its own key. A claim earns no token — the primary still approves.</div>
+        <div className="cred-actions">
+          <button
+            className="btn small primary"
+            disabled={claimBusy || !publicKeyHex || !claimUrl.trim() || !claimNonce.trim()}
+            onClick={() => void claim()}
+            data-testid="worker-claim-button"
+          >
+            {claimBusy ? 'Claiming…' : 'Claim'}
+          </button>
+        </div>
+        <div className="cred-extra">
+          {claimMsg && (
+            <div className="ok-banner" role="status" data-testid="worker-claim-ok">
+              {claimMsg}
+            </div>
+          )}
+          {claimErr && (
+            <div className="error-banner" role="alert" data-testid="worker-claim-error">
+              {claimErr}
+            </div>
+          )}
+        </div>
+      </div>
       <div className="cred-row">
         <label className="f cred-label" htmlFor="worker-join-url">
           Join another daemon
@@ -389,14 +556,15 @@ export function WorkersCard({ version }: { version: number }): JSX.Element {
             </p>
           ) : (
             <p className="hint" style={{ margin: 0 }} data-testid="worker-join-status">
-              This daemon pulls from nobody. Paste the primary’s URL and the bearer token its Approve step
-              showed once — the Mini side of the ceremony above, no terminal needed.
+              This daemon pulls from nobody. After the primary approves, paste its URL and the bearer token
+              its Approve step showed once. No terminal needed.
             </p>
           )}
           <input
             id="worker-join-url"
             className="cred-input"
-            type="url"
+            type="text"
+            inputMode="url"
             autoComplete="off"
             spellCheck={false}
             value={joinUrl}
@@ -427,21 +595,8 @@ export function WorkersCard({ version }: { version: number }): JSX.Element {
               Leave
             </button>
           )}
-          <button className="btn small" disabled={joinBusy} onClick={() => void keygen()} data-testid="worker-keygen-button" title="Mint this machine's ed25519 identity (the terminal clockworkd worker-key, in-app)">
-            Mint identity
-          </button>
         </div>
         <div className="cred-extra">
-          {miniPubkey && (
-            <div className="ok-banner" data-testid="worker-mini-pubkey" role="status">
-              This machine’s public key (paste into the primary’s pair flow):
-              <div>
-                <code className="mono" style={{ userSelect: 'all' }}>
-                  {miniPubkey}
-                </code>
-              </div>
-            </div>
-          )}
           {joinMsg && <div className="ok-banner">{joinMsg}</div>}
           {joinErr && (
             <div className="error-banner" role="alert">
