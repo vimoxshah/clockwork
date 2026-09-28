@@ -15,7 +15,9 @@
  * exactly how this got out.
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync, readdirSync, existsSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync, statSync, mkdtempSync, mkdirSync, cpSync, chmodSync, rmSync, symlinkSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import os from 'node:os';
 import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '../../..');
@@ -74,6 +76,108 @@ describe('the staging script carries every bundled resource tree', () => {
     if (!existsSync(staged)) return;
     for (const tree of resourceTrees()) {
       expect(existsSync(path.join(staged, tree)), `staged app is missing resources/${tree}`).toBe(true);
+    }
+  });
+});
+
+/**
+ * BUN-3: `clockwork` on PATH from the Homebrew cask needs a wrapper INSIDE
+ * the .app (no system Node to run a plain script). The cask's `binary`
+ * stanza (packaging/homebrew/clockwork.rb) names an exact path; if the
+ * staging script ever stops placing a file there, `brew install` succeeds
+ * and leaves a dangling symlink — silent until a user actually runs
+ * `clockwork`. Same shape as the resource-trees guard above: check the
+ * SCRIPT (so this fails on every machine, not only after a real build), then
+ * check the real staged output when one exists.
+ */
+describe('the staging script ships a `clockwork` wrapper for the Homebrew cask', () => {
+  const CASK = path.join(ROOT, 'packaging', 'homebrew', 'clockwork.rb');
+  /** Comment-stripped, same technique as the resource-trees test above and
+   *  for the same reason: a prose explanation of the wrapper must not be
+   *  mistaken for the staging script actually shipping it. */
+  const stagerSrc = () =>
+    readFileSync(STAGER, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '');
+
+  it('names the wrapper source and its staged destination in CODE', () => {
+    // The actual call is `path.join(ROOT, 'packaging', 'bin', 'clockwork')` —
+    // four separate string arguments, not one contiguous path literal — so
+    // this checks for the quoted literals rather than a joined substring.
+    // The smoke test below is what proves the real output lands correctly;
+    // this just proves the wiring isn't accidental. Quoted-boundary matches
+    // (not a bare substring search) so 'binaries' elsewhere in this file,
+    // which also contains "bin", cannot satisfy the 'bin' check.
+    const src = stagerSrc();
+    expect(src, `${STAGER} never spells out the 'packaging' source directory`).toMatch(/['"`]packaging['"`]/);
+    expect(src, `${STAGER} never spells out a 'bin' destination directory`).toMatch(/['"`]bin['"`]/);
+    expect(src, `${STAGER} never spells out a 'clockwork' destination filename`).toMatch(/['"`]clockwork['"`]/);
+  });
+
+  it('the wrapper source exists, is executable, and is a POSIX shell script', () => {
+    const src = path.join(ROOT, 'packaging', 'bin', 'clockwork');
+    expect(existsSync(src), `${src} is missing — the staging script has nothing to copy`).toBe(true);
+    expect(readFileSync(src, 'utf8')).toMatch(/^#!\/bin\/sh/);
+    expect(statSync(src).mode & 0o111, `${src} is not executable`).not.toBe(0);
+  });
+
+  it("the cask's `binary` stanza points at exactly where the staging script places the wrapper", () => {
+    // Cross-file consistency, same idea as install-instructions.test.ts's
+    // "offers only architectures the release workflow builds": two files
+    // agreeing on a path is itself the guarantee, not a hand-kept constant.
+    const cask = readFileSync(CASK, 'utf8');
+    const m = cask.match(/^\s*binary\s+"([^"]+)"/m);
+    expect(m, `${CASK} has no \`binary\` stanza`).toBeTruthy();
+    expect(m![1], `${CASK} binary stanza does not name the staged wrapper's path`).toMatch(/Contents\/Resources\/app\/bin\/clockwork$/);
+  });
+
+  it('carries the wrapper into the staged app when a build has produced one, and it actually runs the bundled CLI', () => {
+    // Only meaningful after `node tools/stage-bundle.mjs`; skipped rather than
+    // failed because CI does not stage (same convention as the resources
+    // check above).
+    const wrapper = path.join(ROOT, 'src-tauri', 'resources', 'app', 'bin', 'clockwork');
+    if (!existsSync(wrapper)) return;
+    expect(statSync(wrapper).mode & 0o111, 'staged wrapper lost its exec bit').not.toBe(0);
+
+    // Homebrew's `binary` artifact SYMLINKS this file into the prefix, and a
+    // real .app nests Contents/MacOS/node three levels above
+    // Contents/Resources/app/bin/ — reproduce both with the REAL staged Node
+    // and REAL staged CLI (copied, not symlinked, so `cd -P` inside the
+    // wrapper lands in a genuinely nested tree instead of chasing back out to
+    // the flat staging layout). Only the two files the wrapper actually
+    // touches are copied — clockwork-cli.js has no npm dependencies of its
+    // own (Node builtins only), so copying the daemon's whole deployed
+    // node_modules here would cost real minutes for no extra coverage.
+    const nodeSrc = path.join(ROOT, 'src-tauri', 'binaries');
+    const nodeBin = existsSync(nodeSrc) ? readdirSync(nodeSrc).find((f) => f.startsWith('node-')) : undefined;
+    if (!nodeBin) return; // staged resources without a staged node: nothing to exec against
+    const cliJs = path.join(ROOT, 'src-tauri', 'resources', 'app', 'packages', 'daemon', 'dist', 'clockwork-cli.js');
+    if (!existsSync(cliJs)) return; // staged resources without a built CLI: nothing to exec
+    const tmp = mkdtempSync(path.join(os.tmpdir(), 'cw-wrapper-'));
+    try {
+      const appContents = path.join(tmp, 'Clockwork.app', 'Contents');
+      mkdirSync(path.join(appContents, 'MacOS'), { recursive: true });
+      cpSync(path.join(nodeSrc, nodeBin), path.join(appContents, 'MacOS', 'node'));
+      chmodSync(path.join(appContents, 'MacOS', 'node'), 0o755);
+      mkdirSync(path.join(appContents, 'Resources', 'app', 'bin'), { recursive: true });
+      cpSync(wrapper, path.join(appContents, 'Resources', 'app', 'bin', 'clockwork'));
+      chmodSync(path.join(appContents, 'Resources', 'app', 'bin', 'clockwork'), 0o755);
+      mkdirSync(path.join(appContents, 'Resources', 'app', 'packages', 'daemon', 'dist'), { recursive: true });
+      cpSync(cliJs, path.join(appContents, 'Resources', 'app', 'packages', 'daemon', 'dist', 'clockwork-cli.js'));
+
+      const prefixBin = path.join(tmp, 'prefix-bin');
+      mkdirSync(prefixBin, { recursive: true });
+      symlinkSync(path.join(appContents, 'Resources', 'app', 'bin', 'clockwork'), path.join(prefixBin, 'clockwork'));
+
+      const noTokenHome = path.join(tmp, 'no-token-home');
+      mkdirSync(noTokenHome, { recursive: true });
+      const out = execFileSync(path.join(prefixBin, 'clockwork'), ['--help'], {
+        encoding: 'utf8',
+        env: { ...process.env, CLOCKWORK_HOME: noTokenHome },
+      });
+      expect(out, 'the wrapper, invoked through a brew-style symlink, did not reach the real bundled CLI').toContain('approve <id>');
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
     }
   });
 });

@@ -35,6 +35,28 @@ const STAGE = path.join(ROOT, 'src-tauri', 'resources', 'app');
 const BINARIES = path.join(ROOT, 'src-tauri', 'binaries');
 
 /**
+ * BUN-3: `clockwork` on PATH from the Homebrew cask. tauri.conf.json only
+ * maps `resources/app/ -> app/`, so staging the wrapper INSIDE that tree
+ * (rather than at a new top-level `bin/`) ships it with no config edit and no
+ * new mapping to keep in sync. Named `bin/`, not `.bin/` — stripBinShims
+ * below deletes every `.bin` directory it finds.
+ *
+ * The cask's `binary` stanza points straight at this file
+ * (`packaging/homebrew/clockwork.rb`); `bundled-resources-staged.test.ts`
+ * guards that the two agree on the path.
+ */
+function stageCliWrapper(stageDir) {
+  const binDir = path.join(stageDir, 'bin');
+  mkdirSync(binDir, { recursive: true });
+  const dest = path.join(binDir, 'clockwork');
+  cpSync(path.join(ROOT, 'packaging', 'bin', 'clockwork'), dest);
+  // cpSync already carries over the source's own exec bit; set it explicitly
+  // anyway so this does not depend on packaging/bin/clockwork staying +x in
+  // every checkout (git does track the mode bit, but nothing else enforces it).
+  chmodSync(dest, 0o755);
+}
+
+/**
  * pnpm's default store links every package into node_modules/.pnpm and points
  * at it, and a bundler that copies a symlink tree either follows it into a
  * cycle or ships dangling links. `node-linker=hoisted` writes real directories
@@ -102,6 +124,7 @@ function main() {
   deployDaemon(daemonDest);
   for (const name of PRUNE) rmSync(path.join(daemonDest, name), { recursive: true, force: true });
   stripBinShims(path.join(daemonDest, 'node_modules'));
+  stageCliWrapper(STAGE);
 
   const uiDist = path.join(ROOT, 'packages', 'ui', 'dist');
   if (!existsSync(uiDist)) throw new Error(`packages/ui/dist is missing — run \`pnpm build\` first`);

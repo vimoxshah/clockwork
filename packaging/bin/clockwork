@@ -1,0 +1,29 @@
+#!/bin/sh
+# `clockwork` on PATH from the cask (BUN-3): staged by tools/stage-bundle.mjs
+# into Contents/Resources/app/bin/clockwork inside the .app, so this file
+# exists at build time, not at install time. The Homebrew cask's `binary`
+# stanza then symlinks it into the Homebrew prefix (e.g.
+# /opt/homebrew/bin/clockwork -> .../Clockwork.app/Contents/Resources/app/bin/clockwork).
+#
+# Because that is a SYMLINK, $0 is the link's own path when the shell execs
+# it, not this file's real location inside the app — resolving that is the
+# one job this script has before it can find its neighbours. `readlink -f`
+# would do it in one call, but is not on every macOS `/bin/sh`; the loop below
+# is the portable form of the same idea (same technique VS Code's own
+# bin/code wrapper uses for the same reason).
+SOURCE=$0
+while [ -h "$SOURCE" ]; do
+  DIR=$(cd -P "$(dirname "$SOURCE")" && pwd)
+  SOURCE=$(readlink "$SOURCE")
+  case "$SOURCE" in
+    /*) ;;
+    *) SOURCE="$DIR/$SOURCE" ;;
+  esac
+done
+DIR=$(cd -P "$(dirname "$SOURCE")" && pwd)
+
+# From Contents/Resources/app/bin/: the bundled Node is three levels up at
+# Contents/MacOS/node (externalBin — code-signed as part of the app, unlike
+# anything dropped into Resources); the CLI is one level up, in the same
+# staged package the daemon itself ships from.
+exec "$DIR/../../../MacOS/node" "$DIR/../packages/daemon/dist/clockwork-cli.js" "$@"
