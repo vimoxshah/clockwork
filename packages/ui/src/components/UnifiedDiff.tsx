@@ -84,8 +84,13 @@ const Row = memo(function Row({
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const h = el.offsetHeight || EST_ROW_PX;
-    if (h !== EST_ROW_PX) onMeasure(index, h);
+    const report = (): void => onMeasure(index, el.offsetHeight || EST_ROW_PX);
+    report();
+    // A pane resize re-wraps rows with no prop change; re-measure then too.
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(report);
+    ro.observe(el);
+    return () => ro.disconnect();
   }, [index, line.text, onMeasure]);
   const cls =
     line.kind === 'add' ? 'ud-add' : line.kind === 'del' ? 'ud-del' : line.kind === 'hunk' ? 'ud-hunk' : 'ud-ctx';
@@ -117,9 +122,15 @@ export default function UnifiedDiff({
   const [scrollTop, setScrollTop] = useState(0);
   const [active, setActive] = useState(0);
   const heights = useRef<Map<number, number>>(new Map());
+  // Heights live in a ref (one write per row, no render each), so a change
+  // must bump this tick or the offsets below keep the estimate and a wrapped
+  // row overlaps the next one until the user scrolls.
+  const [measureTick, setMeasureTick] = useState(0);
 
   const onMeasure = useCallback((index: number, h: number): void => {
-    if (heights.current.get(index) !== h) heights.current.set(index, h);
+    const known = heights.current.get(index) ?? EST_ROW_PX;
+    heights.current.set(index, h);
+    if (known !== h) setMeasureTick((t) => t + 1);
   }, []);
 
   // Prefix offsets from measured heights, EST_ROW_PX elsewhere.
@@ -130,7 +141,7 @@ export default function UnifiedDiff({
       off[i + 1] = off[i]! + (heights.current.get(i) ?? EST_ROW_PX);
     }
     return off;
-  }, [lines, scrollTop]);
+  }, [lines, measureTick]);
 
   const total = offsets[lines.length] ?? lines.length * EST_ROW_PX;
 
