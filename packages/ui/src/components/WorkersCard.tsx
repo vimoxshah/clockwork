@@ -14,7 +14,7 @@
  * Exported for the same reason DeliveryCard and GithubCard are — the UI
  * test drives this card alone.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, type TaskViewT } from '../api';
 import { useAsync } from '../useAsync';
 import { registerFeatureSurface } from './featureSurfaces';
@@ -78,6 +78,20 @@ export function WorkersCard({ version }: { version: number }): JSX.Element {
   const [claimErr, setClaimErr] = useState<string | null>(null);
 
   const reload = (): void => ws.reload();
+  const [nonceNote, setNonceNote] = useState<string | null>(null);
+  const [keyNote, setKeyNote] = useState<string | null>(null);
+
+  // Coming online arrives over SSE (the heartbeat route broadcasts it), but
+  // going silent is only the absence of heartbeats — nothing to broadcast.
+  // Re-poll while this card is on screen so "silent" and the heartbeat age
+  // stay true. The card mounts only on the Workers tab.
+  const reloadWorkers = ws.reload;
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (document.visibilityState === 'visible') reloadWorkers();
+    }, 10_000);
+    return () => clearInterval(t);
+  }, [reloadWorkers]);
 
   const run = async (fn: () => Promise<unknown>, okMsg: string): Promise<void> => {
     setBusy(true);
@@ -99,6 +113,7 @@ export function WorkersCard({ version }: { version: number }): JSX.Element {
     setMsg(null);
     setErr(null);
     setNonce(null);
+    setNonceNote(null);
     try {
       const workerName = name.trim();
       const r = await api.pairInit({ name: workerName, pubkeyHex: pubkey.trim() });
@@ -195,12 +210,13 @@ export function WorkersCard({ version }: { version: number }): JSX.Element {
     }
   };
 
-  const copy = async (text: string, what: string): Promise<void> => {
+  // Confirmation lands beside the thing copied: `say` is that spot's setter.
+  const copy = async (text: string, what: string, say: (m: string) => void, sayErr: (m: string) => void = say): Promise<void> => {
     try {
       await navigator.clipboard.writeText(text);
-      setJoinMsg(`${what} copied.`);
+      say(`${what} copied.`);
     } catch {
-      setJoinErr(`Couldn’t reach the clipboard — select the ${what.toLowerCase()} and copy it by hand.`);
+      sayErr(`Couldn’t reach the clipboard — select the ${what.toLowerCase()} and copy it by hand.`);
     }
   };
 
@@ -322,12 +338,17 @@ export function WorkersCard({ version }: { version: number }): JSX.Element {
             </code>
           </div>
           <div className="flex gap-2" style={{ marginTop: 6 }}>
-            <button className="btn small" onClick={() => void copy(nonce.nonce, 'Nonce')} data-testid="worker-nonce-copy">
+            <button className="btn small" onClick={() => void copy(nonce.nonce, 'Nonce', setNonceNote)} data-testid="worker-nonce-copy">
               Copy nonce
             </button>
             <button className="btn small" onClick={() => setNonce(null)}>
               Dismiss
             </button>
+            {nonceNote && (
+              <span className="hint" role="status" style={{ alignSelf: 'center' }} data-testid="worker-nonce-note">
+                {nonceNote}
+              </span>
+            )}
           </div>
         </div>
       )}
@@ -471,11 +492,18 @@ export function WorkersCard({ version }: { version: number }): JSX.Element {
             </p>
           )}
         </div>
-        <div className="hint cred-hint">The public half only. The private key stays on this machine (0600) and never leaves.</div>
+        <div className="hint cred-hint">
+          {keyNote ? (
+            <span role="status" data-testid="worker-identity-note">
+              {keyNote}{' '}
+            </span>
+          ) : null}
+          The public half only. The private key stays on this machine (0600) and never leaves.
+        </div>
         <div className="cred-actions">
           {publicKeyHex ? (
             <>
-              <button className="btn small primary" disabled={joinBusy} onClick={() => void copy(publicKeyHex, 'Key')} data-testid="worker-identity-copy">
+              <button className="btn small primary" disabled={joinBusy} onClick={() => void copy(publicKeyHex, 'Key', setKeyNote)} data-testid="worker-identity-copy">
                 Copy key
               </button>
               <button className="btn small" disabled={joinBusy} onClick={() => void keygen()} data-testid="worker-keygen-button" title="Replace this machine’s identity — the primary must re-pair it">

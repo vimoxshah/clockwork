@@ -322,4 +322,77 @@ describe('WorkersCard', () => {
     expect(container.querySelector('[data-testid="worker-identity-create"]')).toBeNull();
     expect((container.querySelector('[data-testid="worker-claim-button"]') as HTMLButtonElement).disabled).toBe(true);
   });
+  it('re-polls the worker list every 10 s while the page is visible, so silence shows', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    let hidden = false;
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => (hidden ? 'hidden' : 'visible') });
+    let listCalls = 0;
+    stubFetch((call) => {
+      if (call.url === '/workers') {
+        listCalls++;
+        return json({ workers: WORKERS });
+      }
+      if (call.url === '/tasks') return json([]);
+      if (call.url === '/worker/status') return json({ joined: false, primaryHost: null, via: null });
+      if (call.url === '/worker/identity') return json({ publicKeyHex: null });
+      throw new Error(`unexpected request: ${call.method} ${call.url}`);
+    });
+    try {
+      const container = await renderComponent(<WorkersCard version={1} />);
+      await waitForText(container, 'Mini');
+      const base = listCalls;
+      vi.advanceTimersByTime(10_000);
+      await waitFor(() => listCalls === base + 1, 'one re-poll after 10 s');
+      hidden = true;
+      vi.advanceTimersByTime(30_000);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(listCalls, 'a hidden page must not poll').toBe(base + 1);
+    } finally {
+      vi.useRealTimers();
+      delete (document as any).visibilityState; // back to jsdom's prototype getter
+    }
+  });
+
+  it('the nonce copy confirmation appears beside the nonce', async () => {
+    stubAll();
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    try {
+      const container = await renderComponent(<WorkersCard version={1} />);
+      await waitForElement(container, '[data-testid="worker-pair-button"]');
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!;
+      const name = container.querySelector('[data-testid="worker-name-input"]') as HTMLInputElement;
+      setter.call(name, 'Mini2');
+      name.dispatchEvent(new Event('input', { bubbles: true }));
+      const pub = container.querySelector('[data-testid="worker-pubkey-input"]') as HTMLInputElement;
+      setter.call(pub, 'aabbcc');
+      pub.dispatchEvent(new Event('input', { bubbles: true }));
+      (container.querySelector('[data-testid="worker-pair-button"]') as HTMLButtonElement).click();
+      await waitForElement(container, '[data-testid="worker-nonce-copy"]');
+      (container.querySelector('[data-testid="worker-nonce-copy"]') as HTMLButtonElement).click();
+      await waitFor(() => container.querySelector('[data-testid="worker-nonce"]')?.textContent?.includes('Nonce copied'), 'the confirmation inside the nonce banner');
+      expect(writeText).toHaveBeenCalledWith('n0nce');
+      // Not in the Join row at the bottom of the page any more.
+      const joinRow = container.querySelector('[data-testid="worker-join-status"]')!.closest('.cred-row')!;
+      expect(joinRow.textContent).not.toContain('Nonce copied');
+    } finally {
+      delete (navigator as any).clipboard;
+    }
+  });
+  it('the key copy confirmation appears in the key row', async () => {
+    stubAll();
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    try {
+      const container = await renderComponent(<WorkersCard version={1} />);
+      await waitForText(container, 'Copy key');
+      (container.querySelector('[data-testid="worker-identity-copy"]') as HTMLButtonElement).click();
+      const note = await waitForElement(container, '[data-testid="worker-identity-note"]');
+      expect(note.textContent).toContain('Key copied');
+      expect(note.closest('.cred-row')?.querySelector('[data-testid="worker-identity-key"]')).toBeTruthy();
+      expect(writeText).toHaveBeenCalledWith('aa'.repeat(22));
+    } finally {
+      delete (navigator as any).clipboard;
+    }
+  });
 });

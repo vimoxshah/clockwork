@@ -21,6 +21,7 @@
  */
 import { existsSync, readFileSync, writeFileSync, rmSync, chmodSync } from 'node:fs';
 import { createPrivateKey, createPublicKey, generateKeyPairSync, sign } from 'node:crypto';
+import os from 'node:os';
 import path from 'node:path';
 import type { DB } from './db.js';
 
@@ -127,6 +128,22 @@ export function resolveWorkerCreds(dataDir: string, overrides?: { primaryUrl?: s
   const token = process.env.CLOCKWORK_WORKER_TOKEN || overrides?.token || readWorkerJoin(dataDir)?.token || '';
   if (!primaryUrl || !token) return null;
   return { primaryUrl, token };
+}
+
+/**
+ * The platform label the primary shows on this worker's row, e.g.
+ * "macOS 15 · arm64". Darwin kernel majors map to macOS: Darwin 25+ is
+ * macOS (major + 1) — Apple jumped from 15 to 26 — 20–24 is macOS
+ * (major - 9), older is 10.(major - 4). Other systems show major.minor.
+ */
+export function describePlatform(platform: string, release: string, arch: string): string {
+  const [maj = 0, min = 0] = release.split(/[.-]/).map((n) => Number.parseInt(n, 10) || 0);
+  let name: string;
+  if (platform === 'darwin') name = maj >= 25 ? `macOS ${maj + 1}` : maj >= 20 ? `macOS ${maj - 9}` : `macOS 10.${maj - 4}`;
+  else if (platform === 'linux') name = `Linux ${maj}.${min}`;
+  else if (platform === 'win32') name = `Windows ${maj}.${min}`;
+  else name = `${platform} ${maj}.${min}`;
+  return `${name} · ${arch}`;
 }
 
 interface PrimaryJob {
@@ -246,7 +263,10 @@ export function startWorkerAgent(options: WorkerAgentOptions): { stop(): void } 
       // Heartbeat on EVERY poll, including while a job executes: the sweep
       // marks silence, not idleness, and a long job must not look dead.
       // (Closed a real hole: the heartbeat used to skip during execution.)
-      const hb = await primaryFetch(primaryUrl, token, `/workers/${id}/heartbeat`, { method: 'POST', body: JSON.stringify({}) });
+      const hb = await primaryFetch(primaryUrl, token, `/workers/${id}/heartbeat`, {
+        method: 'POST',
+        body: JSON.stringify({ platform: describePlatform(process.platform, os.release(), process.arch) }),
+      });
       if (hb.status === 401) {
         log('heartbeat rejected (401) — token dead (revoked?). Settle manually; polling continues in case it was rotated.');
         workerId = null; // re-resolve: a rotation issues a new identity binding
