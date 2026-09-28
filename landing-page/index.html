@@ -188,6 +188,10 @@ section { padding: 112px 0; border-top: 1px solid var(--line); }
 .real .grid { row-gap: 10px; align-items: start; }
 .cap { font: 400 13.5px/1.5 var(--sans); color: var(--ink-3); }
 figcaption { font: 400 13.5px/1.5 var(--sans); color: var(--ink-3); margin-top: 10px; }
+.new-grid { row-gap: 40px; align-items: start; }
+.new-fig .cap { margin-top: 12px; max-width: 58ch; }
+.new-fig .cap b { color: var(--ink); font-weight: 600; }
+.new-fig .cap code { font: 500 12.5px/1 var(--mono); }
 .stack { display: flex; flex-direction: column; justify-content: space-between; align-self: stretch; }
 
 /* trust */
@@ -349,6 +353,7 @@ footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--i
       <a class="mark" href="#top" aria-label="Clockwork, home"><img src="mark.svg" width="24" height="24" alt="">Clockwork</a>
       <nav class="links" aria-label="Sections">
         <a href="#day">How it works</a>
+        <a href="#new">New</a>
         <a href="#agents">Agents</a>
         <a href="#trust">Security</a>
         <a href="#spec">Spec</a>
@@ -500,6 +505,21 @@ footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--i
       </div>
       <p class="cap c1-8">The month view. Every booking on one grid, colour-coded by profile.</p>
       <p class="cap c9-12">The agent library, and every task with its next run and budget.</p>
+    </div>
+  </div>
+</section>
+
+<section id="new">
+  <div class="wrap">
+    <div class="head rv">
+      <h2>New since the first launch.</h2>
+      <p class="sub">Fourteen releases since 4 September. The questions people asked then were about trust, so most of the work went there. These four are the ones you can see.</p>
+    </div>
+    <div class="grid new-grid">
+      <figure class="c1-6 rv new-fig"><img class="shot" src="screens/v014-03-settings-workers-1600.webp" srcset="screens/v014-03-settings-workers-1200.webp 1200w, screens/v014-03-settings-workers-1600.webp 1600w, screens/v014-03-settings-workers-2240.webp 2240w" sizes="(max-width: 900px) calc(100vw - 40px), 600px" width="2400" height="1500" alt="Settings, Workers: a paired Mac mini online, with the numbered pairing steps" loading="lazy"><figcaption class="cap"><b>Worker Macs.</b> Pair an always-on Mac in Settings with a signed handshake you approve, then pin jobs to it. Your laptop can sleep.</figcaption></figure>
+      <figure class="c7-12 rv new-fig"><img class="shot" src="screens/v014-02-pipelines-dag-1600.webp" srcset="screens/v014-02-pipelines-dag-1200.webp 1200w, screens/v014-02-pipelines-dag-1600.webp 1600w, screens/v014-02-pipelines-dag-2240.webp 2240w" sizes="(max-width: 900px) calc(100vw - 40px), 600px" width="2400" height="1500" alt="Tasks, Pipelines: a release summary waiting on two parallel checks" loading="lazy"><figcaption class="cap"><b>Pipelines.</b> Fan out to parallel checks, fan back in to one summary that waits for all of them.</figcaption></figure>
+      <figure class="c1-6 rv new-fig"><img class="shot" src="screens/v014-04-report-open-pr-confirm-1600.webp" srcset="screens/v014-04-report-open-pr-confirm-1200.webp 1200w, screens/v014-04-report-open-pr-confirm-1600.webp 1600w, screens/v014-04-report-open-pr-confirm-2240.webp 2240w" sizes="(max-width: 900px) calc(100vw - 40px), 600px" width="2400" height="1500" alt="A run report with the Push and open PR confirm step" loading="lazy"><figcaption class="cap"><b>Open a PR from the report.</b> Push the branch and open the pull request in one confirmed click. No <code>gh</code> needed.</figcaption></figure>
+      <figure class="c7-12 rv new-fig"><img class="shot" src="screens/v014-06-terminal-cli-1600.webp" srcset="screens/v014-06-terminal-cli-1200.webp 1200w, screens/v014-06-terminal-cli-1600.webp 1600w, screens/v014-06-terminal-cli-2240.webp 2240w" sizes="(max-width: 900px) calc(100vw - 40px), 600px" width="2400" height="1500" alt="Terminal output of clockwork status, runs and approvals" loading="lazy"><figcaption class="cap"><b>A terminal CLI.</b> <code>clockwork status</code>, <code>runs</code>, <code>approvals</code>, <code>workers</code> and <code>pack</code>, as tables or <code>--json</code>.</figcaption></figure>
     </div>
   </div>
 </section>
