@@ -15,8 +15,12 @@ convention as worker pairing:
    land. Preview installs nothing.
 2. **Unknown keys need explicit consent.** The fingerprint shows beside a
    trust checkbox (or `--trust-key`); ticking it pins the key for that
-   publisher. A known keyId arriving with *different* key bytes refuses as
-   `key_changed` — rotation never updates quietly.
+   publisher. A publisher you already trust arriving signed by a *different*
+   key refuses as `key_changed` — rotation never updates quietly. `--trust-key`
+   only pins on a first, genuinely unknown key: recovering from a real
+   rotation means removing the old entry from `trusted-pack-keys.json`
+   yourself first, then previewing and trusting the new key like any other
+   first install.
 3. **Bad signatures and red-flag templates refuse the whole install.**
    Nothing partial ever lands: one red template blocks every template.
 
@@ -39,10 +43,16 @@ file URLs and oversized bodies refuse before parsing.
 
 ## Updates and uninstall
 
-Re-fetch the same source: a higher version installs next to the old one
-(compare in Tasks › Packs, then remove the stale tasks or the old pack).
-Uninstall removes only tasks still **disabled and never run** — anything
-enabled or run is yours now and stays, reported as kept.
+Re-fetch the same source: a higher version installs next to the old one — its
+tasks land beside the old version's, which stay until you remove them, so an
+update can never silently rewrite a working routine. `pack list` and the
+install record track only the **current** version's number, not a history: it
+does not show 1.1.0 and 1.2.0 as two rows once you've installed both.
+
+Uninstalling a pack name removes eligible tasks — still **disabled and never
+run** — from *every* version you've ever installed under that name, not only
+the current one, then clears the pack's record. Anything enabled or run is
+yours now and stays, reported as kept.
 
 ## Publishing a pack
 

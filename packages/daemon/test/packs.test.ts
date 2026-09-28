@@ -95,6 +95,24 @@ describe('canonical form + signing', () => {
     expect(verifyPack(pack, trusted, '0.13.0')).toMatchObject({ ok: false, reason: 'key_changed' });
   });
 
+  it('a publisher trusted under one key is refused as key_changed when a pack arrives signed by a genuinely different key', () => {
+    // The scenario above cannot happen with a realistic trust store: keyId
+    // hashes the key bytes, so a rotated key always gets a fresh keyId and
+    // trusted.get(sig.keyId) always misses for it — it looks exactly like an
+    // unknown key. Detecting rotation means matching on the PUBLISHER NAME
+    // the store already trusts, not on keyId equality.
+    const original = keypair();
+    const rotated = keypair();
+    const trusted = new Map([[keyIdOf(original.pubHex), { pubkeyHex: original.pubHex, publisher: 'team', trustedAt: 1 }]]);
+    const pack = makePack(rotated.privHex); // manifest.publisher defaults to 'team'
+    expect(verifyPack(pack, trusted, '0.13.0')).toMatchObject({ ok: false, reason: 'key_changed' });
+
+    // A different publisher name presenting a brand-new key is a genuinely
+    // unknown key, not a rotation — the two must never be conflated.
+    const otherPack = makePack(rotated.privHex, { manifest: { publisher: 'someone-else' } });
+    expect(verifyPack(otherPack, trusted, '0.13.0')).toMatchObject({ ok: false, reason: 'unknown_key' });
+  });
+
   it('version gates: bad x.y.z, incompatible minimum, empty pack', () => {
     const kp = keypair();
     const trusted = new Map<string, string>();
