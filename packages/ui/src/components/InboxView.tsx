@@ -1278,8 +1278,7 @@ function TranscriptCapNote({ shown, total }: { shown: number; total: number | un
   if (total === undefined || total <= shown) return null;
   return (
     <p className="hint" data-testid="transcript-truncated">
-      Showing the last {shown.toLocaleString('en-US')} of {total.toLocaleString('en-US')} lines — the full transcript
-      stays in the run folder.
+      Showing the last {shown.toLocaleString('en-US')} of {total.toLocaleString('en-US')} lines.
     </p>
   );
 }
