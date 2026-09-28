@@ -52,7 +52,11 @@ export const SANDBOX_PROFILE_VERSION = 2;
  * beside the Telegram/SMTP secrets, and a run that could cat it could push
  * to the user's repos.
  */
-const dataDir = process.env.CLOCKWORK_HOME ?? `${os.homedir()}/.clockwork`;
+const literalDataDir = process.env.CLOCKWORK_HOME ?? `${os.homedir()}/.clockwork`;
+// Seatbelt matches the RESOLVED path, so a deny rule naming a symlinked home
+// matches nothing and every file below it stays readable. Resolve once here;
+// a home that does not exist yet (first launch) keeps its literal name.
+const dataDir = resolveReal(literalDataDir) ?? literalDataDir;
 export const CONTROL_PLANE_PATHS = [
   `${dataDir}/api-token`,
   `${dataDir}/clockwork.sqlite`,

@@ -244,9 +244,9 @@ describe.skipIf(!onMac)('worker.json join file is denied', () => {
   let wrap: typeof wrapWithSandbox;
 
   beforeAll(async () => {
-    // Real path: os.tmpdir() is /var/… on macOS, a symlink to /private/var/…,
-    // and Seatbelt matches the resolved path. ~/.clockwork is not a symlink.
-    home = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'cw-sbx-home-')));
+    // Deliberately NOT realpath'd: os.tmpdir() is /var/… on macOS, a symlink
+    // to /private/var/…, so this also proves the deny list resolves the home.
+    home = mkdtempSync(path.join(os.tmpdir(), 'cw-sbx-home-'));
     joinFile = path.join(home, 'worker.json');
     sibling = path.join(home, 'settings.json');
     writeFileSync(joinFile, JSON.stringify({ primaryUrl: 'http://primary:4747', token: 'SECRET-WORKER-TOKEN' }), { mode: 0o600 });
@@ -289,5 +289,84 @@ describe.skipIf(!onMac)('worker.json join file is denied', () => {
     expect(r.out).not.toContain('SECRET-WORKER-TOKEN');
     const sh = run(['/bin/sh', '-c', `cat ${JSON.stringify(joinFile)}`]);
     expect(sh.ok, 'sandboxed shell READ worker.json').toBe(false);
+  });
+});
+
+// Seatbelt matches the RESOLVED path. A deny rule built from a symlinked
+// CLOCKWORK_HOME names a path the kernel never sees, so every control-plane
+// file under it was readable: the whole deny list, defeated by one symlink.
+describe.skipIf(!onMac)('a symlinked CLOCKWORK_HOME keeps its deny list', () => {
+  let real: string;
+  let link: string;
+  let prof: string;
+  let fresh: typeof import('../src/sandbox.js');
+
+  beforeAll(async () => {
+    real = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'cw-sbx-real-')));
+    link = path.join(realpathSync(mkdtempSync(path.join(os.tmpdir(), 'cw-sbx-link-'))), 'home');
+    symlinkSync(real, link);
+    for (const f of ['api-token', 'worker.json', 'worker-key', 'delivery-creds.json']) {
+      writeFileSync(path.join(real, f), `SECRET-${f}\n`, { mode: 0o600 });
+    }
+    writeFileSync(path.join(real, 'settings.json'), 'readable-by-design\n');
+    vi.stubEnv('CLOCKWORK_HOME', link);
+    vi.resetModules();
+    fresh = await import('../src/sandbox.js');
+    const { profile } = fresh.generateSeatbeltProfile({ writePaths: [dir], readPaths: [dir] });
+    prof = path.join(real, 'profile.sb');
+    writeFileSync(prof, profile);
+  });
+
+  afterAll(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+    rmSync(path.dirname(link), { recursive: true, force: true });
+    rmSync(real, { recursive: true, force: true });
+  });
+
+  const run = (argv: string[]): { ok: boolean; out: string } => {
+    const w = fresh.wrapWithSandbox(argv, prof);
+    try {
+      return { ok: true, out: execFileSync(w[0]!, w.slice(1), { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 20_000 }) };
+    } catch (e) {
+      const err = e as { stdout?: string; stderr?: string };
+      return { ok: false, out: `${err.stdout ?? ''}${err.stderr ?? ''}` };
+    }
+  };
+
+  it('control: a sibling file under the symlinked home IS readable', () => {
+    const r = run(['/bin/cat', path.join(link, 'settings.json')]);
+    expect(r.ok, `sibling read denied, so the denials below prove nothing: ${r.out}`).toBe(true);
+  });
+
+  it('every control-plane file is denied through the link AND the real path', () => {
+    const leaks: string[] = [];
+    for (const f of ['api-token', 'worker.json', 'worker-key', 'delivery-creds.json']) {
+      for (const base of [link, real]) {
+        const p = path.join(base, f);
+        execFileSync('/bin/cat', [p], { stdio: 'ignore' }); // readable outside
+        const r = run(['/bin/cat', p]);
+        if (r.ok || r.out.includes('SECRET-')) leaks.push(p.replace(os.tmpdir(), '$TMPDIR'));
+      }
+    }
+    expect(leaks, `read inside the sandbox:\n${leaks.join('\n')}`).toEqual([]);
+  });
+});
+
+// A home that does not exist yet (first launch) has nothing to resolve; the
+// literal path is the only name it will ever have, so it must stay listed.
+describe('CONTROL_PLANE_PATHS for a home that does not exist yet', () => {
+  afterAll(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it('falls back to the literal path', async () => {
+    const missing = path.join(os.tmpdir(), `cw-sbx-missing-${process.pid}-${Date.now()}`);
+    vi.stubEnv('CLOCKWORK_HOME', missing);
+    vi.resetModules();
+    const fresh = await import('../src/sandbox.js');
+    expect(fresh.CONTROL_PLANE_PATHS).toContain(`${missing}/api-token`);
+    expect(fresh.CONTROL_PLANE_PATHS).toContain(`${missing}/worker.json`);
   });
 });
