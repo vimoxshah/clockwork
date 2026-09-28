@@ -11,7 +11,7 @@
  * - cross-worker access is 401 (no id oracle beyond it)
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { generateKeyPairSync, sign } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -27,7 +27,7 @@ import {
   listWorkers,
   HEARTBEAT_TIMEOUT_MS,
 } from '../src/workers.js';
-import { ensureWorkerTaskRow } from '../src/worker-agent.js';
+import { ensureWorkerTaskRow, startWorkerAgent } from '../src/worker-agent.js';
 import { RunManager } from '../src/run-manager.js';
 import { Scheduler } from '../src/scheduler.js';
 import { FakeClock } from '../src/clock.js';
@@ -511,5 +511,157 @@ describe('protocol routes', () => {
     expect(byTok(db, w.token)?.id).toBe(w.id);
     expect(byTok(db, 'nope')).toBeNull();
     expect(rmw(db, 'wrk_nope')).toMatchObject({ ok: false });
+  });
+});
+
+async function freshApp(): Promise<{ db: DB; dir: string; app: FastifyInstance; token: string }> {
+  const { db, dir } = freshDb();
+  const rm = new RunManager({
+    db,
+    clock: new FakeClock(Date.now()),
+    dataDir: dir,
+    runnerChildModule: '/nonexistent/runner-child.js',
+    notify: () => {},
+    broadcast: () => {},
+    safetyJournal: new SafetyJournal(`${dir}/journal.jsonl`),
+  });
+  const scheduler = new Scheduler({ db, clock: new FakeClock(Date.now()), enqueueRun: () => {}, notify: () => {} });
+  const built = await buildServer({ db, dataDir: dir, runManager: rm, scheduler, version: 'test' });
+  await built.app.ready();
+  return { db, dir, app: built.app, token: built.token };
+}
+
+describe('queue lane names the worker a pinned run waits on', () => {
+  let f: Awaited<ReturnType<typeof freshApp>>;
+  beforeAll(async () => {
+    f = await freshApp();
+  });
+  afterAll(async () => {
+    await f.app.close();
+    f.db.close();
+    rmSync(f.dir, { recursive: true, force: true });
+  });
+
+  it('worker rows say which worker, and never take a local slot', async () => {
+    const now = Date.now();
+    const online = pairUp(f.db, 'studio-mini', now);
+    const silent = pairUp(f.db, 'attic-box', now);
+    f.db.prepare('UPDATE workers SET last_heartbeat=?, online=1 WHERE id=?').run(now, online.id);
+    f.db.prepare(`INSERT INTO tasks (id, name, prompt, created_at, updated_at) VALUES ('t','t','p',?,?)`).run(now, now);
+    const ins = f.db.prepare(
+      `INSERT INTO runs (id, task_id, jobspec_json, state, state_changed_at, scheduled_for, worker_id, worker_claimed_at) VALUES (?,?,?,'queued',?,?,?,?)`,
+    );
+    // Three worker rows ahead of two local ones: with maxParallel 2, counting
+    // them as local would push both local rows to "waiting for slot".
+    ins.run('q-w1', 't', JSON.stringify({ taskName: 'Nightly scan' }), now, now - 50, online.id, null);
+    ins.run('q-w2', 't', JSON.stringify({ taskName: 'Attic job' }), now, now - 40, silent.id, null);
+    ins.run('q-w3', 't', JSON.stringify({ taskName: 'Pulled job' }), now, now - 30, online.id, now);
+    ins.run('q-l1', 't', JSON.stringify({ taskName: 'Local one' }), now, now - 20, null, null);
+    ins.run('q-l2', 't', JSON.stringify({ taskName: 'Local two' }), now, now - 10, null, null);
+    const res = await f.app.inject({ method: 'GET', url: '/queue', headers: { authorization: `Bearer ${f.token}` } });
+    expect(res.statusCode).toBe(200);
+    const byId = Object.fromEntries((res.json() as any[]).map((r) => [r.runId, r]));
+    expect(byId['q-w1'].reason).toBe('waiting for worker studio-mini');
+    expect(byId['q-w2'].reason).toBe('waiting for worker attic-box (silent)');
+    expect(byId['q-w3'].reason).toBe('running on worker studio-mini');
+    expect(byId['q-l1'].reason).toBe('starting soon');
+    expect(byId['q-l2'].reason).toBe('starting soon');
+    // Queue order still counts every row.
+    expect(byId['q-l2'].position).toBe(5);
+  });
+});
+
+describe('worker completion carries start time and outcome reason', () => {
+  let f: Awaited<ReturnType<typeof freshApp>>;
+  let w: { id: string; token: string };
+  beforeAll(async () => {
+    f = await freshApp();
+    w = pairUp(f.db, 'mini');
+    const now = Date.now();
+    f.db.prepare(`INSERT INTO tasks (id, name, prompt, created_at, updated_at) VALUES ('t','t','p',?,?)`).run(now, now);
+  });
+  afterAll(async () => {
+    await f.app.close();
+    f.db.close();
+    rmSync(f.dir, { recursive: true, force: true });
+  });
+
+  const claimed = (id: string): void => {
+    const now = Date.now();
+    f.db
+      .prepare(`INSERT INTO runs (id, task_id, jobspec_json, state, state_changed_at, scheduled_for, worker_id, worker_claimed_at) VALUES (?,?,?,'queued',?,?,?,?)`)
+      .run(id, 't', JSON.stringify({ taskId: 't' }), now, now, w.id, now);
+  };
+
+  it('stores started_at and outcome_reason the worker reports', async () => {
+    claimed('c-1');
+    const startedAt = Date.now() - 42_000;
+    const res = await f.app.inject({
+      method: 'POST',
+      url: `/workers/${w.id}/runs/c-1/complete`,
+      headers: { 'x-clockwork-worker': w.token },
+      payload: { state: 'failed', report_json: '{}', cost_usd: 0.3, turns: 4, started_at: startedAt, outcome_reason: 'max_turns' },
+    });
+    expect(res.statusCode).toBe(200);
+    const row = f.db.prepare('SELECT state, started_at, outcome_reason FROM runs WHERE id=?').get('c-1') as any;
+    expect(row).toEqual({ state: 'failed', started_at: startedAt, outcome_reason: 'max_turns' });
+  });
+
+  it('an older worker without the new fields still settles', async () => {
+    claimed('c-2');
+    const res = await f.app.inject({
+      method: 'POST',
+      url: `/workers/${w.id}/runs/c-2/complete`,
+      headers: { 'x-clockwork-worker': w.token },
+      payload: { state: 'completed', report_json: '{}', cost_usd: 0, turns: 1 },
+    });
+    expect(res.statusCode).toBe(200);
+    const row = f.db.prepare('SELECT state, started_at, outcome_reason FROM runs WHERE id=?').get('c-2') as any;
+    expect(row).toEqual({ state: 'completed', started_at: null, outcome_reason: null });
+  });
+
+  it('refuses a malformed started_at rather than storing it', async () => {
+    claimed('c-3');
+    const res = await f.app.inject({
+      method: 'POST',
+      url: `/workers/${w.id}/runs/c-3/complete`,
+      headers: { 'x-clockwork-worker': w.token },
+      payload: { state: 'completed', report_json: '{}', cost_usd: 0, turns: 1, started_at: 'yesterday' },
+    });
+    expect(res.statusCode).toBe(422);
+  });
+
+  it('the worker agent sends its local started_at and outcome_reason', async () => {
+    const wdir = mkdtempSync(path.join(os.tmpdir(), 'cw-wagent-'));
+    const wdb = openDatabase(wdir).db;
+    createMigrator(wdb, MIGRATIONS).migrate();
+    const now = Date.now();
+    wdb.prepare(`INSERT INTO tasks (id, name, prompt, created_at, updated_at) VALUES ('t','t','p',?,?)`).run(now, now);
+    wdb
+      .prepare(
+        `INSERT INTO runs (id, task_id, jobspec_json, state, state_changed_at, scheduled_for, started_at, ended_at, outcome_reason, cost_usd, turns, report_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+      )
+      .run('a-1', 't', '{}', 'timed_out', now, now, now - 9_000, now, 'wall_clock', 0.05, 3, '{"summary":"x"}');
+    writeFileSync(path.join(wdir, 'worker-active.json'), JSON.stringify({ runId: 'a-1' }));
+    const bodies: any[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown, init?: RequestInit) => {
+        const u = String(url);
+        if (u.endsWith('/workers/me')) return new Response(JSON.stringify({ id: 'wrk_x' }), { status: 200 });
+        if (u.includes('/complete')) bodies.push(JSON.parse(String(init?.body)));
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }) as any,
+    );
+    const agent = startWorkerAgent({ db: wdb, dataDir: wdir, primaryUrl: 'http://primary:1', token: 't'.repeat(64), pump: () => {}, intervalMs: 60_000, log: () => {} });
+    try {
+      await vi.waitFor(() => expect(bodies).toHaveLength(1));
+      expect(bodies[0]).toMatchObject({ state: 'timed_out', started_at: now - 9_000, outcome_reason: 'wall_clock', turns: 3 });
+    } finally {
+      agent.stop();
+      vi.unstubAllGlobals();
+      wdb.close();
+      rmSync(wdir, { recursive: true, force: true });
+    }
   });
 });

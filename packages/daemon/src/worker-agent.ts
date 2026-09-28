@@ -150,7 +150,7 @@ export function startWorkerAgent(options: WorkerAgentOptions): { stop(): void } 
   let timer: ReturnType<typeof setInterval> | null = null;
 
   const localTerminal = (runId: string): { state: string; row: any } | null => {
-    const row = db.prepare('SELECT state, report_json, cost_usd, turns FROM runs WHERE id=?').get(runId) as any;
+    const row = db.prepare('SELECT state, report_json, cost_usd, turns, started_at, outcome_reason FROM runs WHERE id=?').get(runId) as any;
     if (!row) return null;
     if (!['completed', 'failed', 'timed_out', 'cancelled', 'budget_exceeded'].includes(row.state)) return null;
     return { state: row.state, row };
@@ -223,6 +223,8 @@ export function startWorkerAgent(options: WorkerAgentOptions): { stop(): void } 
             report_json: done.row.report_json ?? JSON.stringify({ summary: '(no report recorded)' }),
             cost_usd: Number(done.row.cost_usd ?? 0),
             turns: Number(done.row.turns ?? 0),
+            started_at: done.row.started_at ?? null,
+            outcome_reason: done.row.outcome_reason ?? null,
           }),
         });
         // 409 = primary already settled it (sweep won the race) — either way

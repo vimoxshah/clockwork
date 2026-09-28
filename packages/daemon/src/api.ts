@@ -1741,6 +1741,10 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
         report_json: z.string().max(2_000_000),
         cost_usd: z.number().nonnegative(),
         turns: z.number().int().nonnegative(),
+        // When the worker actually started it, and why it ended the way it
+        // did. Optional: a worker from before these fields still settles.
+        started_at: z.number().int().nonnegative().nullable().optional(),
+        outcome_reason: z.string().max(200).nullable().optional(),
       })
       .safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(422).send({ error: 'validation' });
@@ -1752,8 +1756,19 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
     }
     const now = Date.now();
     deps.db
-      .prepare(`UPDATE runs SET state=?, report_json=?, cost_usd=?, turns=?, ended_at=? WHERE id=?`)
-      .run(parsed.data.state, parsed.data.report_json, parsed.data.cost_usd, parsed.data.turns, now, runId);
+      .prepare(
+        `UPDATE runs SET state=?, report_json=?, cost_usd=?, turns=?, ended_at=?, started_at=COALESCE(?, started_at), outcome_reason=COALESCE(?, outcome_reason) WHERE id=?`,
+      )
+      .run(
+        parsed.data.state,
+        parsed.data.report_json,
+        parsed.data.cost_usd,
+        parsed.data.turns,
+        now,
+        parsed.data.started_at ?? null,
+        parsed.data.outcome_reason ?? null,
+        runId,
+      );
     deps.db
       .prepare('INSERT INTO events (at, run_id, kind, data_json) VALUES (?, ?, ?, ?)')
       .run(now, runId, 'state_changed', JSON.stringify({ to: parsed.data.state, via: 'worker', worker: id }));
@@ -3009,30 +3024,55 @@ export async function buildServer(deps: ApiDeps): Promise<{ app: FastifyInstance
 
   // ---- queue lane (FR-6): waiting items with position + reason ----
   app.get('/queue', async () => {
+    const { isWorkerOnline } = await import('./workers.js');
     const rows = deps.db
       .prepare(
-        `SELECT r.id, r.task_id, r.scheduled_for, r.jobspec_json FROM runs r WHERE r.state='queued' ORDER BY COALESCE(r.scheduled_for, r.state_changed_at) ASC`,
+        `SELECT r.id, r.task_id, r.scheduled_for, r.jobspec_json, r.worker_id, r.worker_claimed_at FROM runs r WHERE r.state='queued' ORDER BY COALESCE(r.scheduled_for, r.state_changed_at) ASC`,
       )
-      .all() as unknown as Array<{ id: string; task_id: string; scheduled_for: number | null; jobspec_json: string }>;
+      .all() as unknown as Array<{
+      id: string;
+      task_id: string;
+      scheduled_for: number | null;
+      jobspec_json: string;
+      worker_id: string | null;
+      worker_claimed_at: number | null;
+    }>;
+    const workerStmt = deps.db.prepare('SELECT name, status, last_heartbeat FROM workers WHERE id=?');
+    const now = Date.now();
     const active = deps.runManager.countActive();
     const maxParallel = 2;
     let position = 0;
+    // Local slot demand counts only rows the local pump can start. A row with
+    // worker_id belongs to that worker's pull protocol and never takes a slot
+    // here — counting it told local rows behind it to wait for nothing.
+    let localAhead = 0;
     return rows.map((r) => {
       position++;
       const spec = JSON.parse(r.jobspec_json ?? '{}');
-      const repoBusy =
-        spec.repoPath &&
-        (deps.db
-          .prepare(`SELECT COUNT(*) c FROM runs WHERE id != ? AND jobspec_json LIKE ? AND state IN ('preparing','running','waiting_approval','finalizing')`)
-          .get(r.id, `%${spec.repoPath}%`) as any).c > 0;
-      // 'paused' leads: while the daemon is paused nothing starts at all, so
-      // "waiting for slot" — which used to win for anything past position 2 —
-      // was telling the user their run was about to go.
-      const reason =
-        isPaused() ? 'paused'
-        : repoBusy ? 'waiting for repo'
-        : active + position > maxParallel ? 'waiting for slot'
-        : 'starting soon';
+      // Worker rows lead, ahead of 'paused': pause gates the local pump, not
+      // a worker's /next-job, so "paused" would misstate what holds them.
+      let reason: string;
+      if (r.worker_id) {
+        const w = workerStmt.get(r.worker_id) as { name: string; status: 'pending' | 'paired' | 'revoked'; last_heartbeat: number | null } | undefined;
+        const name = w?.name ?? r.worker_id;
+        if (r.worker_claimed_at != null) reason = `running on worker ${name}`;
+        else reason = `waiting for worker ${name}${w && isWorkerOnline(w, now) ? '' : ' (silent)'}`;
+      } else {
+        localAhead++;
+        const repoBusy =
+          spec.repoPath &&
+          (deps.db
+            .prepare(`SELECT COUNT(*) c FROM runs WHERE id != ? AND jobspec_json LIKE ? AND state IN ('preparing','running','waiting_approval','finalizing')`)
+            .get(r.id, `%${spec.repoPath}%`) as any).c > 0;
+        // 'paused' leads: while the daemon is paused nothing starts at all, so
+        // "waiting for slot" — which used to win for anything past position 2 —
+        // was telling the user their run was about to go.
+        reason =
+          isPaused() ? 'paused'
+          : repoBusy ? 'waiting for repo'
+          : active + localAhead > maxParallel ? 'waiting for slot'
+          : 'starting soon';
+      }
       return {
         runId: r.id,
         taskId: r.task_id,
