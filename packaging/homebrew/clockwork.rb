@@ -10,14 +10,14 @@ cask "clockwork" do
   # Homebrew's own cop enforces (rubocops/cask/constants/stanza.rb).
   arch arm: "aarch64", intel: "x64"
 
-  version "0.14.0"
-  # Both digests are real (checked into checksums-sha256.txt on the v0.14.0
+  version "0.14.1"
+  # Both digests are real (checked into checksums-sha256.txt on the v0.14.1
   # release) — the two-leg build matrix has published an Intel DMG since
   # 0.12.0. An earlier revision of this comment warned that the intel digest
   # was a 64-zero PLACEHOLDER; that stopped being true once the Intel leg
   # shipped, and the warning outlived the condition it described.
-  sha256 arm:   "9d3ad5a7b943ada2f7f643392c4a795d439a0d91bc3d7ea4980061d2399600a9",
-         intel: "9fc914bda182c10f674eee5f7801a31e7fba8f7f626fbb553c7fb89ee41876bd"
+  sha256 arm:   "7bee722795458bbcf20aa8ec2ad1f2ff8fa6cca82a3d1209c7e2d1b296690be4",
+         intel: "c50a7fc75d6325bd2d5fe8992a988eee207ddaf49268597cdc428aee9a601d56"
 
   # Straight from the GitHub release, which is where the artifact and its
   # published checksum canonically live. It used to point at the marketing
@@ -45,11 +45,10 @@ cask "clockwork" do
   # system Node required. bundled-resources-staged.test.ts guards that the
   # staging script actually places a file at this exact path.
   #
-  # DO NOT sync this stanza to the published tap until a release DMG contains
-  # Contents/Resources/app/bin/clockwork. Every DMG through 0.14.0 predates
-  # this wrapper: `binary` only symlinks — it does not check the target
-  # exists — so `brew install` would succeed and leave `clockwork` a dangling
-  # link. docs/cli.md names the full command that works on those installs.
+  # 0.14.1 is the first DMG that ships the wrapper (verified in the published
+  # DMG before this cask went to the tap). `binary` only symlinks and does not
+  # check the target exists, so never point this cask at an older version.
+  # docs/cli.md names the full command for installs that predate it.
   binary "#{appdir}/Clockwork.app/Contents/Resources/app/bin/clockwork"
 
   # The build is not notarised — an Apple Developer certificate is $99/year and
