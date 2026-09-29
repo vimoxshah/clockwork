@@ -276,8 +276,6 @@ footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--i
 .ft-bottom .mono { font-size: 12.5px; }
 
 /* reveal, only with JS, only when motion is allowed */
-.js .rv { opacity: 0; transform: translateY(14px); transition: opacity .6s cubic-bezier(.16, 1, .3, 1), transform .6s cubic-bezier(.16, 1, .3, 1); }
-.js .rv.in { opacity: 1; transform: none; }
 .js .ev.agent, .js .ev.human, .js .ev.ask { opacity: 0; transform: translateY(6px); animation: punch .5s cubic-bezier(.16, 1, .3, 1) forwards; animation-delay: calc(var(--i, 0) * 60ms + 150ms); }
 @keyframes punch { to { opacity: 1; transform: none; } }
 
@@ -343,6 +341,247 @@ footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--i
   .btn, .ev { transition: none; }
 }
 </style>
+<style>
+/* ===== motion system (0.14 revamp) =====================================
+   Rule: every element is fully visible with no JS and no animation support.
+   Motion only ever enhances an already-visible default. */
+:root {
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
+  --ease-io: cubic-bezier(.65, 0, .35, 1);
+  --ok: #1F7A45;
+  --ok-tint: rgba(31, 122, 69, .09);
+}
+
+/* scroll-driven entrances: only where the browser supports view timelines.
+   Elsewhere content simply sits there, visible. */
+@supports (animation-timeline: view()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .rise { animation: rise linear both; animation-timeline: view(); animation-range: entry 0% entry 55%; }
+    .people .person { animation: rise linear both; animation-timeline: view(); animation-range: entry 0% entry 70%; }
+    .spec > div { animation: slide-in linear both; animation-timeline: view(); animation-range: entry 0% entry 60%; }
+    .shot-rise { animation: shot-rise linear both; animation-timeline: view(); animation-range: entry 0% cover 35%; }
+  }
+}
+@keyframes rise { from { opacity: 0; transform: translateY(22px); } to { opacity: 1; transform: none; } }
+@keyframes slide-in { from { opacity: 0; transform: translateX(-14px); } to { opacity: 1; transform: none; } }
+@keyframes shot-rise { from { opacity: .2; transform: translateY(40px) scale(.97); filter: blur(4px); } to { opacity: 1; transform: none; filter: none; } }
+
+/* ---------- hero ---------- */
+.hero h1 .w { display: inline-block; }
+@media (prefers-reduced-motion: no-preference) {
+  .js .hero h1 .w { animation: word .9s var(--ease-out) both; animation-delay: calc(var(--i) * 70ms + 80ms); }
+  .js .hero .lede, .js .hero .btn-row { animation: word .9s var(--ease-out) both; animation-delay: .45s; }
+  .js .hero .btn-row { animation-delay: .55s; }
+  .js .hero-cal .week { animation: cal-in 1.1s var(--ease-out) both .15s; }
+}
+@keyframes word { from { opacity: 0; transform: translateY(.45em); filter: blur(6px); } to { opacity: 1; transform: none; filter: none; } }
+@keyframes cal-in { from { opacity: 0; transform: perspective(1400px) rotateX(8deg) translateY(28px) scale(.98); } to { opacity: 1; transform: none; } }
+.ev.agent.live { overflow: hidden; }
+.ev.agent.live::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,.28), transparent); transform: translateX(-100%); animation: shimmer 2.4s var(--ease-io) infinite; pointer-events: none; }
+@keyframes shimmer { to { transform: translateX(100%); } }
+.btn { transition: transform .18s var(--ease-out), background .15s ease, border-color .15s ease, box-shadow .2s ease; }
+.btn:active { transform: scale(.97); }
+.btn.primary:hover { box-shadow: 0 6px 16px -8px rgba(21, 24, 29, .55); }
+
+/* ---------- the night story ---------- */
+.story { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); column-gap: 56px; position: relative; }
+.steps { list-style: none; margin: 0; padding: 0; }
+.step { min-height: 72vh; padding: 12vh 0; display: flex; flex-direction: column; justify-content: center; border-top: 1px solid var(--line); opacity: .38; transition: opacity .5s var(--ease-out); }
+.step:first-child { border-top: 0; padding-top: 4vh; }
+.no-story .step, .step.on { opacity: 1; }
+.step .t { font: 500 15px/1 var(--mono); color: var(--accent-ink); letter-spacing: .02em; margin-bottom: 14px; }
+.step h3 { font-size: clamp(24px, 2.2vw, 30px); line-height: 1.15; letter-spacing: -.018em; margin-bottom: 12px; text-wrap: balance; }
+.step p { color: var(--ink-2); max-width: 34em; }
+.step .note { display: block; margin-top: 8px; font-size: 14px; color: var(--ink-3); }
+
+.stage { position: sticky; top: 96px; align-self: start; height: min(620px, calc(100vh - 140px)); display: flex; flex-direction: column; justify-content: center; gap: 18px; }
+.win { position: relative; background: var(--surface); border: 1px solid var(--line-2); border-radius: 12px; overflow: hidden; height: 470px; box-shadow: 0 1px 0 rgba(21,24,29,.04), 0 28px 60px -34px rgba(21, 24, 29, .38); }
+.win-bar { height: 40px; display: flex; align-items: center; gap: 7px; padding: 0 14px; border-bottom: 1px solid var(--line); background: #FAFBFC; }
+.win-bar i { width: 10px; height: 10px; border-radius: 50%; background: var(--line-2); }
+.win-t { margin-left: 10px; font: 500 12.5px/1 var(--mono); color: var(--ink-3); }
+.win-t::after { content: attr(data-t1); }
+.story[data-scene="2"] .win-t::after { content: attr(data-t2); }
+.story[data-scene="3"] .win-t::after { content: attr(data-t3); }
+.story[data-scene="4"] .win-t::after { content: attr(data-t4); }
+.scene { position: absolute; inset: 40px 0 0 0; padding: 26px 28px; opacity: 0; transform: translateY(14px) scale(.985); filter: blur(3px); transition: opacity .55s var(--ease-out), transform .7s var(--ease-out), filter .55s var(--ease-out); pointer-events: none; }
+.story[data-scene="1"] .s1, .story[data-scene="2"] .s2, .story[data-scene="3"] .s3, .story[data-scene="4"] .s4 { opacity: 1; transform: none; filter: none; }
+.dots { display: flex; gap: 8px; justify-content: center; }
+.dots i { width: 28px; height: 3px; border-radius: 2px; background: var(--line-2); transition: background .3s ease, width .4s var(--ease-out); }
+.story[data-scene="1"] .dots i[data-s="1"], .story[data-scene="2"] .dots i[data-s="2"], .story[data-scene="3"] .dots i[data-s="3"], .story[data-scene="4"] .dots i[data-s="4"] { background: var(--accent); width: 44px; }
+
+/* scene 1: composer */
+.fld { margin-bottom: 14px; }
+.fld label { display: block; font-size: 12.5px; color: var(--ink-3); margin-bottom: 6px; }
+.fld .in { border: 1px solid var(--line-2); border-radius: 6px; padding: 10px 12px; font-size: 15px; display: flex; align-items: center; gap: 8px; min-height: 42px; }
+.fld .in.type { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-tint); }
+.row2 { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.caret { width: 2px; height: 18px; background: var(--ink); margin-left: -6px; }
+.read { color: var(--ok); font-size: 14px; margin: -4px 0 10px; }
+.runs { list-style: none; margin: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 6px; font-size: 13px; color: var(--ink-2); display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; }
+.save { display: table; margin: 14px 0 0 auto; background: var(--ink); color: #fff; font: 600 14px/1 var(--sans); padding: 12px 18px; border-radius: 6px; }
+
+/* scene 2: night shift */
+.machines { display: grid; grid-template-columns: 1fr 70px 1fr; align-items: center; margin-bottom: 18px; }
+.mac { border: 1px solid var(--line-2); border-radius: 8px; padding: 14px; position: relative; }
+.mac b { display: block; font-weight: 600; }
+.mac span { font: 400 12.5px/1.4 var(--mono); color: var(--ink-3); display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.mac.sleep { opacity: .55; }
+.mac.sleep em { position: absolute; right: 14px; top: 10px; font: italic 600 16px/1 var(--sans); color: var(--ink-3); }
+.mac.awake { border-color: var(--ok); background: var(--ok-tint); }
+.pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); display: inline-block; }
+.wire { height: 2px; background: var(--line-2); margin: 0 8px; position: relative; overflow: hidden; }
+.wire i { position: absolute; top: 0; left: 0; width: 30%; height: 100%; background: var(--ok); }
+.chipset { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; font-size: 12px; }
+.chipset span { border: 1px solid var(--line-2); border-radius: 4px; padding: 6px 8px; color: var(--ink-2); }
+.chipset .deny { border-color: rgba(181, 50, 30, .35); color: var(--accent-ink); background: var(--accent-tint); }
+.log { list-style: none; margin: 0 0 18px; padding: 14px 16px; background: #15181D; color: #D5D9E0; border-radius: 6px; font-size: 13px; line-height: 1.8; }
+.meter { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; font-size: 13px; color: var(--ink-3); }
+.meter .bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.meter .bar i { display: block; height: 100%; width: 20.5%; background: var(--ink); border-radius: 3px; transform-origin: left; }
+.meter b { color: var(--ink); font-weight: 500; }
+
+/* scene 3: the ask */
+.paused { display: inline-flex; align-items: center; gap: 10px; font-weight: 600; font-size: 15px; color: var(--accent-ink); }
+.ring { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 0 rgba(224, 68, 46, .5); }
+.phone { margin: 18px auto 0; width: 300px; border-radius: 26px; border: 8px solid #15181D; background: #DDE6D3; height: 280px; position: relative; overflow: hidden; }
+.notif { position: absolute; left: 10px; right: 10px; top: 14px; background: #fff; border-radius: 14px; padding: 12px 14px; font-size: 13px; line-height: 1.45; box-shadow: 0 8px 20px -10px rgba(0,0,0,.35); }
+.notif p { margin-top: 4px; }
+.notif .nh { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--ink-3); }
+.notif .app { width: 18px; height: 18px; border-radius: 5px; background: var(--ink); color: #fff; display: grid; place-items: center; font-size: 11px; }
+.notif .cmd { font-size: 11.5px; color: var(--ink-2); }
+.notif .dl { font-size: 12px; color: var(--ink-3); }
+.acts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+.acts span { text-align: center; padding: 8px; border-radius: 8px; background: #EEF1F4; font-weight: 600; font-size: 13px; }
+.acts .ok { background: var(--ink); color: #fff; }
+.resumed { position: absolute; left: 28px; right: 28px; bottom: 22px; padding: 12px 14px; border-radius: 8px; background: var(--ok-tint); color: var(--ok); font-weight: 600; font-size: 14px; }
+
+/* scene 4: the report */
+.rep-h { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+.rep-h b { font-size: 18px; letter-spacing: -.01em; }
+.pill { font: 500 11.5px/1 var(--mono); padding: 6px 8px; border-radius: 4px; background: var(--ok-tint); color: var(--ok); }
+.rep { display: grid; grid-template-columns: 70px 1fr; gap: 9px 16px; font-size: 14px; margin-bottom: 20px; }
+.rep dt { color: var(--ink-3); font: 500 12px/1.9 var(--mono); }
+.rep dd { color: var(--ink); }
+.rep-acts { display: flex; gap: 8px; flex-wrap: wrap; }
+.rep-acts span { border: 1px solid var(--line-2); border-radius: 6px; padding: 10px 14px; font-weight: 600; font-size: 14px; }
+.rep-acts .pr { background: var(--accent); border-color: var(--accent); color: #fff; }
+.toast { position: absolute; right: 24px; bottom: 22px; background: var(--ink); color: #fff; font-size: 13.5px; padding: 10px 14px; border-radius: 8px; }
+
+/* choreography inside the active scene (motion allowed only) */
+@media (prefers-reduced-motion: no-preference) {
+  .js .story .s1 .typed { display: inline-block; overflow: hidden; white-space: nowrap; }
+  .js .story[data-scene="1"] .s1 .typed { animation: type 1.1s steps(13, end) both .35s; }
+  .js .story .caret { animation: blink 1s steps(1) infinite; }
+  .js .story .s1 .read, .js .story .s1 .runs li, .js .story .s1 .save, .js .story .s2 .log li, .js .story .s2 .chipset span, .js .story .s3 .notif, .js .story .s3 .resumed, .js .story .s4 .rep > *, .js .story .s4 .rep-acts, .js .story .s4 .toast { opacity: 0; }
+  .js .story[data-scene="1"] .s1 .read { animation: pop .5s var(--ease-out) forwards 1.5s; }
+  .js .story[data-scene="1"] .s1 .runs li { animation: pop .45s var(--ease-out) forwards; animation-delay: calc(1.75s + var(--i) * 90ms); }
+  .js .story[data-scene="1"] .s1 .save { animation: pop .45s var(--ease-out) forwards 2.3s; }
+  .js .story[data-scene="2"] .s2 .chipset span { animation: pop .45s var(--ease-out) forwards; }
+  .js .story[data-scene="2"] .s2 .chipset span:nth-child(2) { animation-delay: .35s; }
+  .js .story[data-scene="2"] .s2 .chipset span:nth-child(3) { animation-delay: .5s; }
+  .js .story[data-scene="2"] .s2 .log li { animation: pop .35s var(--ease-out) forwards; animation-delay: calc(.6s + var(--i) * 420ms); }
+  .js .story[data-scene="2"] .s2 .meter .bar i { animation: fill 2.6s var(--ease-out) both .6s; }
+  .js .story .s2 .wire i { animation: packet 1.6s var(--ease-io) infinite; }
+  .js .story .s2 .pulse, .js .story .s3 .ring { animation: ping 1.6s var(--ease-out) infinite; }
+  .js .story[data-scene="3"] .s3 .notif { animation: drop .7s var(--ease-out) forwards .35s; }
+  .js .story[data-scene="3"] .s3 .acts .ok { animation: tap .5s var(--ease-out) both 1.9s; }
+  .js .story[data-scene="3"] .s3 .resumed { animation: pop .5s var(--ease-out) forwards 2.4s; }
+  .js .story[data-scene="4"] .s4 .rep > * { animation: pop .4s var(--ease-out) forwards; }
+  .js .story[data-scene="4"] .s4 .rep > :nth-child(n+3) { animation-delay: .12s; }
+  .js .story[data-scene="4"] .s4 .rep > :nth-child(n+5) { animation-delay: .24s; }
+  .js .story[data-scene="4"] .s4 .rep > :nth-child(n+7) { animation-delay: .36s; }
+  .js .story[data-scene="4"] .s4 .rep > :nth-child(n+9) { animation-delay: .48s; }
+  .js .story[data-scene="4"] .s4 .rep-acts { animation: pop .45s var(--ease-out) forwards .7s; }
+  .js .story[data-scene="4"] .s4 .rep-acts .pr { animation: glow 1.6s var(--ease-io) 1.3s 2; }
+  .js .story[data-scene="4"] .s4 .toast { animation: pop .45s var(--ease-out) forwards 2.6s; }
+}
+@keyframes type { from { width: 0; } to { width: 13ch; } }
+@keyframes blink { 50% { opacity: 0; } }
+@keyframes pop { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes fill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes packet { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+@keyframes ping { 0% { box-shadow: 0 0 0 0 currentColor; } 70%, 100% { box-shadow: 0 0 0 9px transparent; } }
+.pulse { color: rgba(31,122,69,.45); } .ring { color: rgba(224,68,46,.45); }
+@keyframes drop { from { opacity: 0; transform: translateY(-40px) scale(.96); } to { opacity: 1; transform: none; } }
+@keyframes tap { 0% { transform: none; } 40% { transform: scale(.92); } 100% { transform: none; } }
+@keyframes glow { 0%, 100% { box-shadow: 0 0 0 0 rgba(224,68,46,.45); } 50% { box-shadow: 0 0 0 8px rgba(224,68,46,0); } }
+
+.coda { margin-top: 72px; padding-top: 40px; border-top: 1px solid var(--line); display: grid; gap: 18px; }
+.coda .sub { max-width: 44em; }
+
+@media (max-width: 900px) {
+  .story { grid-template-columns: 1fr; }
+  .stage { order: -1; top: 64px; height: auto; z-index: 2; background: var(--bg); padding: 12px 0; }
+  .win { height: 318px; }
+  .win-bar { height: 34px; }
+  .scene { inset: 34px 0 0 0; padding: 14px 16px; transform: none; font-size: 14px; }
+  .step { min-height: 62vh; padding: 6vh 0; }
+  .fld { margin-bottom: 10px; } .fld .in { min-height: 36px; padding: 7px 10px; font-size: 14px; }
+  .s1 > .fld:first-child, .s1 .save, .rep-acts span:nth-child(3) { display: none; }
+  .phone { width: auto; height: auto; border: 0; background: none; margin-top: 12px; overflow: visible; }
+  .notif { position: static; border: 1px solid var(--line-2); box-shadow: none; }
+  .resumed { position: static; margin-top: 12px; padding: 9px 12px; font-size: 13px; }
+  .paused { font-size: 14px; }
+  .log { font-size: 12px; padding: 10px 12px; margin-bottom: 12px; }
+  .chipset { margin-bottom: 10px; } .machines { margin-bottom: 10px; } .mac { padding: 10px; }
+  .rep { gap: 5px 12px; margin-bottom: 12px; } .rep-h { margin-bottom: 10px; } .rep-h b { font-size: 16px; }
+  .toast { display: none; }
+  .machines { grid-template-columns: 1fr 36px 1fr; }
+  .runs { grid-template-columns: 1fr; }
+  .runs li:nth-child(n+3) { display: none; }
+  .rep { grid-template-columns: 60px 1fr; font-size: 13px; }
+  .log li:nth-child(4) { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .scene, .step, .dots i { transition: none; }
+}
+
+/* trust diagram */
+.sandbox { margin: 0 0 56px; }
+.sandbox svg { width: 100%; height: auto; display: block; overflow: visible; }
+.sandbox text { font: 500 15px var(--sans); fill: var(--ink); }
+.sandbox .wall { fill: var(--surface); stroke: var(--ink); stroke-width: 1.5; stroke-dasharray: 6 6; }
+.sandbox .wall-t { font: 500 12.5px var(--mono); fill: var(--ink-3); }
+.sandbox .ln { fill: none; stroke: var(--accent); stroke-width: 1.6; }
+.sandbox .ln.ghost { stroke: var(--line-2); stroke-dasharray: 3 5; }
+.sandbox .x circle { fill: var(--surface); stroke: var(--accent); stroke-width: 1.6; }
+.sandbox .x path { stroke: var(--accent); stroke-width: 2; stroke-linecap: round; }
+.sandbox .ok-ln { stroke: var(--ok); stroke-width: 2; }
+.sandbox .node rect { fill: var(--ink); }
+.sandbox .node text { fill: #fff; font-weight: 600; }
+.sandbox .wt rect { fill: var(--ok-tint); stroke: var(--ok); stroke-width: 1.5; }
+.sandbox .wt text { fill: var(--ok); }
+.sandbox .wt .s { font: 400 12px var(--mono); fill: var(--ok); }
+@supports (animation-timeline: view()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .sandbox { view-timeline: --sbx block; }
+    .sandbox .ln:not(.ghost) { stroke-dasharray: 420; animation: draw linear both; animation-timeline: --sbx; animation-range: entry 30% cover 45%; }
+    .sandbox .x { animation: xpop linear both; animation-timeline: --sbx; animation-range: cover 30% cover 48%; transform-box: fill-box; transform-origin: center; }
+    .sandbox .ok-ln { stroke-dasharray: 80; animation: draw80 linear both; animation-timeline: --sbx; animation-range: entry 40% cover 35%; }
+  }
+}
+@keyframes draw { from { stroke-dashoffset: 420; } to { stroke-dashoffset: 0; } }
+@keyframes draw80 { from { stroke-dashoffset: 80; } to { stroke-dashoffset: 0; } }
+@keyframes xpop { from { opacity: 0; scale: .4; } to { opacity: 1; scale: 1; } }
+@media (max-width: 700px) {
+  .sandbox { overflow-x: auto; margin-left: calc(-1 * var(--gutter)); margin-right: calc(-1 * var(--gutter)); padding: 0 var(--gutter); }
+  .sandbox svg { min-width: 760px; }
+}
+
+/* pipeline diagram: phases 0..4, JS steps them; phase 4 (all done) is the no-JS default */
+.dag { border: 1px solid var(--line-2); border-radius: 12px; background: var(--surface); padding: 18px; aspect-ratio: 8 / 5; display: grid; place-items: center; }
+.dag svg { width: 100%; height: auto; }
+.dag .e { fill: none; stroke: var(--line-2); stroke-width: 2; stroke-dasharray: 200; stroke-dashoffset: 200; transition: stroke-dashoffset .7s var(--ease-out), stroke .3s; }
+.dag .n rect { fill: var(--surface); stroke: var(--line-2); stroke-width: 1.5; transition: fill .3s, stroke .3s; }
+.dag .n text { font: 600 13px var(--sans); fill: var(--ink); }
+.dag .n .st { font: 500 11px var(--mono); fill: var(--ink-3); }
+.dag .n .st::before { content: "queued"; }
+.dag .run rect { stroke: var(--accent); fill: var(--accent-tint); }
+.dag .done rect { stroke: var(--ok); fill: var(--ok-tint); }
+.dag .lit { stroke: var(--ok); stroke-dashoffset: 0; }
+@media (prefers-reduced-motion: reduce) { .dag .e, .dag .n rect { transition: none; } }
+</style>
 <script>document.documentElement.classList.add('js');</script>
 </head>
 <body>
@@ -371,7 +610,7 @@ footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--i
   <div class="wrap">
     <div class="grid">
       <div class="c1-5 hero-copy">
-        <h1>Put your agents on a schedule.</h1>
+        <h1><span class="w" style="--i:0">Put</span> <span class="w" style="--i:1">your</span> <span class="w" style="--i:2">agents</span> <span class="w" style="--i:3">on</span> <span class="w" style="--i:4">a</span> <span class="w" style="--i:5">schedule.</span></h1>
         <p class="lede">Book Claude Code, Codex, OpenCode or Hermes like a meeting. Clockwork runs it sandboxed, on this Mac or one that stays awake, and files a report you can turn into a pull request.</p>
         <div class="btn-row">
           <a class="btn primary dl" href="https://github.com/vimoxshah/clockwork/releases/latest/download/Clockwork_aarch64.dmg" download type="application/octet-stream">Download for Mac</a>
@@ -394,76 +633,118 @@ footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--i
   </div>
 </section>
 
-<section id="day">
+<section id="day" class="night">
   <div class="wrap">
-    <div class="head rv">
-      <h2>One day, with the agents on the calendar.</h2>
+    <div class="head rise">
+      <h2>One night, with an agent on the calendar.</h2>
+      <p class="sub">Book it before you log off. Read the result with your coffee. Here is everything that happens in between.</p>
     </div>
-    <div class="stops">
-      <article class="stop rv">
-        <div class="when"><b>07:00</b>Monday</div>
-        <div class="what">
+    <div class="story" id="story" data-scene="1">
+      <ol class="steps">
+        <li class="step" data-s="1">
+          <span class="t">22:00</span>
           <h3>You book it like a meeting.</h3>
-          <p>Pick a profile, a repository, a budget in dollars and a time. One-off, recurring, or fired by a webhook. Chain a second agent to run after the first.</p>
-        </div>
-        <div class="show"><img class="shot" src="screens/02-task-composer-1600.webp" srcset="screens/02-task-composer-1200.webp 1200w, screens/02-task-composer-1600.webp 1600w, screens/02-task-composer-2400.webp 2400w, screens/02-task-composer-3200.webp 3200w" sizes="(max-width: 900px) calc(100vw - 40px), 496px" width="3200" height="2000" alt="The Clockwork composer: task name, prompt, repository, engine, budget and schedule" loading="lazy"></div>
-      </article>
-      <article class="stop rv">
-        <div class="when"><b>02:00</b>Tuesday</div>
-        <div class="what">
-          <h3>It works the night shift, inside a sandbox.</h3>
-          <p>Your own CLI login does the work, in its own git worktree, under a macOS Seatbelt profile. Your checkout is never touched.</p>
-        </div>
-        <div class="show">
-          <ul class="plain">
-            <li>A fresh worktree and branch cut from your base branch</li>
-            <li>Writes denied outside that worktree</li>
-            <li>SSH keys, cloud credentials, GnuPG and shell history unreadable</li>
-            <li>A dollar cap, a turn cap and a wall-clock timeout</li>
-            <li>Risky actions pause the run and ask you</li>
-            <li>No answer in about two minutes means no</li>
-          </ul>
-        </div>
-      </article>
-      <article class="stop rv">
-        <div class="when"><b>08:30</b>Tuesday</div>
-        <div class="what">
-          <h3>You read a report, not a scrollback.</h3>
-          <p>Every run files the same document into your inbox. Credentials are masked, best effort, before it is stored. Every report and transcript is full-text searchable.</p>
-        </div>
-        <div class="show">
-          <dl class="report">
-            <dt>Summary</dt><dd><b>What it did</b>, what it skipped, and why.</dd>
-            <dt>Branch</dt><dd>The branch it worked on and the diffstat, so review starts from a diff.</dd>
-            <dt>Cost</dt><dd>Dollars spent, turns used, wall-clock time, against the caps you set.</dd>
-            <dt>Approvals</dt><dd>Every ask, every answer, and what auto-denied.</dd>
-            <dt>Transcript</dt><dd>The full session, searchable.</dd>
-          </dl>
-        </div>
-      </article>
-      <article class="stop rv">
-        <div class="when"><b>Weekly</b>and on</div>
-        <div class="what">
-          <h3>It comes back next week without being asked.</h3>
-          <p>Recurrence is real calendar recurrence: RRULE or cron in your own time zone, daylight-saving handled, a policy for missed runs, and one run per repository at a time.</p>
-        </div>
-        <div class="show">
-          <div class="chips">
-            <span>every Monday 07:00</span><span>Tue and Thu 01:30</span><span>weekdays 08:30</span><span>first of the month 03:00</span><span>0 22 * * 5</span><span>if missed: run late within 6h</span><span>if missed: skip</span><span>if missed: ask me</span><span>overlap: skip or queue</span>
+          <p>Pick an agent, a repository and a dollar cap. Type the schedule the way you would say it. Clockwork shows how it read the rule and the next real run times before you save.</p>
+        </li>
+        <li class="step" data-s="2">
+          <span class="t">02:00</span>
+          <h3>It works the night shift, on the Mac that stays awake.</h3>
+          <p>Your laptop can sleep. A paired Mac mini picks the job up, cuts a fresh worktree and branch, and runs your own CLI login inside a macOS sandbox. Your SSH keys and cloud credentials are not readable from in there.</p>
+        </li>
+        <li class="step" data-s="3">
+          <span class="t">02:14</span>
+          <h3>A risky step waits for you.</h3>
+          <p>The run pauses and your phone lights up. Approve or deny from Telegram. If you sleep through it, the ask holds for the rest of the run's budget, then fails closed. <span class="note">Approval holds are a Claude Code engine feature.</span></p>
+        </li>
+        <li class="step" data-s="4">
+          <span class="t">07:40</span>
+          <h3>You read a report, then open the pull request.</h3>
+          <p>What it did, what it skipped, what it cost, and every ask with its answer. The next action is a button. One of them pushes the branch and opens the PR.</p>
+        </li>
+      </ol>
+
+      <div class="stage" aria-hidden="true">
+        <div class="win">
+          <div class="win-bar"><i></i><i></i><i></i><span class="win-t" data-t1="New task" data-t2="Run · studio-mini" data-t3="Run · waiting on you" data-t4="Inbox"></span></div>
+
+          <div class="scene s1">
+            <div class="fld"><label>Task</label><div class="in">Weekly dependency triage</div></div>
+            <div class="row2">
+              <div class="fld"><label>Agent</label><div class="in"><b class="dot"></b>Dep Surgeon</div></div>
+              <div class="fld"><label>Cap</label><div class="in mono">$2.00</div></div>
+            </div>
+            <div class="fld"><label>Describe the schedule</label><div class="in type mono"><span class="typed">every Mon 2am</span><span class="caret"></span></div></div>
+            <p class="read">✓ Every Monday at 2:00 AM</p>
+            <ul class="runs mono">
+              <li style="--i:0">Mon, Oct 5 · 02:00</li><li style="--i:1">Mon, Oct 12 · 02:00</li><li style="--i:2">Mon, Oct 19 · 02:00</li><li style="--i:3">Mon, Oct 26 · 02:00</li>
+            </ul>
+            <div class="save">Book it</div>
+          </div>
+
+          <div class="scene s2">
+            <div class="machines">
+              <div class="mac sleep"><b>MacBook</b><span>lid closed</span><em>z<sup>z</sup></em></div>
+              <div class="wire"><i></i></div>
+              <div class="mac awake"><b>studio-mini</b><span><b class="pulse"></b>worker · online</span></div>
+            </div>
+            <div class="chipset mono"><span>worktree · clockwork/dep-triage</span><span class="deny">~/.ssh denied</span><span class="deny">~/.aws denied</span></div>
+            <ul class="log mono">
+              <li style="--i:0">$ npm outdated --json</li>
+              <li style="--i:1">lodash 4.17.20 → 4.17.21 (CVE fix)</li>
+              <li style="--i:2">express 4.19.2 → 4.21.2</li>
+              <li style="--i:3">$ npm test  ·  214 passed</li>
+            </ul>
+            <div class="meter"><span>spend</span><div class="bar"><i></i></div><b class="mono">$0.41 of $2.00</b></div>
+          </div>
+
+          <div class="scene s3">
+            <div class="paused"><b class="ring"></b>Paused · waiting on you</div>
+            <div class="phone">
+              <div class="notif">
+                <div class="nh"><b class="app">C</b><span>Clockwork · now</span></div>
+                <p><b>Monday dependency triage</b> is waiting on your approval</p>
+                <p class="mono cmd">Bash: npm install lodash@4.17.21</p>
+                <p class="dl">Auto-denies in 46m if nobody answers.</p>
+                <div class="acts"><span class="ok">Approve</span><span>Deny</span></div>
+              </div>
+            </div>
+            <div class="resumed"><b>✓</b> Approved from Telegram · run resumed</div>
+          </div>
+
+          <div class="scene s4">
+            <div class="rep-h"><b>Weekly dependency triage</b><span class="pill">completed</span></div>
+            <dl class="rep">
+              <dt>Did</dt><dd>Bumped lodash and express, patch releases, no API changes.</dd>
+              <dt>Tests</dt><dd>214 passed</dd>
+              <dt>Branch</dt><dd class="mono">clockwork/dep-triage · +4 −4</dd>
+              <dt>Cost</dt><dd class="mono">$0.41 · 23 turns · 38 min</dd>
+              <dt>Asked</dt><dd>1 approval, answered from Telegram</dd>
+            </dl>
+            <div class="rep-acts"><span class="pr">Open PR</span><span>Read the diff</span><span>Run it again</span></div>
+            <div class="toast">Pull request opened</div>
           </div>
         </div>
-      </article>
+        <div class="dots"><i data-s="1"></i><i data-s="2"></i><i data-s="3"></i><i data-s="4"></i></div>
+      </div>
+    </div>
+
+    <div class="coda">
+      <h3>And it comes back next week without being asked.</h3>
+      <div class="chips">
+        <span>every Monday 07:00</span><span>Tue and Thu 01:30</span><span>weekdays 08:30</span><span>first of the month 03:00</span><span>0 22 * * 5</span><span>if missed: run late within 6h</span><span>if missed: skip</span><span>if missed: ask me</span><span>overlap: skip or queue</span>
+      </div>
+      <p class="sub">Real calendar recurrence: RRULE or cron in the schedule's own time zone, daylight saving handled, a policy for missed runs, and one run per repository at a time.</p>
     </div>
   </div>
 </section>
 
 <section id="agents">
   <div class="wrap">
-    <div class="head rv">
+    <div class="head rise">
       <h2>Thirteen specialists ship with it.</h2>
       <p class="sub">Each one is an operating contract: a mission, hard limits, and a fixed shape for the report. These are the names you will see in the app.</p>
     </div>
-    <div class="roster rv">
+    <div class="roster">
       <div class="group">
         <div class="gname">Engineering</div>
         <div class="people">
@@ -494,10 +775,10 @@ footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--i
 
 <section class="real">
   <div class="wrap">
-    <div class="head rv">
+    <div class="head rise">
       <h2>This is the app, at version <span data-ver>0.14.0</span>.</h2>
     </div>
-    <div class="grid rv">
+    <div class="grid">
       <figure class="c1-8"><img class="shot" src="screens/01-calendar-month-1600.webp" srcset="screens/01-calendar-month-1200.webp 1200w, screens/01-calendar-month-1600.webp 1600w, screens/01-calendar-month-2400.webp 2400w, screens/01-calendar-month-3200.webp 3200w" sizes="(max-width: 900px) calc(100vw - 40px), 803px" width="3200" height="2000" alt="Clockwork month view with recurring agent jobs booked across September" loading="lazy"></figure>
       <div class="c9-12 stack">
         <figure><img class="shot" src="screens/03-agent-profile-1600.webp" srcset="screens/03-agent-profile-1200.webp 1200w, screens/03-agent-profile-1600.webp 1600w, screens/03-agent-profile-2400.webp 2400w, screens/03-agent-profile-3200.webp 3200w" sizes="(max-width: 900px) calc(100vw - 40px), 389px" width="3200" height="2000" alt="The agent library with all thirteen built-in profiles" loading="lazy"></figure>
@@ -511,25 +792,46 @@ footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--i
 
 <section id="new">
   <div class="wrap">
-    <div class="head rv">
+    <div class="head rise">
       <h2>New since the first launch.</h2>
       <p class="sub">Fourteen releases since 4 September. The questions people asked then were about trust, so most of the work went there. These four are the ones you can see.</p>
     </div>
     <div class="grid new-grid">
-      <figure class="c1-6 rv new-fig"><img class="shot" src="screens/v014-03-settings-workers-1600.webp" srcset="screens/v014-03-settings-workers-1200.webp 1200w, screens/v014-03-settings-workers-1600.webp 1600w, screens/v014-03-settings-workers-2240.webp 2240w" sizes="(max-width: 900px) calc(100vw - 40px), 600px" width="2400" height="1500" alt="Settings, Workers: a paired Mac mini online, with the numbered pairing steps" loading="lazy"><figcaption class="cap"><b>Worker Macs.</b> Pair an always-on Mac in Settings with a signed handshake you approve, then pin jobs to it. Your laptop can sleep.</figcaption></figure>
-      <figure class="c7-12 rv new-fig"><img class="shot" src="screens/v014-02-pipelines-dag-1600.webp" srcset="screens/v014-02-pipelines-dag-1200.webp 1200w, screens/v014-02-pipelines-dag-1600.webp 1600w, screens/v014-02-pipelines-dag-2240.webp 2240w" sizes="(max-width: 900px) calc(100vw - 40px), 600px" width="2400" height="1500" alt="Tasks, Pipelines: a release summary waiting on two parallel checks" loading="lazy"><figcaption class="cap"><b>Pipelines.</b> Fan out to parallel checks, fan back in to one summary that waits for all of them.</figcaption></figure>
-      <figure class="c1-6 rv new-fig"><img class="shot" src="screens/v014-04-report-open-pr-confirm-1600.webp" srcset="screens/v014-04-report-open-pr-confirm-1200.webp 1200w, screens/v014-04-report-open-pr-confirm-1600.webp 1600w, screens/v014-04-report-open-pr-confirm-2240.webp 2240w" sizes="(max-width: 900px) calc(100vw - 40px), 600px" width="2400" height="1500" alt="A run report with the Push and open PR confirm step" loading="lazy"><figcaption class="cap"><b>Open a PR from the report.</b> Push the branch and open the pull request in one confirmed click. No <code>gh</code> needed.</figcaption></figure>
-      <figure class="c7-12 rv new-fig"><img class="shot" src="screens/v014-06-terminal-cli-1600.webp" srcset="screens/v014-06-terminal-cli-1200.webp 1200w, screens/v014-06-terminal-cli-1600.webp 1600w, screens/v014-06-terminal-cli-2240.webp 2240w" sizes="(max-width: 900px) calc(100vw - 40px), 600px" width="2400" height="1500" alt="Terminal output of clockwork status, runs and approvals" loading="lazy"><figcaption class="cap"><b>A terminal CLI.</b> <code>clockwork status</code>, <code>runs</code>, <code>approvals</code>, <code>workers</code> and <code>pack</code>, as tables or <code>--json</code>.</figcaption></figure>
+      <figure class="c1-6 new-fig shot-rise"><img class="shot" src="screens/v014-03-settings-workers-1600.webp" srcset="screens/v014-03-settings-workers-1200.webp 1200w, screens/v014-03-settings-workers-1600.webp 1600w, screens/v014-03-settings-workers-2240.webp 2240w" sizes="(max-width: 900px) calc(100vw - 40px), 600px" width="2400" height="1500" alt="Settings, Workers: a paired Mac mini online, with the numbered pairing steps" loading="lazy"><figcaption class="cap"><b>Worker Macs.</b> Pair an always-on Mac in Settings with a signed handshake you approve, then pin jobs to it. Your laptop can sleep.</figcaption></figure>
+      <figure class="c7-12 new-fig shot-rise"><div class="dag" id="dag" data-phase="4" role="img" aria-label="Animated pipeline: Nightly build scan fans out to Security audit and License check, and Release summary waits for both before it runs.">
+        <svg viewBox="0 0 600 375" aria-hidden="true">
+          <path class="e e1" d="M170 187 C 230 187, 230 105, 290 105"/>
+          <path class="e e2" d="M170 187 C 230 187, 230 270, 290 270"/>
+          <path class="e e3" d="M450 105 C 490 105, 470 187, 500 187"/>
+          <path class="e e4" d="M450 270 C 490 270, 470 187, 500 187"/>
+          <g class="n n1"><rect x="20" y="162" width="150" height="50" rx="8"/><text x="36" y="185">Nightly build scan</text><text class="st" x="36" y="202"></text></g>
+          <g class="n n2"><rect x="290" y="80" width="160" height="50" rx="8"/><text x="306" y="103">Security audit</text><text class="st" x="306" y="120"></text></g>
+          <g class="n n3"><rect x="290" y="245" width="160" height="50" rx="8"/><text x="306" y="268">License check</text><text class="st" x="306" y="285"></text></g>
+          <g class="n n4"><rect x="500" y="146" width="96" height="82" rx="8"/><text x="512" y="172">Release</text><text x="512" y="190">summary</text><text class="st" x="512" y="212"></text></g>
+        </svg>
+      </div><figcaption class="cap"><b>Pipelines.</b> Fan out to parallel checks, fan back in to one summary that waits for all of them.</figcaption></figure>
+      <figure class="c1-6 new-fig shot-rise"><img class="shot" src="screens/v014-04-report-open-pr-confirm-1600.webp" srcset="screens/v014-04-report-open-pr-confirm-1200.webp 1200w, screens/v014-04-report-open-pr-confirm-1600.webp 1600w, screens/v014-04-report-open-pr-confirm-2240.webp 2240w" sizes="(max-width: 900px) calc(100vw - 40px), 600px" width="2400" height="1500" alt="A run report with the Push and open PR confirm step" loading="lazy"><figcaption class="cap"><b>Open a PR from the report.</b> Push the branch and open the pull request in one confirmed click. No <code>gh</code> needed.</figcaption></figure>
+      <figure class="c7-12 new-fig shot-rise"><img class="shot" src="screens/v014-06-terminal-cli-1600.webp" srcset="screens/v014-06-terminal-cli-1200.webp 1200w, screens/v014-06-terminal-cli-1600.webp 1600w, screens/v014-06-terminal-cli-2240.webp 2240w" sizes="(max-width: 900px) calc(100vw - 40px), 600px" width="2400" height="1500" alt="Terminal output of clockwork status, runs and approvals" loading="lazy"><figcaption class="cap"><b>A terminal CLI.</b> <code>clockwork status</code>, <code>runs</code>, <code>approvals</code>, <code>workers</code> and <code>pack</code>, as tables or <code>--json</code>.</figcaption></figure>
     </div>
   </div>
 </section>
 
 <section id="trust">
   <div class="wrap">
-    <div class="head rv">
+    <div class="head rise">
       <h2>What a run can touch, and what it cannot.</h2>
     </div>
-    <div class="two rv">
+    <figure class="sandbox rise" aria-label="Diagram: a run inside the macOS sandbox reaches its own worktree; lines to SSH keys, cloud credentials, GnuPG and shell history, your checkout, the main branch and the worker token all stop at the sandbox wall.">
+      <svg viewBox="0 0 1200 360" role="img" aria-hidden="true">
+        <rect class="wall" x="380" y="30" width="440" height="300" rx="14"/>
+        <text class="wall-t" x="398" y="56">macOS sandbox · per run</text>
+        <g class="blk" style="--i:0"><path class="ln" d="M600 150 C 490.0 150, 490.0 95, 380 95"/><path class="ln ghost" d="M380 95 L 250 95"/><g class="x" transform="translate(380 95)"><circle r="11"/><path d="M-4 -4 L4 4 M4 -4 L-4 4"/></g><text x="236" y="100" text-anchor="end">~/.ssh keys</text></g><g class="blk" style="--i:1"><path class="ln" d="M600 150 C 490.0 150, 490.0 175, 380 175"/><path class="ln ghost" d="M380 175 L 250 175"/><g class="x" transform="translate(380 175)"><circle r="11"/><path d="M-4 -4 L4 4 M4 -4 L-4 4"/></g><text x="236" y="180" text-anchor="end">~/.aws, cloud creds</text></g><g class="blk" style="--i:2"><path class="ln" d="M600 150 C 490.0 150, 490.0 255, 380 255"/><path class="ln ghost" d="M380 255 L 250 255"/><g class="x" transform="translate(380 255)"><circle r="11"/><path d="M-4 -4 L4 4 M4 -4 L-4 4"/></g><text x="236" y="260" text-anchor="end">~/.gnupg, shell history</text></g><g class="blk" style="--i:3"><path class="ln" d="M600 150 C 710.0 150, 710.0 95, 820 95"/><path class="ln ghost" d="M820 95 L 950 95"/><g class="x" transform="translate(820 95)"><circle r="11"/><path d="M-4 -4 L4 4 M4 -4 L-4 4"/></g><text x="964" y="100" text-anchor="start">your checkout</text></g><g class="blk" style="--i:4"><path class="ln" d="M600 150 C 710.0 150, 710.0 175, 820 175"/><path class="ln ghost" d="M820 175 L 950 175"/><g class="x" transform="translate(820 175)"><circle r="11"/><path d="M-4 -4 L4 4 M4 -4 L-4 4"/></g><text x="964" y="180" text-anchor="start">main branch</text></g><g class="blk" style="--i:5"><path class="ln" d="M600 150 C 710.0 150, 710.0 255, 820 255"/><path class="ln ghost" d="M820 255 L 950 255"/><g class="x" transform="translate(820 255)"><circle r="11"/><path d="M-4 -4 L4 4 M4 -4 L-4 4"/></g><text x="964" y="260" text-anchor="start">worker token</text></g>
+        <path class="ok-ln" d="M600 172 L600 246"/>
+        <g class="node run"><rect x="520" y="122" width="160" height="52" rx="8"/><text x="600" y="154" text-anchor="middle">agent run</text></g>
+        <g class="node wt"><rect x="500" y="246" width="200" height="52" rx="8"/><text x="600" y="270" text-anchor="middle">its own worktree</text><text class="s" x="600" y="288" text-anchor="middle">fresh branch, writes allowed</text></g>
+      </svg>
+    </figure>
+    <div class="two">
       <div class="col">
         <h3>Inside a run</h3>
         <ul>
@@ -557,11 +859,11 @@ footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--i
 
 <section id="spec">
   <div class="wrap">
-    <div class="head rv">
+    <div class="head rise">
       <h2>The spec sheet.</h2>
       <p class="sub">Everything below ships in version <span data-ver>0.14.0</span>. Where something is still in beta, the row says so.</p>
     </div>
-    <dl class="spec rv">
+    <dl class="spec">
       <div><dt>Engines</dt><dd>Claude Code, Codex CLI, OpenCode and Hermes Agent, on the logins you already have. Switch per task.</dd></div>
       <div><dt>Your own keys</dt><dd>OpenAI-compatible providers too: Anthropic, OpenAI, Google, OpenRouter, xAI, Mistral, DeepSeek, Ollama and custom gateways. Keys live in the macOS Keychain and are billed by the provider.</dd></div>
       <div><dt>Plain-English schedules</dt><dd>Type "weekdays at 9" or "every Monday 2am". Clockwork shows how it read the rule, what it assumed and the next real fire times, and asks when a rule is ambiguous. Drag a booking to a new slot on the calendar, see the result before you let go, and Undo it.</dd></div>
@@ -599,10 +901,10 @@ footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--i
 
 <section id="install" class="install">
   <div class="wrap">
-    <div class="head rv">
+    <div class="head rise">
       <h2>Install in four commands.</h2>
     </div>
-    <div class="grid rv">
+    <div class="grid">
       <div class="c1-7">
 <pre class="cmd"><span class="p">$</span> brew tap vimoxshah/clockwork
 <span class="p">$</span> brew trust vimoxshah/clockwork
@@ -626,11 +928,11 @@ footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--i
 
 <section id="pricing">
   <div class="wrap">
-    <div class="head rv">
+    <div class="head rise">
       <h2>Free for personal use. Paid tiers exist, and are not for sale yet.</h2>
       <p class="sub">Every line below is read from the same feature registry the daemon ships, and a test in the repository holds this page to it. No account, no card and no telemetry on any tier.</p>
     </div>
-    <div class="tiers rv">
+    <div class="tiers">
       <div class="card">
         <div class="tier lead">
           <p class="tname">Free</p>
@@ -678,15 +980,15 @@ footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--i
         </div>
       </div>
     </div>
-    <p class="tier-note rv">Commercial use of any tier needs a written licence. <a href="mailto:vmoksh.shah179@gmail.com?subject=Clockwork%20commercial%20licence">Ask for one</a>, or <a href="mailto:vmoksh.shah179@gmail.com?subject=Clockwork%20Pro%20and%20Teams">ask to be told</a> when Pro and Teams go on sale.</p>
+    <p class="tier-note">Commercial use of any tier needs a written licence. <a href="mailto:vmoksh.shah179@gmail.com?subject=Clockwork%20commercial%20licence">Ask for one</a>, or <a href="mailto:vmoksh.shah179@gmail.com?subject=Clockwork%20Pro%20and%20Teams">ask to be told</a> when Pro and Teams go on sale.</p>
   </div>
 </section>
 
 <section id="faq">
   <div class="wrap">
     <div class="grid">
-      <div class="c1-4 rv"><h2>Questions</h2></div>
-      <div class="c5-12 faq rv">
+      <div class="c1-4"><h2>Questions</h2></div>
+      <div class="c5-12 faq">
         <details><summary>Do I need an API key?</summary><p>No. Clockwork drives the CLI you already log into: Claude Code, Codex, OpenCode or Hermes. You can also bring your own API keys; they are stored in the macOS Keychain and billed by the provider, never marked up.</p></details>
         <details><summary>Does it run while my Mac is asleep?</summary><p>No. Runs execute only while the Mac is awake. When the Mac is plugged in, Clockwork arms a power assertion before a scheduled run; a closed lid on battery defeats it, and the report says so. A missed run follows the policy you chose: run late, skip, or ask. For true overnight work, use an always-on Mac.</p></details>
         <details><summary>Why does macOS say the app is damaged?</summary><p>The build is not notarised, so Gatekeeper refuses it until the quarantine flag is cleared. Verify the checksum first, then run the xattr command from the install section.</p></details>
@@ -701,7 +1003,7 @@ footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--i
 <section class="final">
   <div class="wrap">
     <div class="grid">
-      <div class="c1-7 rv">
+      <div class="c1-7">
         <h2>Give your agents a work week.</h2>
         <div class="btn-row">
           <a class="btn primary dl" href="https://github.com/vimoxshah/clockwork/releases/latest/download/Clockwork_aarch64.dmg" download type="application/octet-stream">Download for Mac</a>
@@ -712,7 +1014,7 @@ footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--i
       <!-- Release-notes signup. Posts to the site Worker (worker/index.js), which
            stores the address and the time, nothing else. If the endpoint is
            unreachable the message says so and offers the mailto instead. -->
-      <form class="c8-12 rv sub-form" id="sub-form" novalidate>
+      <form class="c8-12 sub-form" id="sub-form" novalidate>
         <h3>Get the release notes.</h3>
         <p>One email when a version ships. No tracking, no other mail. The app itself still collects nothing.</p>
         <div class="sub-row">
@@ -958,6 +1260,60 @@ footer { border-top: 1px solid var(--line); padding: 64px 0 36px; color: var(--i
       .catch(function () { msg.innerHTML = 'Sign-up did not go through. Please ' + MAILTO + ' and I will add you.'; })
       .then(function () { btn.disabled = false; });
   });
+})();
+</script>
+<script>
+/* the night story: the step nearest the middle of the viewport picks the
+   scene. Without JS or IntersectionObserver the stage shows scene 1 and all
+   step text stays fully legible. */
+(function () {
+  var story = document.getElementById('story');
+  if (!story || !('IntersectionObserver' in window)) { if (story) story.classList.add('no-story'); return; }
+  var steps = [].slice.call(story.querySelectorAll('.step'));
+  function set(n) {
+    if (story.getAttribute('data-scene') === n) return;
+    story.setAttribute('data-scene', n);
+    steps.forEach(function (st) { st.classList.toggle('on', st.getAttribute('data-s') === n); });
+  }
+  steps[0].classList.add('on');
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (en) { if (en.isIntersecting) set(en.target.getAttribute('data-s')); });
+  }, { rootMargin: '-45% 0px -45% 0px' });
+  steps.forEach(function (st) { io.observe(st); });
+})();
+/* hero: the next agent booking on the calendar shimmers as "live". */
+(function () {
+  var evs = [].slice.call(document.querySelectorAll('.ev.agent[data-past="0"]'));
+  if (evs[0]) evs[0].classList.add('live');
+})();
+</script>
+<script>
+/* pipeline diagram: steps through a fan-out/fan-in run while it is on screen. */
+(function () {
+  var dag = document.getElementById('dag');
+  if (!dag) return;
+  var N = function (k) { return dag.querySelector('.n' + k); }, E = function (k) { return dag.querySelector('.e' + k); };
+  var label = function (k, t) { N(k).querySelector('.st').textContent = t; };
+  var PH = [
+    [['run', 'running', 1], ['', 'queued', 2], ['', 'queued', 3], ['', 'queued', 4]],
+    [['done', 'done', 1], ['run', 'running', 2], ['run', 'running', 3], ['', 'waits for 2', 4]],
+    [['done', 'done', 1], ['done', 'done', 2], ['run', 'running', 3], ['', 'waits for 1', 4]],
+    [['done', 'done', 1], ['done', 'done', 2], ['done', 'done', 3], ['run', 'running', 4]],
+    [['done', 'done', 1], ['done', 'done', 2], ['done', 'done', 3], ['done', 'done', 4]]
+  ];
+  var LIT = [[], [1, 2], [1, 2, 3], [1, 2, 3, 4], [1, 2, 3, 4]];
+  function show(p) {
+    PH[p].forEach(function (r) { var g = N(r[2]); g.classList.remove('run', 'done'); if (r[0]) g.classList.add(r[0]); label(r[2], r[1]); });
+    for (var k = 1; k <= 4; k++) E(k).classList.toggle('lit', LIT[p].indexOf(k) >= 0);
+  }
+  show(4);
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches || !('IntersectionObserver' in window)) return;
+  var p = 4, t = null;
+  var tick = function () { p = (p + 1) % 6; show(Math.min(p, 4)); };
+  new IntersectionObserver(function (en) {
+    if (en[0].isIntersecting) { if (!t) { p = -1; tick(); t = setInterval(tick, 1300); } }
+    else if (t) { clearInterval(t); t = null; show(4); }
+  }, { threshold: .4 }).observe(dag);
 })();
 </script>
 </body>
