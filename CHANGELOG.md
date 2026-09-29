@@ -8,7 +8,7 @@ is a red build here, not a marketing choice.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — planned as 0.14.1
+## [0.14.1] — 2026-09-29
 
 A pre-launch check of every 0.13 and 0.14 feature, run live against two
 daemons, found four things 0.14.0 shipped broken and one hole that `main`

@@ -36,7 +36,7 @@ without needing an api token — useful before `clockworkd` has ever run.
 
 ```bash
 $ clockwork status
-clockworkd 0.14.0
+clockworkd 0.14.1
 paused: no · active: 0 · queued: 2
 next: Sep 28, 02:00 AM
 
